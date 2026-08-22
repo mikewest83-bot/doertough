@@ -16,9 +16,17 @@ const proxy = async (req, res, target) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 45000);
   try {
-    const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
+    const origin = API_BASE;
+    const headers = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      Origin: origin,
+      Referer: origin + '/',
+      'User-Agent': 'Mozilla/5.0 MikeAI/1.0',
+    };
     const r = await fetch(target, { method: req.method, headers, body: req.method === 'GET' ? undefined : JSON.stringify(req.body), signal: controller.signal });
     const text = await r.text();
+    console.log('mike_proxy', req.method, target, r.status);
     res.status(r.status).type(r.headers.get('content-type') || 'application/json').send(text);
   } catch (e) {
     console.error('proxy_failed', e);
