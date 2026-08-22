@@ -14,102 +14,14 @@ const ELEVEN_MODEL = process.env.ELEVENLABS_MODEL || 'eleven_flash_v2_5';
 const FAL_MODEL = process.env.FAL_LIPSYNC_MODEL || 'veed/lipsync/v2';
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 if (process.env.FAL_KEY) fal.config({ credentials: process.env.FAL_KEY });
-
-app.disable('x-powered-by');
-app.use(express.json({ limit: '15mb' }));
-
-const withTimeout = async (promise, ms, label) => {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  try { return await promise(controller.signal); }
-  catch (e) { if (e.name === 'AbortError') throw new Error(label + '_timeout'); throw e; }
-  finally { clearTimeout(timer); }
-};
-
-const requireKey = (key, name) => { if (!key) { const e = new Error(name + '_not_configured'); e.status = 503; throw e; } };
-
-let cachedVoice = null;
-const resolveMikeVoice = async () => {
-  if (process.env.ELEVENLABS_VOICE_ID) return process.env.ELEVENLABS_VOICE_ID;
-  if (cachedVoice) return cachedVoice;
-  requireKey(process.env.ELEVENLABS_API_KEY, 'elevenlabs');
-  const r = await fetch('https://api.elevenlabs.io/v2/voices?page_size=100&voice_type=non-default', { headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY } });
-  if (!r.ok) throw new Error('elevenlabs_voice_list_' + r.status);
-  const data = await r.json();
-  const voices = data.voices || [];
-  const ranked = voices.map(v => {
-    const text = `${v.name || ''} ${v.description || ''} ${JSON.stringify(v.labels || {})}`.toLowerCase();
-    let score = 0;
-    if (/mike/.test(text)) score += 100;
-    if (/diesel|bin/.test(text)) score += 80;
-    if (/doer|tough/.test(text)) score += 60;
-    if (/southern|country|texas|american/.test(text)) score += 25;
-    if (v.voice_type === 'personal' || v.category === 'cloned' || v.category === 'generated') score += 20;
-    return { v, score };
-  }).sort((a,b) => b.score - a.score);
-  if (!ranked.length) throw new Error('elevenlabs_no_custom_voice');
-  cachedVoice = ranked[0].v.voice_id;
-  console.log('mike_voice_selected', ranked[0].v.name, cachedVoice);
-  return cachedVoice;
-};
-
-app.get('/api/health', (q, s) => s.json({ ok: true, service: 'mike-ai', directPipeline: true, voiceConfigured: !!process.env.ELEVENLABS_API_KEY, lipSyncConfigured: !!process.env.FAL_KEY }));
-app.get('/api/voices', async (q, s) => {
-  try { requireKey(process.env.ELEVENLABS_API_KEY, 'elevenlabs'); const r = await fetch('https://api.elevenlabs.io/v2/voices?page_size=100&voice_type=non-default', { headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY } }); const d = await r.json(); s.status(r.status).json({ voices: (d.voices || []).map(v => ({ id: v.voice_id, name: v.name, category: v.category, description: v.description })) }); } catch (e) { s.status(e.status || 502).json({ error: e.message }); }
-});
-
-app.post('/api/ask', async (q, s) => {
-  try {
-    requireKey(process.env.OPENAI_API_KEY, 'openai');
-    const message = String(q.body?.message || '').trim();
-    if (!message) return s.status(400).json({ error: 'message_required' });
-    const history = Array.isArray(q.body?.history) ? q.body.history.slice(-10) : [];
-    const input = [...history.map(m => ({ role: m.role === 'mike' ? 'assistant' : 'user', content: [{ type: 'input_text', text: String(m.text || '') }] })), { role: 'user', content: [{ type: 'input_text', text: message }] }];
-    const response = await withTimeout(() => openai.responses.create({ model: OPENAI_MODEL, instructions: 'You are Mike AI, the upbeat Doer Tough everyday copilot. Speak naturally, confidently, clearly, and with a warm Southern American conversational feel. Use excellent grammar and concise useful answers. Do not claim to know private facts. When current facts matter, say they should be verified.', input }), 45000, 'openai');
-    s.json({ text: response.output_text?.trim() || 'I am here. Give me another shot.' });
-  } catch (e) { console.error('openai_failed', e); s.status(e.status || 502).json({ error: e.message || 'mike_ai_unavailable' }); }
-});
-
-app.post('/api/tts', async (q, s) => {
-  try {
-    requireKey(process.env.ELEVENLABS_API_KEY, 'elevenlabs');
-    const text = String(q.body?.text || '').trim(); if (!text) return s.status(400).json({ error: 'text_required' });
-    const voiceId = await resolveMikeVoice();
-    const url = `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_22050_32`;
-    const r = await fetch(url, { method: 'POST', headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ text, model_id: ELEVEN_MODEL, voice_settings: { stability: 0.55, similarity_boost: 0.85, style: 0.25, use_speaker_boost: true, speed: 1.08 }) });
-    if (!r.ok) { const detail = await r.text(); throw new Error('elevenlabs_tts_' + r.status + ':' + detail.slice(0,300)); }
-    const bytes = Buffer.from(await r.arrayBuffer());
-    s.json({ audioBase64: bytes.toString('base64'), mimeType: 'audio/mpeg', voiceId });
-  } catch (e) { console.error('tts_failed', e); s.status(e.status || 502).json({ error: e.message || 'mike_voice_unavailable' }); }
-});
-
-app.post('/api/avatar', async (q, s) => {
-  try {
-    requireKey(process.env.FAL_KEY, 'fal');
-    const audioBase64 = String(q.body?.audioBase64 || '').trim(); if (!audioBase64) return s.status(400).json({ error: 'audio_required' });
-    const audioUrl = `data:audio/mpeg;base64,${audioBase64}`;
-    const { request_id } = await fal.queue.submit(FAL_MODEL, { input: { video_url: PREVIEW_VIDEO, audio_url: audioUrl }, headers: { 'X-Fal-No-Retry': '1' } });
-    console.log('lipsync_queued', request_id);
-    s.json({ generationId: request_id });
-  } catch (e) { console.error('lipsync_submit_failed', e); s.status(e.status || 502).json({ error: e.message || 'lipsync_unavailable' }); }
-});
-
-app.get('/api/avatar/:id', async (q, s) => {
-  try {
-    requireKey(process.env.FAL_KEY, 'fal');
-    const id = q.params.id;
-    const status = await fal.queue.status(FAL_MODEL, { requestId: id });
-    if (status.status === 'COMPLETED') { const result = await fal.queue.result(FAL_MODEL, { requestId: id }); const videoUrl = result.data?.video?.url; return s.json({ status: 'completed', videoUrl }); }
-    if (status.status === 'FAILED') return s.json({ status: 'failed' });
-    s.json({ status: 'processing' });
-  } catch (e) { console.error('lipsync_status_failed', e); s.status(e.status || 502).json({ error: e.message || 'lipsync_status_unavailable' }); }
-});
-
-app.get('/api/avatar-preview', async (q, s) => {
-  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 30000);
-  try { const range = q.headers.range; const headers = range ? { Range: range } : {}; const r = await fetch(PREVIEW_VIDEO, { headers, signal: controller.signal }); if (!r.ok || !r.body) throw new Error(`preview_fetch_${r.status}`); s.status(r.status); for (const name of ['content-type','content-length','content-range','accept-ranges']) { const value = r.headers.get(name); if (value) s.setHeader(name, value); } s.setHeader('Cache-Control','public, max-age=3600, stale-while-revalidate=86400'); s.setHeader('Cross-Origin-Resource-Policy','cross-origin'); Readable.fromWeb(r.body).pipe(s); } catch (e) { console.error('avatar_preview_failed',e); if (!s.headersSent) s.status(e.name === 'AbortError' ? 504 : 502).json({ error:'avatar_preview_unavailable' }); } finally { clearTimeout(timer); }
-});
-
-app.use(express.static(path.join(__dirname,'..','dist'),{maxAge:'1h',etag:true}));
-app.use((q,s)=>s.sendFile(path.join(__dirname,'..','dist','index.html')));
-app.listen(PORT,()=>console.log('Mike AI direct pipeline listening on '+PORT));
+app.disable('x-powered-by'); app.use(express.json({ limit: '15mb' }));
+const requireKey=(key,name)=>{if(!key){const e=new Error(name+'_not_configured');e.status=503;throw e;}};
+let cachedVoice=null;
+const resolveMikeVoice=async()=>{if(process.env.ELEVENLABS_VOICE_ID)return process.env.ELEVENLABS_VOICE_ID;if(cachedVoice)return cachedVoice;requireKey(process.env.ELEVENLABS_API_KEY,'elevenlabs');const r=await fetch('https://api.elevenlabs.io/v2/voices?page_size=100&voice_type=non-default',{headers:{'xi-api-key':process.env.ELEVENLABS_API_KEY}});if(!r.ok)throw new Error('elevenlabs_voice_list_'+r.status);const voices=(await r.json()).voices||[];const ranked=voices.map(v=>{const text=`${v.name||''} ${v.description||''} ${JSON.stringify(v.labels||{})}`.toLowerCase();let score=0;if(/mike/.test(text))score+=100;if(/diesel|bin/.test(text))score+=80;if(/doer|tough/.test(text))score+=60;if(/southern|country|texas|american/.test(text))score+=25;if(v.voice_type==='personal'||v.category==='cloned'||v.category==='generated')score+=20;return{v,score};}).sort((a,b)=>b.score-a.score);if(!ranked.length)throw new Error('elevenlabs_no_custom_voice');cachedVoice=ranked[0].v.voice_id;console.log('mike_voice_selected',ranked[0].v.name,cachedVoice);return cachedVoice;};
+app.get('/api/health',(q,s)=>s.json({ok:true,service:'mike-ai',directPipeline:true,voiceConfigured:!!process.env.ELEVENLABS_API_KEY,lipSyncConfigured:!!process.env.FAL_KEY}));
+app.post('/api/ask',async(q,s)=>{try{requireKey(process.env.OPENAI_API_KEY,'openai');const message=String(q.body?.message||'').trim();if(!message)return s.status(400).json({error:'message_required'});const history=Array.isArray(q.body?.history)?q.body.history.slice(-10):[];const input=[...history.map(m=>({role:m.role==='mike'?'assistant':'user',content:[{type:'input_text',text:String(m.text||'')}]})),{role:'user',content:[{type:'input_text',text:message}]}];const response=await openai.responses.create({model:OPENAI_MODEL,instructions:'You are Mike AI, the upbeat Doer Tough everyday copilot. Speak naturally, confidently, clearly, and with a warm Southern American conversational feel. Use excellent grammar and concise useful answers. Do not claim to know private facts. When current facts matter, say they should be verified.',input});s.json({text:response.output_text?.trim()||'I am here. Give me another shot.'});}catch(e){console.error('openai_failed',e);s.status(e.status||502).json({error:e.message||'mike_ai_unavailable'});}});
+app.post('/api/tts',async(q,s)=>{try{requireKey(process.env.ELEVENLABS_API_KEY,'elevenlabs');const text=String(q.body?.text||'').trim();if(!text)return s.status(400).json({error:'text_required'});const voiceId=await resolveMikeVoice();const r=await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_22050_32`,{method:'POST',headers:{'xi-api-key':process.env.ELEVENLABS_API_KEY,'Content-Type':'application/json'},body:JSON.stringify({text,model_id:ELEVEN_MODEL,voice_settings:{stability:.55,similarity_boost:.85,style:.25,use_speaker_boost:true,speed:1.08}})});if(!r.ok)throw new Error('elevenlabs_tts_'+r.status+':'+(await r.text()).slice(0,300));s.json({audioBase64:Buffer.from(await r.arrayBuffer()).toString('base64'),mimeType:'audio/mpeg',voiceId});}catch(e){console.error('tts_failed',e);s.status(e.status||502).json({error:e.message||'mike_voice_unavailable'});}});
+app.post('/api/avatar',async(q,s)=>{try{requireKey(process.env.FAL_KEY,'fal');const audioBase64=String(q.body?.audioBase64||'').trim();if(!audioBase64)return s.status(400).json({error:'audio_required'});const {request_id}=await fal.queue.submit(FAL_MODEL,{input:{video_url:PREVIEW_VIDEO,audio_url:`data:audio/mpeg;base64,${audioBase64}`},headers:{'X-Fal-No-Retry':'1'}});console.log('lipsync_queued',request_id);s.json({generationId:request_id});}catch(e){console.error('lipsync_submit_failed',e);s.status(e.status||502).json({error:e.message||'lipsync_unavailable'});}});
+app.get('/api/avatar/:id',async(q,s)=>{try{requireKey(process.env.FAL_KEY,'fal');const id=q.params.id;const status=await fal.queue.status(FAL_MODEL,{requestId:id});if(status.status==='COMPLETED'){const result=await fal.queue.result(FAL_MODEL,{requestId:id});return s.json({status:'completed',videoUrl:result.data?.video?.url});}if(status.status==='FAILED')return s.json({status:'failed'});s.json({status:'processing'});}catch(e){console.error('lipsync_status_failed',e);s.status(e.status||502).json({error:e.message||'lipsync_status_unavailable'});}});
+app.get('/api/avatar-preview',async(q,s)=>{const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),30000);try{const range=q.headers.range;const headers=range?{Range:range}:{};const r=await fetch(PREVIEW_VIDEO,{headers,signal:controller.signal});if(!r.ok||!r.body)throw new Error(`preview_fetch_${r.status}`);s.status(r.status);for(const name of ['content-type','content-length','content-range','accept-ranges']){const value=r.headers.get(name);if(value)s.setHeader(name,value);}s.setHeader('Cache-Control','public,max-age=3600,stale-while-revalidate=86400');s.setHeader('Cross-Origin-Resource-Policy','cross-origin');Readable.fromWeb(r.body).pipe(s);}catch(e){console.error('avatar_preview_failed',e);if(!s.headersSent)s.status(e.name==='AbortError'?504:502).json({error:'avatar_preview_unavailable'});}finally{clearTimeout(timer);}});
+app.use(express.static(path.join(__dirname,'..','dist'),{maxAge:'1h',etag:true}));app.use((q,s)=>s.sendFile(path.join(__dirname,'..','dist','index.html')));app.listen(PORT,()=>console.log('Mike AI direct pipeline listening on '+PORT));
