@@ -1,17 +1,35 @@
-import React,{useEffect,useRef,useState}from'react';import{createRoot}from'react-dom/client';import{Mic,Send,Volume2,ArrowRight,Lightbulb,Square}from'lucide-react';import'./style.css';
-const PREVIEW='/api/avatar-preview';
-const fetchJson=async(url,options={},timeout=50000)=>{const c=new AbortController(),t=setTimeout(()=>c.abort(),timeout);try{const r=await fetch(url,{...options,signal:c.signal});const d=await r.json();if(!r.ok)throw Error(d.error||`request_failed_${r.status}`);return d}finally{clearTimeout(t)}};
-function App(){const[messages,setMessages]=useState([{role:'mike',text:"What's up? I'm Mike. Tell me what you're trying to figure out. We'll figure it out."}]),[input,setInput]=useState(''),[busy,setBusy]=useState(false),[speaking,setSpeaking]=useState(false),[listening,setListening]=useState(false),[video,setVideo]=useState(null),[previewFailed,setPreviewFailed]=useState(false),[avatarReady,setAvatarReady]=useState(false),[error,setError]=useState(''),audioRef=useRef(null),videoRef=useRef(null),recognitionRef=useRef(null),avatarJobRef=useRef(0),syncTimerRef=useRef(null),statusRef=useRef('ready'),previewVideoRef=useRef(null);
-const setStatus=s=>{statusRef.current=s;if(s==='listening')setListening(true);else setListening(false);setSpeaking(s==='talking')};
-const clearSync=()=>{if(syncTimerRef.current){clearInterval(syncTimerRef.current);syncTimerRef.current=null}};
-const stopMike=()=>{avatarJobRef.current++;clearSync();audioRef.current?.pause();audioRef.current=null;setStatus('ready');setVideo(null);setAvatarReady(false)};
-const replayPreviewOnce=()=>{const v=previewVideoRef.current;if(!v)return;try{v.currentTime=0;v.play().catch(()=>{})}catch{}};
-const pollAvatar=async generationId=>{const job=++avatarJobRef.current;try{if(!generationId)return;for(let i=0;i<60;i++){await new Promise(x=>setTimeout(x,750));if(job!==avatarJobRef.current)return;const sd=await fetchJson('/api/avatar/'+encodeURIComponent(generationId),{},10000);if(job!==avatarJobRef.current)return;if(sd.status==='completed'&&sd.videoUrl){setVideo(sd.videoUrl);setAvatarReady(true);return}if(sd.status==='failed')return}}catch(e){if(e.name!=='AbortError')console.warn('avatar unavailable',e)}};
-const beginVideoSync=()=>{const v=videoRef.current,a=audioRef.current;if(!v||!a)return;try{if(Number.isFinite(a.currentTime)&&Number.isFinite(v.duration)&&v.duration>0){v.currentTime=Math.min(a.currentTime,Math.max(0,v.duration-.05))}}catch{}v.play().catch(()=>{});clearSync();syncTimerRef.current=setInterval(()=>{const vv=videoRef.current,aa=audioRef.current;if(!vv||!aa||aa.paused){clearSync();return}try{const drift=aa.currentTime-vv.currentTime;if(Math.abs(drift)>.18)vv.currentTime=Math.min(aa.currentTime,Math.max(0,(vv.duration||aa.currentTime)-.05))}catch{}},120)};
-const speak=async text=>{stopMike();setStatus('talking');setError('');replayPreviewOnce();try{const d=await fetchJson('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})},60000);if(d.generationId)pollAvatar(d.generationId);const a=new Audio('data:audio/mpeg;base64,'+d.audioBase64);audioRef.current=a;a.onended=()=>{clearSync();avatarJobRef.current++;setStatus('ready');setVideo(null);setAvatarReady(false);audioRef.current=null};a.onerror=()=>{clearSync();avatarJobRef.current++;setStatus('ready');setVideo(null);setAvatarReady(false);audioRef.current=null};await a.play()}catch(e){if(e.name==='AbortError')return;setStatus('ready');setError('Mike voice is unavailable right now. The AI response is still in the conversation.');console.error('mike_tts_failed',e)}};
-const ask=async text=>{text=text.trim();if(!text||busy)return;stopMike();setInput('');setBusy(true);setError('');replayPreviewOnce();setMessages(m=>[...m,{role:'user',text}]);try{const d=await fetchJson('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:messages.slice(-10)})},50000);setMessages(m=>[...m,{role:'mike',text:d.text}]);setBusy(false);await speak(d.text)}catch(e){const msg=e.name==='AbortError'?'Mike is taking too long to respond. Try that again.':(e.message||'Mike AI is unavailable right now.');setError(msg);setMessages(m=>[...m,{role:'mike',text:msg}]);setBusy(false)}};
-const listen=()=>{if(busy||speaking)return;const SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR){document.querySelector('#input')?.focus();return}recognitionRef.current?.abort();const r=new SR();recognitionRef.current=r;r.lang='en-US';r.interimResults=false;r.continuous=false;setError('');setStatus('listening');r.onresult=e=>{setStatus('ready');ask(e.results[0][0].transcript)};r.onerror=e=>{setStatus('ready');if(e.error!=='aborted'&&e.error!=='no-speech')setError('I couldn’t hear that. Try again.');document.querySelector('#input')?.focus()};r.onend=()=>{if(statusRef.current==='listening')setStatus('ready')};r.start()};
-useEffect(()=>{const key=e=>{if(e.key==='Escape'){recognitionRef.current?.abort();stopMike()}};window.addEventListener('keydown',key);return()=>{window.removeEventListener('keydown',key);recognitionRef.current?.abort();stopMike()};},[]);
-useEffect(()=>{if(!video)return;const v=videoRef.current;if(!v)return;v.muted=true;v.playsInline=true;v.load();const start=()=>beginVideoSync();v.addEventListener('loadedmetadata',start);v.addEventListener('canplay',start);return()=>{v.removeEventListener('loadedmetadata',start);v.removeEventListener('canplay',start);clearSync()};},[video]);
-const statusText=listening?'MIKE IS LISTENING':speaking?'MIKE IS TALKING':busy?'MIKE IS THINKING':'MIKE IS HERE';
-return <main><header><div className="brand"><b>M</b><div><strong>MIKE AI</strong><small>DOER TOUGH</small></div></div><span className="status">● {statusText}</span></header><section className="hero"><div><div className={'avatar '+(avatarReady?'avatar-ready ':'')+(busy||speaking?'responding':'')}><video ref={previewVideoRef} className={video?'idle hidden':'idle'} src={PREVIEW} autoPlay muted playsInline preload="auto" onLoadedData={()=>{setPreviewFailed(false);if(!video)setAvatarReady(true)}} onEnded={()=>{if(!video)setAvatarReady(true)}} onError={()=>setPreviewFailed(true)}/><video ref={videoRef} className={video?'talking':'talking hidden'} src={video||undefined} autoPlay muted playsInline preload="auto" onError={()=>{setVideo(null);setAvatarReady(false)}}/>{previewFailed&&!video&&<div className="avatar-fallback"><span>M</span><small>Mike AI</small></div>}<div className="response-badge">{busy?'THINKING…':speaking?'RESPONDING':''}</div><div className="halo"/></div><button className={'talk '+(listening?'active':'')} onClick={listen} disabled={busy||speaking}>{listening?<><Mic size={18}/>Listening…</>:<><Mic size={18}/>Talk to Mike <ArrowRight size={16}/></>}</button></div><div className="copy"><label>YOUR EVERYDAY COPILOT</label><h1>Meet Mike.<br/><span>Your everyday copilot.</span></h1><p>Talk it out. Think it through. Find the deal. Make the move. Mike helps you research, plan, negotiate, write, buy, sell, and figure out what to do next.</p><button className="radar" onClick={()=>ask('What am I missing?')} disabled={busy}><Lightbulb size={17}/> What am I missing?</button></div></section><section className="chat" aria-live="polite">{messages.map((m,i)=><div key={i} className={'bubble '+m.role}>{m.text}</div>)}{busy&&<div className="bubble mike">Give me a second. I'm thinking…</div>}</section>{error&&<div className="error" role="alert">{error}</div>}<form onSubmit={e=>{e.preventDefault();ask(input)}}><input id="input" value={input} onChange={e=>setInput(e.target.value)} placeholder="What's on your mind?" autoComplete="off"/><button disabled={!input.trim()||busy} aria-label="Send"><Send size={18}/></button><button type="button" className="read" aria-label={speaking?'Stop Mike':'Read latest response'} onClick={()=>{if(speaking)stopMike();else{const x=messages.at(-1);if(x?.role==='mike')speak(x.text)}}}>{speaking?<Square size={17}/>:<Volume2 size={18}/>}</button></form><p className="fine">Mike is a Doer Tough AI copilot. Current facts and changing information should be verified before important decisions.</p></main>};createRoot(document.getElementById('root')).render(<App/>);
+const pollAvatar = async (generationId) => {
+  const job = ++avatarJobRef.current;
+  if (!generationId) return;
+
+  try {
+    // Poll for up to ~90 seconds (120 × 750ms)
+    for (let i = 0; i < 120; i++) {
+      await new Promise((x) => setTimeout(x, 750));
+      if (job !== avatarJobRef.current) return;
+
+      try {
+        const sd = await fetchJson(`/api/avatar/${encodeURIComponent(generationId)}`, {}, 12000);
+
+        if (job !== avatarJobRef.current) return;
+
+        if (sd.status === 'completed' && sd.videoUrl) {
+          setVideo(sd.videoUrl);
+          setAvatarReady(true);
+          return;
+        }
+
+        if (sd.status === 'failed') {
+          console.warn('Avatar generation failed');
+          return;
+        }
+      } catch (err) {
+        // Keep trying on temporary network issues
+        if (err.name === 'AbortError') return;
+        console.warn('Avatar poll temporary failure', err.message);
+      }
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') console.warn('avatar unavailable', e);
+  }
+};
