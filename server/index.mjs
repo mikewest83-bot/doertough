@@ -12,11 +12,8 @@ app.use(express.json({ limit: '15mb' }));
 
 const proxy = async (req, res, target) => {
   try {
-    const r = await fetch(target, {
-      method: req.method,
-      headers: { 'Content-Type': 'application/json' },
-      body: req.method === 'GET' ? undefined : JSON.stringify(req.body),
-    });
+    const headers = { 'Content-Type': 'application/json' };
+    const r = await fetch(target, { method: req.method, headers, body: req.method === 'GET' ? undefined : JSON.stringify(req.body) });
     const text = await r.text();
     res.status(r.status).type(r.headers.get('content-type') || 'application/json').send(text);
   } catch (e) {
@@ -29,17 +26,18 @@ app.get('/api/health', (q, s) => s.json({ ok: true, service: 'mike-ai', backend:
 
 app.get('/api/avatar-preview', async (q, s) => {
   try {
-    const r = await fetch(PREVIEW_VIDEO);
+    const range = q.headers.range;
+    const headers = range ? { Range: range } : {};
+    const r = await fetch(PREVIEW_VIDEO, { headers });
     if (!r.ok || !r.body) throw new Error(`preview_fetch_${r.status}`);
-    s.status(200);
-    s.setHeader('Content-Type', r.headers.get('content-type') || 'video/mp4');
+    s.status(r.status);
+    for (const name of ['content-type','content-length','content-range','accept-ranges']) {
+      const value = r.headers.get(name);
+      if (value) s.setHeader(name, value);
+    }
     s.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
-    if (r.headers.get('content-length')) s.setHeader('Content-Length', r.headers.get('content-length'));
-    r.body.pipeTo(new WritableStream({
-      write(chunk) { s.write(Buffer.from(chunk)); },
-      close() { s.end(); },
-      abort() { s.end(); },
-    })).catch(() => s.end());
+    const buffer = Buffer.from(await r.arrayBuffer());
+    s.end(buffer);
   } catch (e) {
     console.error('avatar_preview_failed', e);
     s.status(502).json({ error: 'avatar_preview_unavailable' });
