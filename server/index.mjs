@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import { Readable } from 'stream';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -12,24 +13,30 @@ app.disable('x-powered-by');
 app.use(express.json({ limit: '15mb' }));
 
 const proxy = async (req, res, target) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 45000);
   try {
     const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
-    const r = await fetch(target, { method: req.method, headers, body: req.method === 'GET' ? undefined : JSON.stringify(req.body) });
+    const r = await fetch(target, { method: req.method, headers, body: req.method === 'GET' ? undefined : JSON.stringify(req.body), signal: controller.signal });
     const text = await r.text();
     res.status(r.status).type(r.headers.get('content-type') || 'application/json').send(text);
   } catch (e) {
     console.error('proxy_failed', e);
-    res.status(502).json({ error: 'mike_backend_unavailable' });
+    if (!res.headersSent) res.status(e.name === 'AbortError' ? 504 : 502).json({ error: e.name === 'AbortError' ? 'mike_backend_timeout' : 'mike_backend_unavailable' });
+  } finally {
+    clearTimeout(timer);
   }
 };
 
 app.get('/api/health', (q, s) => s.json({ ok: true, service: 'mike-ai', backend: API_BASE }));
 
 app.get('/api/avatar-preview', async (q, s) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30000);
   try {
     const range = q.headers.range;
     const headers = range ? { Range: range } : {};
-    const r = await fetch(PREVIEW_VIDEO, { headers });
+    const r = await fetch(PREVIEW_VIDEO, { headers, signal: controller.signal });
     if (!r.ok || !r.body) throw new Error(`preview_fetch_${r.status}`);
     s.status(r.status);
     for (const name of ['content-type','content-length','content-range','accept-ranges']) {
@@ -38,11 +45,12 @@ app.get('/api/avatar-preview', async (q, s) => {
     }
     s.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
     s.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-    const buffer = Buffer.from(await r.arrayBuffer());
-    s.end(buffer);
+    Readable.fromWeb(r.body).pipe(s);
   } catch (e) {
     console.error('avatar_preview_failed', e);
-    s.status(502).json({ error: 'avatar_preview_unavailable' });
+    if (!s.headersSent) s.status(e.name === 'AbortError' ? 504 : 502).json({ error: 'avatar_preview_unavailable' });
+  } finally {
+    clearTimeout(timer);
   }
 });
 
