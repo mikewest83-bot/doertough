@@ -59,6 +59,25 @@ function App() {
     }
   };
 
+  const ensureMicPermission = async () => {
+    if (!window.isSecureContext) throw new Error('Microphone requires a secure HTTPS connection.');
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error('This browser does not provide microphone access. Use Safari or Chrome.');
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      return true;
+    } catch (err) {
+      if (err?.name === 'NotAllowedError' || err?.name === 'SecurityError') {
+        throw new Error('Safari is blocking microphone access for Mike. Set Microphone to Allow for doertoughmikeai.com, then reopen the site.');
+      }
+      if (err?.name === 'NotFoundError') throw new Error('No microphone was found on this device.');
+      if (err?.name === 'NotReadableError') throw new Error('The microphone is busy or unavailable. Close other apps using the microphone and try again.');
+      throw new Error(`Microphone access failed: ${err?.name || 'unknown_error'}.`);
+    } finally {
+      stream?.getTracks().forEach((track) => track.stop());
+    }
+  };
+
   const clearAudioUrl = () => {
     if (audioUrlRef.current) {
       URL.revokeObjectURL(audioUrlRef.current);
@@ -76,21 +95,31 @@ function App() {
     if (statusRef.current === 'talking') setStatus('ready');
   };
 
-  const startListening = () => {
+  const startListening = async () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
       document.querySelector('#input')?.focus();
+      setError('Voice input is not supported by this browser. Type below to talk with Mike.');
       return;
     }
 
     unlockAudio();
+    setError('');
+    try {
+      await ensureMicPermission();
+    } catch (err) {
+      setStatus('ready');
+      setConversation(false);
+      setError(err.message || 'Microphone access failed.');
+      return;
+    }
+
     recognitionRef.current?.abort();
     const recognition = new SpeechRecognition();
     recognitionRef.current = recognition;
     recognition.lang = 'en-US';
     recognition.interimResults = false;
     recognition.continuous = false;
-    setError('');
     setStatus('listening');
 
     recognition.onresult = (e) => {
@@ -101,9 +130,11 @@ function App() {
       setStatus('ready');
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
         setConversation(false);
-        setError('Mic permission is blocked. Allow microphone access, or type below.');
+        setError('Safari granted microphone access, but its speech-recognition service rejected the request. Try Safari again or type below.');
+      } else if (e.error === 'audio-capture') {
+        setError('Mike could not capture the microphone. Check that no other app is using it.');
       } else if (e.error !== 'aborted' && e.error !== 'no-speech') {
-        setError("I couldn't hear that. Try again.");
+        setError(`Mike could not hear that (${e.error}). Try again.`);
       }
     };
     recognition.onend = () => {
