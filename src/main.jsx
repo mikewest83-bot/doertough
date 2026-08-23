@@ -32,6 +32,7 @@ function App() {
   const recognitionRef = useRef(null);
   const unlockedRef = useRef(false);
   const speakJobRef = useRef(0);
+  const audioUrlRef = useRef(null);
   const statusRef = useRef('ready');
 
   const setStatus = (status) => {
@@ -52,12 +53,20 @@ function App() {
     }).catch(() => {});
   };
 
+  const clearAudioUrl = () => {
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+  };
+
   const stopSpeaking = () => {
     speakJobRef.current += 1;
     const el = audioElRef.current;
     if (el) {
       try { el.pause(); el.removeAttribute('src'); el.load(); } catch {}
     }
+    clearAudioUrl();
     if (statusRef.current === 'talking') setStatus('ready');
   };
 
@@ -76,12 +85,27 @@ function App() {
       if (!data.audioBase64) throw new Error('Mike returned no audio. Check ElevenLabs billing/API settings.');
       const el = audioElRef.current;
       if (!el) throw new Error('audio_element_missing');
-      el.src = `data:${data.mimeType || 'audio/mpeg'};base64,${data.audioBase64}`;
-      el.onended = () => { if (job === speakJobRef.current) setStatus('ready'); };
+
+      // iPhone/Safari is more reliable with a Blob URL than a large data: URI.
+      const raw = atob(data.audioBase64);
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+      const blob = new Blob([bytes], { type: data.mimeType || 'audio/mpeg' });
+      clearAudioUrl();
+      audioUrlRef.current = URL.createObjectURL(blob);
+      el.src = audioUrlRef.current;
+      el.load();
+      el.onended = () => {
+        if (job === speakJobRef.current) {
+          clearAudioUrl();
+          setStatus('ready');
+        }
+      };
       el.onerror = () => {
         if (job !== speakJobRef.current) return;
+        clearAudioUrl();
         setStatus('ready');
-        setError('Mike generated audio but the iPhone could not play it. Tap the speaker button and try again.');
+        setError('Mike generated audio, but the iPhone could not play it. Tap the speaker button and try again.');
       };
       await el.play();
     } catch (err) {
