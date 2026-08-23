@@ -24,6 +24,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [listening, setListening] = useState(false);
+  const [conversationMode, setConversationMode] = useState(false);
   const [error, setError] = useState('');
   const audioElRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -32,6 +33,12 @@ function App() {
   const audioUrlRef = useRef(null);
   const speakJobRef = useRef(0);
   const statusRef = useRef('ready');
+  const conversationModeRef = useRef(false);
+
+  const setConversation = (enabled) => {
+    conversationModeRef.current = enabled;
+    setConversationMode(enabled);
+  };
 
   const setStatus = (status) => {
     statusRef.current = status;
@@ -39,8 +46,6 @@ function App() {
     setSpeaking(status === 'talking');
   };
 
-  // iPhone/Safari: create and resume the Web Audio context during the user's
-  // tap. The context can then play audio that arrives later after /api/tts.
   const unlockAudio = () => {
     try {
       const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -71,6 +76,61 @@ function App() {
     if (statusRef.current === 'talking') setStatus('ready');
   };
 
+  const startListening = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      document.querySelector('#input')?.focus();
+      return;
+    }
+
+    unlockAudio();
+    recognitionRef.current?.abort();
+    const recognition = new SpeechRecognition();
+    recognitionRef.current = recognition;
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.continuous = false;
+    setError('');
+    setStatus('listening');
+
+    recognition.onresult = (e) => {
+      setStatus('ready');
+      ask(e.results[0][0].transcript);
+    };
+    recognition.onerror = (e) => {
+      setStatus('ready');
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        setConversation(false);
+        setError('Mic permission is blocked. Allow microphone access, or type below.');
+      } else if (e.error !== 'aborted' && e.error !== 'no-speech') {
+        setError("I couldn't hear that. Try again.");
+      }
+    };
+    recognition.onend = () => {
+      if (statusRef.current === 'listening') setStatus('ready');
+    };
+    try {
+      recognition.start();
+    } catch (err) {
+      setStatus('ready');
+      if (err.name !== 'InvalidStateError') setError('Mike could not start listening. Try again.');
+    }
+  };
+
+  const toggleConversation = () => {
+    unlockAudio();
+    if (conversationModeRef.current) {
+      setConversation(false);
+      recognitionRef.current?.abort();
+      stopSpeaking();
+      setStatus('ready');
+      return;
+    }
+    setConversation(true);
+    stopSpeaking();
+    startListening();
+  };
+
   const speak = async (text) => {
     stopSpeaking();
     const job = ++speakJobRef.current;
@@ -85,9 +145,6 @@ function App() {
       if (job !== speakJobRef.current) return;
       if (!data.audioBase64) throw new Error('Mike returned no audio.');
 
-      // Prefer Web Audio because Safari does not reliably allow a new HTMLAudio
-      // element to autoplay after an async network request. The AudioContext was
-      // resumed during the user's microphone/send tap, so this remains permitted.
       const ctx = unlockAudio();
       if (ctx) {
         const raw = atob(data.audioBase64);
@@ -100,17 +157,16 @@ function App() {
         source.connect(ctx.destination);
         sourceRef.current = source;
         source.onended = () => {
-          if (job === speakJobRef.current) {
-            sourceRef.current = null;
-            setStatus('ready');
-          }
+          if (job === speakJobRef.current) sourceRef.current = null;
         };
         if (ctx.state !== 'running') await ctx.resume();
         source.start(0);
+        const durationMs = Math.max(250, buffer.duration * 1000);
+        await new Promise((resolve) => setTimeout(resolve, durationMs));
+        if (job === speakJobRef.current) setStatus('ready');
         return;
       }
 
-      // Desktop/native fallback.
       const raw = atob(data.audioBase64);
       const bytes = new Uint8Array(raw.length);
       for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
@@ -120,9 +176,13 @@ function App() {
       const el = audioElRef.current;
       if (!el) throw new Error('audio_element_missing');
       el.src = audioUrlRef.current;
-      el.onended = () => { if (job === speakJobRef.current) { clearAudioUrl(); setStatus('ready'); } };
-      el.onerror = () => { if (job === speakJobRef.current) { clearAudioUrl(); setStatus('ready'); setError('Mike generated audio, but this browser could not play it. Tap the speaker button.'); } };
-      await el.play();
+      await new Promise((resolve, reject) => {
+        el.onended = resolve;
+        el.onerror = () => reject(new Error('Mike generated audio, but this browser could not play it.'));
+        el.play().catch(reject);
+      });
+      if (job === speakJobRef.current) setStatus('ready');
+      clearAudioUrl();
     } catch (err) {
       if (err.name === 'AbortError' || job !== speakJobRef.current) return;
       setStatus('ready');
@@ -151,42 +211,29 @@ function App() {
       setMessages((prev) => [...prev, { role: 'mike', text: data.text }]);
       setBusy(false);
       await speak(data.text);
+      if (conversationModeRef.current) {
+        setTimeout(() => {
+          if (conversationModeRef.current && !busy) startListening();
+        }, 120);
+      }
     } catch (err) {
       const msg = err.name === 'AbortError' ? 'Mike is taking too long to respond. Try that again.' : err.message || 'Mike AI is unavailable right now.';
       setError(msg);
       setMessages((prev) => [...prev, { role: 'mike', text: msg }]);
       setBusy(false);
+      if (conversationModeRef.current) setTimeout(() => conversationModeRef.current && startListening(), 250);
     }
   };
 
-  const listen = () => {
-    unlockAudio();
-    stopSpeaking();
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) { document.querySelector('#input')?.focus(); return; }
-    recognitionRef.current?.abort();
-    const recognition = new SpeechRecognition();
-    recognitionRef.current = recognition;
-    recognition.lang = 'en-US';
-    recognition.interimResults = false;
-    recognition.continuous = false;
-    setError('');
-    setStatus('listening');
-    recognition.onresult = (e) => { setStatus('ready'); ask(e.results[0][0].transcript); };
-    recognition.onerror = (e) => {
-      setStatus('ready');
-      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') setError('Mic permission is blocked. Allow microphone access, or type below.');
-      else if (e.error !== 'aborted' && e.error !== 'no-speech') setError("I couldn't hear that. Try again.");
-      document.querySelector('#input')?.focus();
-    };
-    recognition.onend = () => { if (statusRef.current === 'listening') setStatus('ready'); };
-    recognition.start();
-  };
-
   useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') { recognitionRef.current?.abort(); stopSpeaking(); } };
+    const onKey = (e) => { if (e.key === 'Escape') { setConversation(false); recognitionRef.current?.abort(); stopSpeaking(); } };
     window.addEventListener('keydown', onKey);
-    return () => { window.removeEventListener('keydown', onKey); recognitionRef.current?.abort(); stopSpeaking(); try { audioContextRef.current?.close(); } catch {} };
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      recognitionRef.current?.abort();
+      stopSpeaking();
+      try { audioContextRef.current?.close(); } catch {}
+    };
   }, []);
 
   const statusText = listening ? 'MIKE IS LISTENING' : speaking ? 'MIKE IS TALKING' : busy ? 'MIKE IS THINKING' : 'MIKE IS HERE';
@@ -198,23 +245,30 @@ function App() {
         <div className="brand"><b>M</b><div><strong>MIKE AI</strong><small>DOER TOUGH</small></div></div>
         <span className="status">● {statusText}</span>
       </header>
+
       <section className="voice-hero">
-        <div className={'voice-box ' + (listening ? 'is-listening' : speaking ? 'is-speaking' : '')}>
+        <div className={'voice-box ' + (listening ? 'is-listening' : speaking ? 'is-speaking' : '')} onClick={toggleConversation} role="button" tabIndex={0} aria-label={conversationMode ? 'Stop talking with Mike' : 'Start talking with Mike'} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleConversation(); }}>
           <div className="voice-orb" aria-hidden="true"><span className="orb-core">M</span></div>
           <div className="voice-state"><span className="state-dot" /><strong>{statusText}</strong></div>
           <div className="wave" aria-hidden="true">{Array.from({ length: 17 }, (_, i) => <i key={i} style={{ '--delay': `${i * 55}ms`, '--height': `${18 + ((i * 17) % 44)}px` }} />)}</div>
-          <p className="voice-hint">{listening ? 'Go ahead. Mike is listening.' : speaking ? 'Mike is talking.' : busy ? 'Give Mike a second.' : 'Talk it out. Think it through. Make the move.'}</p>
+          <p className="voice-hint">{conversationMode ? (listening ? 'Go ahead. Mike is listening.' : speaking ? 'Mike is talking.' : 'Conversation mode is on.') : 'Tap here or the button below to talk with Mike.'}</p>
         </div>
+
+        <button className={'talk voice-talk ' + (conversationMode ? 'active' : '')} onClick={toggleConversation} disabled={busy && !conversationMode}>
+          <Mic size={18} /> {conversationMode ? 'Stop Talking' : 'Talk to Mike'} <ArrowRight size={16} />
+        </button>
+
         <div className="copy">
           <label>YOUR EVERYDAY COPILOT</label>
           <h1>Meet Mike.<br /><span>Just talk.</span></h1>
           <p>No avatar. No gimmicks. Just Mike. Talk it out, think it through, find the deal, make the move. Mike helps you research, plan, negotiate, write, buy, sell, and figure out what to do next.</p>
-          <button className={'talk ' + (listening ? 'active' : '')} onClick={listen} disabled={busy}>{listening ? <><Mic size={18} /> Listening…</> : <><Mic size={18} /> Talk to Mike <ArrowRight size={16} /></>}</button>
           <button className="radar" onClick={() => ask('What am I missing?')} disabled={busy}><Lightbulb size={17} /> What am I missing?</button>
         </div>
       </section>
+
       <section className="chat" aria-live="polite">{messages.map((m, i) => <div key={i} className={'bubble ' + m.role}>{m.text}</div>)}{busy && <div className="bubble mike">Give me a second. I'm thinking…</div>}</section>
       {error && <div className="error" role="alert">{error}</div>}
+
       <form onSubmit={(e) => { e.preventDefault(); ask(input); }}>
         <input id="input" value={input} onChange={(e) => setInput(e.target.value)} placeholder="What's on your mind?" autoComplete="off" />
         <button disabled={!input.trim() || busy} aria-label="Send"><Send size={18} /></button>
