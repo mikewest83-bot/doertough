@@ -1,14 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { createRoot } from 'react-dom/client';
 import { Mic, Send, Volume2, ArrowRight, Lightbulb, Square } from 'lucide-react';
+import { createRoot } from 'react-dom/client';
 import './style.css';
 
-const PREVIEW = '/api/avatar-preview';
-
-// 50ms of silence. Played on the first tap to unlock audio on iOS, where a
-// play() call that isn't inside a user gesture is rejected.
+// Tiny silent clip used to unlock the persistent audio element on iOS.
 const SILENCE =
-  'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tUxAADB8AhSmxhIIEVCSiJrDCQBTcu3UrAIwUdkRgQbFAZC1CQEwTJ9mjRvBA4UOLD8nKVOWfh+UlK3z/177OXrfOdKl7pyn3Xf//WreyTRUoAWgBgkOAGbZHBgG1OF6zM82DWbZaUmMBptgQhGjsyYqc9ae9XFz280948NMBWInljyzsNRFLPWdnZGWrddDsjK1unuSrVN9jJsK8KuQtQCtMBjCEtImISdNKJOopIpBFpNSMbIHCSRpRR5iakjTiyzLhchUUBwCgyKiweBv/7UsQbg8it7f8AAAAI3JOR1nAAAOAgAAg0AKQANEmZgAA7CAA=';
+  'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjEwLjEwMAAAAAAAAAAAAAAA//tUxAADB8AhSmxhIIEVCSiJrDCQBTcu3UrAIwUdkRgQbFAZC1CQEwTJ9mjRvBA4UOLD8nKVOWfh+UlK3z/177OXrfOdKl7pyn3Xf//WreyTRUoAWgBgkOAGbZHBgG1OF6zM82DWbZaUmMBptgQhGjsyYqc9ae9XFz280948NMBWInljyzsNRFLPWdnZGWrddDsjK1unuSrVN9jJsK8KuQtQCtMBjCEtImISdNKJOopIpBFpNSMbIHCSRpRR5iakjTiyzLhchUUBwCgyKiweBv/7UsQbg8it7f8AAAAI3JOR1nAAAOAgAAg0AKQANEmZgAA7CAA=';
 
 const fetchJson = async (url, options = {}, timeout = 60000) => {
   const controller = new AbortController();
@@ -34,11 +31,9 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [listening, setListening] = useState(false);
-  const [previewFailed, setPreviewFailed] = useState(false);
   const [error, setError] = useState('');
 
   const audioElRef = useRef(null);
-  const previewVideoRef = useRef(null);
   const recognitionRef = useRef(null);
   const unlockedRef = useRef(false);
   const speakJobRef = useRef(0);
@@ -50,9 +45,6 @@ function App() {
     setSpeaking(status === 'talking');
   };
 
-  // iOS only allows audio that started inside a user gesture. Priming the one
-  // persistent <audio> element on first tap keeps every later play() legal,
-  // even though it happens after an await.
   const unlockAudio = () => {
     if (unlockedRef.current) return;
     const el = audioElRef.current;
@@ -80,21 +72,11 @@ function App() {
     if (statusRef.current === 'talking') setStatus('ready');
   };
 
-  const replayPreviewOnce = () => {
-    const v = previewVideoRef.current;
-    if (!v) return;
-    try {
-      v.currentTime = 0;
-      v.play().catch(() => {});
-    } catch {}
-  };
-
   const speak = async (text) => {
     stopSpeaking();
     const job = ++speakJobRef.current;
     setStatus('talking');
     setError('');
-    replayPreviewOnce();
 
     try {
       const data = await fetchJson(
@@ -107,13 +89,12 @@ function App() {
         60000
       );
 
-      if (job !== speakJobRef.current) return; // superseded or stopped
+      if (job !== speakJobRef.current) return;
 
       const el = audioElRef.current;
       if (!el) throw new Error('audio_element_missing');
 
       el.src = `data:${data.mimeType || 'audio/mpeg'};base64,${data.audioBase64}`;
-
       el.onended = () => {
         if (job === speakJobRef.current) setStatus('ready');
       };
@@ -127,7 +108,6 @@ function App() {
     } catch (err) {
       if (err.name === 'AbortError' || job !== speakJobRef.current) return;
       setStatus('ready');
-
       if (err.name === 'NotAllowedError') {
         setError('Tap the speaker button to let Mike talk — your browser blocked autoplay.');
       } else {
@@ -146,7 +126,6 @@ function App() {
     setInput('');
     setBusy(true);
     setError('');
-    replayPreviewOnce();
 
     const history = messages.slice(-10);
     setMessages((prev) => [...prev, { role: 'user', text }]);
@@ -178,7 +157,7 @@ function App() {
 
   const listen = () => {
     unlockAudio();
-    stopSpeaking(); // barge-in: tapping the mic cuts Mike off
+    stopSpeaking();
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -189,7 +168,6 @@ function App() {
     recognitionRef.current?.abort();
     const recognition = new SpeechRecognition();
     recognitionRef.current = recognition;
-
     recognition.lang = 'en-US';
     recognition.interimResults = false;
     recognition.continuous = false;
@@ -257,35 +235,45 @@ function App() {
         <span className="status">● {statusText}</span>
       </header>
 
-      <section className="hero">
-        <div>
-          <div className={'avatar avatar-ready ' + (busy || speaking ? 'responding' : '')}>
-            <video
-              ref={previewVideoRef}
-              className="idle"
-              src={PREVIEW}
-              autoPlay
-              muted
-              loop
-              playsInline
-              preload="auto"
-              onLoadedData={() => setPreviewFailed(false)}
-              onError={() => setPreviewFailed(true)}
-            />
-
-            {previewFailed && (
-              <div className="avatar-fallback">
-                <span>M</span>
-                <small>Mike AI</small>
-              </div>
-            )}
-
-            <div className="response-badge">
-              {busy ? 'THINKING…' : speaking ? 'RESPONDING' : ''}
-            </div>
-            <div className="halo" />
+      <section className="voice-hero">
+        <div className={'voice-box ' + (listening ? 'is-listening' : speaking ? 'is-speaking' : '')}>
+          <div className="voice-orb" aria-hidden="true">
+            <span className="orb-core">M</span>
           </div>
 
+          <div className="voice-state">
+            <span className="state-dot" />
+            <strong>{statusText}</strong>
+          </div>
+
+          <div className="wave" aria-hidden="true">
+            {Array.from({ length: 17 }, (_, i) => (
+              <i key={i} style={{ '--delay': `${i * 55}ms`, '--height': `${18 + ((i * 17) % 44)}px` }} />
+            ))}
+          </div>
+
+          <p className="voice-hint">
+            {listening
+              ? 'Go ahead. Mike is listening.'
+              : speaking
+              ? 'Mike is talking.'
+              : busy
+              ? 'Give Mike a second.'
+              : 'Talk it out. Think it through. Make the move.'}
+          </p>
+        </div>
+
+        <div className="copy">
+          <label>YOUR EVERYDAY COPILOT</label>
+          <h1>
+            Meet Mike.
+            <br />
+            <span>Just talk.</span>
+          </h1>
+          <p>
+            No avatar. No gimmicks. Just Mike. Talk it out, think it through, find the deal, make the move.
+            Mike helps you research, plan, negotiate, write, buy, sell, and figure out what to do next.
+          </p>
           <button className={'talk ' + (listening ? 'active' : '')} onClick={listen} disabled={busy}>
             {listening ? (
               <>
@@ -297,19 +285,6 @@ function App() {
               </>
             )}
           </button>
-        </div>
-
-        <div className="copy">
-          <label>YOUR EVERYDAY COPILOT</label>
-          <h1>
-            Meet Mike.
-            <br />
-            <span>Your everyday copilot.</span>
-          </h1>
-          <p>
-            Talk it out. Think it through. Find the deal. Make the move. Mike helps you research,
-            plan, negotiate, write, buy, sell, and figure out what to do next.
-          </p>
           <button className="radar" onClick={() => ask('What am I missing?')} disabled={busy}>
             <Lightbulb size={17} /> What am I missing?
           </button>
@@ -325,11 +300,7 @@ function App() {
         {busy && <div className="bubble mike">Give me a second. I'm thinking…</div>}
       </section>
 
-      {error && (
-        <div className="error" role="alert">
-          {error}
-        </div>
-      )}
+      {error && <div className="error" role="alert">{error}</div>}
 
       <form
         onSubmit={(e) => {
@@ -353,9 +324,8 @@ function App() {
           aria-label={speaking ? 'Stop Mike' : 'Read latest response'}
           onClick={() => {
             unlockAudio();
-            if (speaking) {
-              stopSpeaking();
-            } else {
+            if (speaking) stopSpeaking();
+            else {
               const last = messages.at(-1);
               if (last?.role === 'mike') speak(last.text);
             }
@@ -366,8 +336,7 @@ function App() {
       </form>
 
       <p className="fine">
-        Mike is a Doer Tough AI copilot. Current facts and changing information should be verified
-        before important decisions.
+        Mike is a Doer Tough AI copilot. Current facts and changing information should be verified before important decisions.
       </p>
     </main>
   );
