@@ -5,10 +5,14 @@ import './style.css';
 
 const PREVIEW = '/api/avatar-preview';
 
-const fetchJson = async (url, options = {}, timeout = 50000) => {
+// 50ms of silence. Played on the first tap to unlock audio on iOS, where a
+// play() call that isn't inside a user gesture is rejected.
+const SILENCE =
+  'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tUxAADB8AhSmxhIIEVCSiJrDCQBTcu3UrAIwUdkRgQbFAZC1CQEwTJ9mjRvBA4UOLD8nKVOWfh+UlK3z/177OXrfOdKl7pyn3Xf//WreyTRUoAWgBgkOAGbZHBgG1OF6zM82DWbZaUmMBptgQhGjsyYqc9ae9XFz280948NMBWInljyzsNRFLPWdnZGWrddDsjK1unuSrVN9jJsK8KuQtQCtMBjCEtImISdNKJOopIpBFpNSMbIHCSRpRR5iakjTiyzLhchUUBwCgyKiweBv/7UsQbg8it7f8AAAAI3JOR1nAAAOAgAAg0AKQANEmZgAA7CAA=';
+
+const fetchJson = async (url, options = {}, timeout = 60000) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
-
   try {
     const res = await fetch(url, { ...options, signal: controller.signal });
     const data = await res.json().catch(() => ({}));
@@ -30,17 +34,14 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [listening, setListening] = useState(false);
-  const [video, setVideo] = useState(null);
   const [previewFailed, setPreviewFailed] = useState(false);
-  const [avatarReady, setAvatarReady] = useState(false);
   const [error, setError] = useState('');
 
-  const audioRef = useRef(null);
-  const videoRef = useRef(null);
+  const audioElRef = useRef(null);
   const previewVideoRef = useRef(null);
   const recognitionRef = useRef(null);
-  const avatarJobRef = useRef(0);
-  const syncTimerRef = useRef(null);
+  const unlockedRef = useRef(false);
+  const speakJobRef = useRef(0);
   const statusRef = useRef('ready');
 
   const setStatus = (status) => {
@@ -49,28 +50,34 @@ function App() {
     setSpeaking(status === 'talking');
   };
 
-  const clearSync = () => {
-    if (syncTimerRef.current) {
-      clearInterval(syncTimerRef.current);
-      syncTimerRef.current = null;
-    }
+  // iOS only allows audio that started inside a user gesture. Priming the one
+  // persistent <audio> element on first tap keeps every later play() legal,
+  // even though it happens after an await.
+  const unlockAudio = () => {
+    if (unlockedRef.current) return;
+    const el = audioElRef.current;
+    if (!el) return;
+    el.src = SILENCE;
+    el.play()
+      .then(() => {
+        el.pause();
+        el.currentTime = 0;
+        unlockedRef.current = true;
+      })
+      .catch(() => {});
   };
 
-  const stopMike = () => {
-    avatarJobRef.current += 1;
-    clearSync();
-
-    if (audioRef.current) {
+  const stopSpeaking = () => {
+    speakJobRef.current += 1;
+    const el = audioElRef.current;
+    if (el) {
       try {
-        audioRef.current.pause();
-        audioRef.current.src = '';
+        el.pause();
+        el.removeAttribute('src');
+        el.load();
       } catch {}
-      audioRef.current = null;
     }
-
-    setStatus('ready');
-    setVideo(null);
-    setAvatarReady(false);
+    if (statusRef.current === 'talking') setStatus('ready');
   };
 
   const replayPreviewOnce = () => {
@@ -82,89 +89,9 @@ function App() {
     } catch {}
   };
 
-  // More reliable avatar polling
-  const pollAvatar = async (generationId) => {
-    if (!generationId) return;
-
-    const job = ++avatarJobRef.current;
-    console.log('[avatar] starting poll for', generationId);
-
-    // Poll for up to ~2 minutes
-    for (let i = 0; i < 160; i++) {
-      await new Promise((r) => setTimeout(r, 750));
-
-      if (job !== avatarJobRef.current) {
-        console.log('[avatar] poll cancelled');
-        return;
-      }
-
-      try {
-        const data = await fetchJson(
-          `/api/avatar/${encodeURIComponent(generationId)}`,
-          {},
-          10000
-        );
-
-        if (job !== avatarJobRef.current) return;
-
-        if (data.status === 'completed' && data.videoUrl) {
-          console.log('[avatar] ready:', data.videoUrl);
-          setVideo(data.videoUrl);
-          setAvatarReady(true);
-          return;
-        }
-
-        if (data.status === 'failed') {
-          console.warn('[avatar] generation failed');
-          return;
-        }
-      } catch (err) {
-        if (err.name === 'AbortError') return;
-        // Keep trying on temporary errors
-        console.warn('[avatar] poll temporary error:', err.message);
-      }
-    }
-
-    console.warn('[avatar] timed out waiting for video');
-  };
-
-  const beginVideoSync = () => {
-    const v = videoRef.current;
-    const a = audioRef.current;
-    if (!v || !a) return;
-
-    try {
-      if (Number.isFinite(a.currentTime) && Number.isFinite(v.duration) && v.duration > 0) {
-        v.currentTime = Math.min(a.currentTime, Math.max(0, v.duration - 0.05));
-      }
-    } catch {}
-
-    v.play().catch(() => {});
-
-    clearSync();
-    syncTimerRef.current = setInterval(() => {
-      const vv = videoRef.current;
-      const aa = audioRef.current;
-
-      if (!vv || !aa || aa.paused) {
-        clearSync();
-        return;
-      }
-
-      try {
-        const drift = aa.currentTime - vv.currentTime;
-        if (Math.abs(drift) > 0.18) {
-          vv.currentTime = Math.min(
-            aa.currentTime,
-            Math.max(0, (vv.duration || aa.currentTime) - 0.05)
-          );
-        }
-      } catch {}
-    }, 120);
-  };
-
   const speak = async (text) => {
-    stopMike();
+    stopSpeaking();
+    const job = ++speakJobRef.current;
     setStatus('talking');
     setError('');
     replayPreviewOnce();
@@ -177,58 +104,51 @@ function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text }),
         },
-        70000
+        60000
       );
 
-      // Start lip-sync in background if available
-      if (data.generationId) {
-        pollAvatar(data.generationId);
-      } else {
-        console.log('[avatar] no generationId returned — voice only');
-      }
+      if (job !== speakJobRef.current) return; // superseded or stopped
 
-      const audio = new Audio(`data:audio/mpeg;base64,${data.audioBase64}`);
-      audioRef.current = audio;
+      const el = audioElRef.current;
+      if (!el) throw new Error('audio_element_missing');
 
-      audio.onended = () => {
-        clearSync();
-        avatarJobRef.current += 1;
+      el.src = `data:${data.mimeType || 'audio/mpeg'};base64,${data.audioBase64}`;
+
+      el.onended = () => {
+        if (job === speakJobRef.current) setStatus('ready');
+      };
+      el.onerror = () => {
+        if (job !== speakJobRef.current) return;
         setStatus('ready');
-        setVideo(null);
-        setAvatarReady(false);
-        audioRef.current = null;
+        setError('Mike voice had a problem playing. Try again.');
       };
 
-      audio.onerror = () => {
-        clearSync();
-        avatarJobRef.current += 1;
-        setStatus('ready');
-        setVideo(null);
-        setAvatarReady(false);
-        audioRef.current = null;
-        setError('Mike voice had a problem. Try again.');
-      };
-
-      await audio.play();
+      await el.play();
     } catch (err) {
-      if (err.name === 'AbortError') return;
-
+      if (err.name === 'AbortError' || job !== speakJobRef.current) return;
       setStatus('ready');
-      setError('Mike voice is unavailable right now. The AI response is still in the conversation.');
+
+      if (err.name === 'NotAllowedError') {
+        setError('Tap the speaker button to let Mike talk — your browser blocked autoplay.');
+      } else {
+        setError('Mike voice is unavailable right now. His answer is still in the conversation.');
+      }
       console.error('[speak] failed:', err);
     }
   };
 
-  const ask = async (text) => {
-    text = text.trim();
+  const ask = async (raw) => {
+    const text = (raw || '').trim();
     if (!text || busy) return;
 
-    stopMike();
+    unlockAudio();
+    stopSpeaking();
     setInput('');
     setBusy(true);
     setError('');
     replayPreviewOnce();
 
+    const history = messages.slice(-10);
     setMessages((prev) => [...prev, { role: 'user', text }]);
 
     try {
@@ -237,10 +157,7 @@ function App() {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: text,
-            history: messages.slice(-10),
-          }),
+          body: JSON.stringify({ message: text, history }),
         },
         55000
       );
@@ -253,7 +170,6 @@ function App() {
         err.name === 'AbortError'
           ? 'Mike is taking too long to respond. Try that again.'
           : err.message || 'Mike AI is unavailable right now.';
-
       setError(msg);
       setMessages((prev) => [...prev, { role: 'mike', text: msg }]);
       setBusy(false);
@@ -261,7 +177,8 @@ function App() {
   };
 
   const listen = () => {
-    if (busy || speaking) return;
+    unlockAudio();
+    stopSpeaking(); // barge-in: tapping the mic cuts Mike off
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -287,59 +204,35 @@ function App() {
 
     recognition.onerror = (e) => {
       setStatus('ready');
-      if (e.error !== 'aborted' && e.error !== 'no-speech') {
-        setError("I couldn’t hear that. Try again.");
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        setError('Mic permission is blocked. Allow microphone access, or just type below.');
+      } else if (e.error !== 'aborted' && e.error !== 'no-speech') {
+        setError("I couldn't hear that. Try again.");
       }
       document.querySelector('#input')?.focus();
     };
 
     recognition.onend = () => {
-      if (statusRef.current === 'listening') {
-        setStatus('ready');
-      }
+      if (statusRef.current === 'listening') setStatus('ready');
     };
 
     recognition.start();
   };
 
-  // Escape stops everything
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'Escape') {
         recognitionRef.current?.abort();
-        stopMike();
+        stopSpeaking();
       }
     };
-
     window.addEventListener('keydown', onKey);
     return () => {
       window.removeEventListener('keydown', onKey);
       recognitionRef.current?.abort();
-      stopMike();
+      stopSpeaking();
     };
   }, []);
-
-  // Sync video with audio when lip-sync arrives
-  useEffect(() => {
-    if (!video) return;
-
-    const v = videoRef.current;
-    if (!v) return;
-
-    v.muted = true;
-    v.playsInline = true;
-    v.load();
-
-    const start = () => beginVideoSync();
-    v.addEventListener('loadedmetadata', start);
-    v.addEventListener('canplay', start);
-
-    return () => {
-      v.removeEventListener('loadedmetadata', start);
-      v.removeEventListener('canplay', start);
-      clearSync();
-    };
-  }, [video]);
 
   const statusText = listening
     ? 'MIKE IS LISTENING'
@@ -351,6 +244,8 @@ function App() {
 
   return (
     <main>
+      <audio ref={audioElRef} playsInline preload="auto" />
+
       <header>
         <div className="brand">
           <b>M</b>
@@ -364,46 +259,21 @@ function App() {
 
       <section className="hero">
         <div>
-          <div
-            className={
-              'avatar ' +
-              (avatarReady ? 'avatar-ready ' : '') +
-              (busy || speaking ? 'responding' : '')
-            }
-          >
+          <div className={'avatar avatar-ready ' + (busy || speaking ? 'responding' : '')}>
             <video
               ref={previewVideoRef}
-              className={video ? 'idle hidden' : 'idle'}
+              className="idle"
               src={PREVIEW}
               autoPlay
               muted
+              loop
               playsInline
               preload="auto"
-              onLoadedData={() => {
-                setPreviewFailed(false);
-                if (!video) setAvatarReady(true);
-              }}
-              onEnded={() => {
-                if (!video) setAvatarReady(true);
-              }}
+              onLoadedData={() => setPreviewFailed(false)}
               onError={() => setPreviewFailed(true)}
             />
 
-            <video
-              ref={videoRef}
-              className={video ? 'talking' : 'talking hidden'}
-              src={video || undefined}
-              autoPlay
-              muted
-              playsInline
-              preload="auto"
-              onError={() => {
-                setVideo(null);
-                setAvatarReady(false);
-              }}
-            />
-
-            {previewFailed && !video && (
+            {previewFailed && (
               <div className="avatar-fallback">
                 <span>M</span>
                 <small>Mike AI</small>
@@ -416,11 +286,7 @@ function App() {
             <div className="halo" />
           </div>
 
-          <button
-            className={'talk ' + (listening ? 'active' : '')}
-            onClick={listen}
-            disabled={busy || speaking}
-          >
+          <button className={'talk ' + (listening ? 'active' : '')} onClick={listen} disabled={busy}>
             {listening ? (
               <>
                 <Mic size={18} /> Listening…
@@ -444,11 +310,7 @@ function App() {
             Talk it out. Think it through. Find the deal. Make the move. Mike helps you research,
             plan, negotiate, write, buy, sell, and figure out what to do next.
           </p>
-          <button
-            className="radar"
-            onClick={() => ask('What am I missing?')}
-            disabled={busy}
-          >
+          <button className="radar" onClick={() => ask('What am I missing?')} disabled={busy}>
             <Lightbulb size={17} /> What am I missing?
           </button>
         </div>
@@ -490,8 +352,9 @@ function App() {
           className="read"
           aria-label={speaking ? 'Stop Mike' : 'Read latest response'}
           onClick={() => {
+            unlockAudio();
             if (speaking) {
-              stopMike();
+              stopSpeaking();
             } else {
               const last = messages.at(-1);
               if (last?.role === 'mike') speak(last.text);
