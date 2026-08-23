@@ -3,7 +3,7 @@ import { Mic, Send, Volume2, ArrowRight, Lightbulb, Square } from 'lucide-react'
 import { createRoot } from 'react-dom/client';
 import './style.css';
 
-const SILENCE = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tUxAADB8AhSmxhIIEVCSiJrDCQBTcu3UrAIwUdkRgQbFAZC1CQEwTJ9mjRvBA4UOLD8nKVOWfh+UlK3z/177OXrfOdKl7pyn3Xf//WreyTRUoAWgBgkOAGbZHBgG1OF6zM82DWbZaUmMBptgQhGjsyYqc9ae9XFz280948NMBWInljyzsNRFLPWdnZGWrddDsjK1unuSrVN9jJsK8KuQtQCtMBjCEtImISdNKJOopIpBFpNSMbIHCSRpRR5iakjTiyzLhchUUBwCgyKiweBv/7UsQbg8it7f8AAAAI3JOR1nAAAOAgAAg0AKQANEmZgAA7CAA=';
+const SILENCE = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjEwMAAAAAAAAAAAAAAA//tUxAADB8AhSmxhIIEVCSiJrDCQBTcu3UrAIwUdkRgQbFAZC1CQEwTJ9mjRvBA4UOLD8nKVOWfh+UlK3z/177OXrfOdKl7pyn3Xf//WreyTRUoAWgBgkOAGbZHBgG1OF6zM82DWbZaUmMBptgQhGjsyYqc9ae9XFz280948NMBWInljyzsNRFLPWdnZGWrddDsjK1unuSrVN9jJsK8KuQtQCtMBjCEtImISdNKJOopIpBFpNSMbIHCSRpRR5iakjTiyzLhchUUBwCgyKiweBv/7UsQbg8it7f8AAAAI3JOR1nAAAOAgAAg0AKQANEmZgAA7CAA=';
 
 const fetchJson = async (url, options = {}, timeout = 60000) => {
   const controller = new AbortController();
@@ -11,10 +11,7 @@ const fetchJson = async (url, options = {}, timeout = 60000) => {
   try {
     const res = await fetch(url, { ...options, signal: controller.signal });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const detail = data.error || `request_failed_${res.status}`;
-      throw new Error(detail);
-    }
+    if (!res.ok) throw new Error(data.error || `request_failed_${res.status}`);
     return data;
   } finally {
     clearTimeout(timer);
@@ -30,9 +27,10 @@ function App() {
   const [error, setError] = useState('');
   const audioElRef = useRef(null);
   const recognitionRef = useRef(null);
-  const unlockedRef = useRef(false);
-  const speakJobRef = useRef(0);
+  const audioContextRef = useRef(null);
+  const sourceRef = useRef(null);
   const audioUrlRef = useRef(null);
+  const speakJobRef = useRef(0);
   const statusRef = useRef('ready');
 
   const setStatus = (status) => {
@@ -41,16 +39,19 @@ function App() {
     setSpeaking(status === 'talking');
   };
 
+  // iPhone/Safari: create and resume the Web Audio context during the user's
+  // tap. The context can then play audio that arrives later after /api/tts.
   const unlockAudio = () => {
-    if (unlockedRef.current) return;
-    const el = audioElRef.current;
-    if (!el) return;
-    el.src = SILENCE;
-    el.play().then(() => {
-      el.pause();
-      el.currentTime = 0;
-      unlockedRef.current = true;
-    }).catch(() => {});
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return null;
+      if (!audioContextRef.current) audioContextRef.current = new Ctx();
+      const ctx = audioContextRef.current;
+      if (ctx.state !== 'running') ctx.resume().catch(() => {});
+      return ctx;
+    } catch {
+      return null;
+    }
   };
 
   const clearAudioUrl = () => {
@@ -62,10 +63,10 @@ function App() {
 
   const stopSpeaking = () => {
     speakJobRef.current += 1;
+    try { sourceRef.current?.stop(); } catch {}
+    sourceRef.current = null;
     const el = audioElRef.current;
-    if (el) {
-      try { el.pause(); el.removeAttribute('src'); el.load(); } catch {}
-    }
+    if (el) { try { el.pause(); el.removeAttribute('src'); el.load(); } catch {} }
     clearAudioUrl();
     if (statusRef.current === 'talking') setStatus('ready');
   };
@@ -82,31 +83,45 @@ function App() {
         body: JSON.stringify({ text }),
       }, 60000);
       if (job !== speakJobRef.current) return;
-      if (!data.audioBase64) throw new Error('Mike returned no audio. Check ElevenLabs billing/API settings.');
-      const el = audioElRef.current;
-      if (!el) throw new Error('audio_element_missing');
+      if (!data.audioBase64) throw new Error('Mike returned no audio.');
 
-      // iPhone/Safari is more reliable with a Blob URL than a large data: URI.
+      // Prefer Web Audio because Safari does not reliably allow a new HTMLAudio
+      // element to autoplay after an async network request. The AudioContext was
+      // resumed during the user's microphone/send tap, so this remains permitted.
+      const ctx = unlockAudio();
+      if (ctx) {
+        const raw = atob(data.audioBase64);
+        const bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+        const buffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
+        if (job !== speakJobRef.current) return;
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        sourceRef.current = source;
+        source.onended = () => {
+          if (job === speakJobRef.current) {
+            sourceRef.current = null;
+            setStatus('ready');
+          }
+        };
+        if (ctx.state !== 'running') await ctx.resume();
+        source.start(0);
+        return;
+      }
+
+      // Desktop/native fallback.
       const raw = atob(data.audioBase64);
       const bytes = new Uint8Array(raw.length);
       for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
       const blob = new Blob([bytes], { type: data.mimeType || 'audio/mpeg' });
       clearAudioUrl();
       audioUrlRef.current = URL.createObjectURL(blob);
+      const el = audioElRef.current;
+      if (!el) throw new Error('audio_element_missing');
       el.src = audioUrlRef.current;
-      el.load();
-      el.onended = () => {
-        if (job === speakJobRef.current) {
-          clearAudioUrl();
-          setStatus('ready');
-        }
-      };
-      el.onerror = () => {
-        if (job !== speakJobRef.current) return;
-        clearAudioUrl();
-        setStatus('ready');
-        setError('Mike generated audio, but the iPhone could not play it. Tap the speaker button and try again.');
-      };
+      el.onended = () => { if (job === speakJobRef.current) { clearAudioUrl(); setStatus('ready'); } };
+      el.onerror = () => { if (job === speakJobRef.current) { clearAudioUrl(); setStatus('ready'); setError('Mike generated audio, but this browser could not play it. Tap the speaker button.'); } };
       await el.play();
     } catch (err) {
       if (err.name === 'AbortError' || job !== speakJobRef.current) return;
@@ -171,7 +186,7 @@ function App() {
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') { recognitionRef.current?.abort(); stopSpeaking(); } };
     window.addEventListener('keydown', onKey);
-    return () => { window.removeEventListener('keydown', onKey); recognitionRef.current?.abort(); stopSpeaking(); };
+    return () => { window.removeEventListener('keydown', onKey); recognitionRef.current?.abort(); stopSpeaking(); try { audioContextRef.current?.close(); } catch {} };
   }, []);
 
   const statusText = listening ? 'MIKE IS LISTENING' : speaking ? 'MIKE IS TALKING' : busy ? 'MIKE IS THINKING' : 'MIKE IS HERE';
