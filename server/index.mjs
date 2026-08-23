@@ -119,8 +119,8 @@ app.post('/api/ask', async (req, res) => {
 
     const input = [
       ...history.map((m) => ({
-        role: m.role === 'mike' ? 'assistant' : 'user',
-        content: [{ type: 'input_text', text: String(m.text || '') }],
+        role: m.role === 'mike' ? 'assistant' : '        content: [{ type: m.role === 'mike' ? 'output_text' : 'input_text', text: String(m.text || '') }],
+        content: [{ type: m.role === 'mike' ? 'output_text' : 'input_text', text: String(m.text || '') }],
       })),
       {
         role: 'user',
