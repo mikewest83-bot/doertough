@@ -11,7 +11,7 @@ const fetchJson = async (url, options = {}, timeout = 50000) => {
 
   try {
     const res = await fetch(url, { ...options, signal: controller.signal });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `request_failed_${res.status}`);
     return data;
   } finally {
@@ -59,10 +59,15 @@ function App() {
   const stopMike = () => {
     avatarJobRef.current += 1;
     clearSync();
+
     if (audioRef.current) {
-      audioRef.current.pause();
+      try {
+        audioRef.current.pause();
+        audioRef.current.src = '';
+      } catch {}
       audioRef.current = null;
     }
+
     setStatus('ready');
     setVideo(null);
     setAvatarReady(false);
@@ -74,52 +79,53 @@ function App() {
     try {
       v.currentTime = 0;
       v.play().catch(() => {});
-    } catch {
-      // ignore
-    }
+    } catch {}
   };
 
-  // More patient + resilient avatar polling
+  // More reliable avatar polling
   const pollAvatar = async (generationId) => {
-    const job = ++avatarJobRef.current;
     if (!generationId) return;
 
-    try {
-      // Poll for up to ~90 seconds
-      for (let i = 0; i < 120; i++) {
-        await new Promise((r) => setTimeout(r, 750));
+    const job = ++avatarJobRef.current;
+    console.log('[avatar] starting poll for', generationId);
+
+    // Poll for up to ~2 minutes
+    for (let i = 0; i < 160; i++) {
+      await new Promise((r) => setTimeout(r, 750));
+
+      if (job !== avatarJobRef.current) {
+        console.log('[avatar] poll cancelled');
+        return;
+      }
+
+      try {
+        const data = await fetchJson(
+          `/api/avatar/${encodeURIComponent(generationId)}`,
+          {},
+          10000
+        );
+
         if (job !== avatarJobRef.current) return;
 
-        try {
-          const statusData = await fetchJson(
-            `/api/avatar/${encodeURIComponent(generationId)}`,
-            {},
-            12000
-          );
-
-          if (job !== avatarJobRef.current) return;
-
-          if (statusData.status === 'completed' && statusData.videoUrl) {
-            setVideo(statusData.videoUrl);
-            setAvatarReady(true);
-            return;
-          }
-
-          if (statusData.status === 'failed') {
-            console.warn('Avatar generation failed');
-            return;
-          }
-        } catch (err) {
-          if (err.name === 'AbortError') return;
-          // Keep trying on temporary network hiccups
-          console.warn('Avatar poll temporary failure:', err.message);
+        if (data.status === 'completed' && data.videoUrl) {
+          console.log('[avatar] ready:', data.videoUrl);
+          setVideo(data.videoUrl);
+          setAvatarReady(true);
+          return;
         }
-      }
-    } catch (e) {
-      if (e.name !== 'AbortError') {
-        console.warn('Avatar unavailable', e);
+
+        if (data.status === 'failed') {
+          console.warn('[avatar] generation failed');
+          return;
+        }
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        // Keep trying on temporary errors
+        console.warn('[avatar] poll temporary error:', err.message);
       }
     }
+
+    console.warn('[avatar] timed out waiting for video');
   };
 
   const beginVideoSync = () => {
@@ -131,9 +137,7 @@ function App() {
       if (Number.isFinite(a.currentTime) && Number.isFinite(v.duration) && v.duration > 0) {
         v.currentTime = Math.min(a.currentTime, Math.max(0, v.duration - 0.05));
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
 
     v.play().catch(() => {});
 
@@ -141,6 +145,7 @@ function App() {
     syncTimerRef.current = setInterval(() => {
       const vv = videoRef.current;
       const aa = audioRef.current;
+
       if (!vv || !aa || aa.paused) {
         clearSync();
         return;
@@ -154,9 +159,7 @@ function App() {
             Math.max(0, (vv.duration || aa.currentTime) - 0.05)
           );
         }
-      } catch {
-        // ignore
-      }
+      } catch {}
     }, 120);
   };
 
@@ -174,12 +177,14 @@ function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text }),
         },
-        60000
+        70000
       );
 
-      // Start lip-sync in the background if we got a generationId
+      // Start lip-sync in background if available
       if (data.generationId) {
         pollAvatar(data.generationId);
+      } else {
+        console.log('[avatar] no generationId returned — voice only');
       }
 
       const audio = new Audio(`data:audio/mpeg;base64,${data.audioBase64}`);
@@ -201,14 +206,16 @@ function App() {
         setVideo(null);
         setAvatarReady(false);
         audioRef.current = null;
+        setError('Mike voice had a problem. Try again.');
       };
 
       await audio.play();
-    } catch (e) {
-      if (e.name === 'AbortError') return;
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+
       setStatus('ready');
       setError('Mike voice is unavailable right now. The AI response is still in the conversation.');
-      console.error('mike_tts_failed', e);
+      console.error('[speak] failed:', err);
     }
   };
 
@@ -235,17 +242,17 @@ function App() {
             history: messages.slice(-10),
           }),
         },
-        50000
+        55000
       );
 
       setMessages((prev) => [...prev, { role: 'mike', text: data.text }]);
       setBusy(false);
       await speak(data.text);
-    } catch (e) {
+    } catch (err) {
       const msg =
-        e.name === 'AbortError'
+        err.name === 'AbortError'
           ? 'Mike is taking too long to respond. Try that again.'
-          : e.message || 'Mike AI is unavailable right now.';
+          : err.message || 'Mike AI is unavailable right now.';
 
       setError(msg);
       setMessages((prev) => [...prev, { role: 'mike', text: msg }]);
@@ -295,7 +302,7 @@ function App() {
     recognition.start();
   };
 
-  // Escape key stops everything
+  // Escape stops everything
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'Escape') {
@@ -303,6 +310,7 @@ function App() {
         stopMike();
       }
     };
+
     window.addEventListener('keydown', onKey);
     return () => {
       window.removeEventListener('keydown', onKey);
@@ -311,7 +319,7 @@ function App() {
     };
   }, []);
 
-  // Sync lip-synced video with audio when it arrives
+  // Sync video with audio when lip-sync arrives
   useEffect(() => {
     if (!video) return;
 
@@ -363,7 +371,6 @@ function App() {
               (busy || speaking ? 'responding' : '')
             }
           >
-            {/* Idle / preview video */}
             <video
               ref={previewVideoRef}
               className={video ? 'idle hidden' : 'idle'}
@@ -382,7 +389,6 @@ function App() {
               onError={() => setPreviewFailed(true)}
             />
 
-            {/* Talking / lip-synced video */}
             <video
               ref={videoRef}
               className={video ? 'talking' : 'talking hidden'}
