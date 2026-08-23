@@ -273,8 +273,10 @@ app.post('/api/tts', async (req, res) => {
 
     let generationId = null;
 
-    // Try lip-sync only if FAL_KEY exists (non-blocking)
-    if (process.env.FAL_KEY) {
+    // Lip-sync is OFF by default. It uploaded the mp3 to fal and queued a render
+    // job before this route replied, adding seconds to every spoken answer for a
+    // video the voice-only client never used. Set MIKE_LIPSYNC=true to re-enable.
+    if (process.env.FAL_KEY && String(process.env.MIKE_LIPSYNC || '') === 'true') {
       try {
         console.log('[tts] uploading audio for lip-sync, size:', audioBuffer.length);
 
@@ -300,7 +302,7 @@ app.post('/api/tts', async (req, res) => {
         // Continue — we still return the audio
       }
     } else {
-      console.log('[tts] FAL_KEY not set — skipping lip-sync');
+      console.log('[tts] lip-sync disabled — voice only');
     }
 
     res.json({
