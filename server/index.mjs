@@ -97,9 +97,93 @@ app.get('/api/health', (req, res) => {
     openaiConfigured: !!process.env.OPENAI_API_KEY,
     voiceConfigured: !!process.env.ELEVENLABS_API_KEY,
     lipSyncConfigured: !!process.env.FAL_KEY,
+    liveAvatarConfigured: !!process.env.LIVEAVATAR_API_KEY && !!process.env.LIVEAVATAR_AVATAR_ID,
     model: OPENAI_MODEL,
     timestamp: new Date().toISOString(),
   });
+});
+
+// ===== LiveAvatar (real-time streaming avatar) =====
+// Routes live under /api/liveavatar/* on purpose: /api/avatar/:id below is the
+// fal lip-sync poller and would otherwise swallow these paths.
+const LA_KEY = process.env.LIVEAVATAR_API_KEY || '';
+const LA_AVATAR = process.env.LIVEAVATAR_AVATAR_ID || '';
+const LA_VOICE = process.env.LIVEAVATAR_VOICE_ID || '';
+const LA_SANDBOX = String(process.env.LIVEAVATAR_SANDBOX || '') === 'true';
+
+async function mintLiveAvatarToken() {
+  requireKey(LA_KEY, 'liveavatar');
+  if (!LA_AVATAR) {
+    const err = new Error('liveavatar_avatar_id_not_configured');
+    err.status = 503;
+    throw err;
+  }
+
+  const body = {
+    avatar_id: LA_AVATAR,
+    mode: 'FULL',
+    is_sandbox: LA_SANDBOX,
+    video_settings: { quality: 'high', encoding: 'H264' },
+    avatar_persona: {
+      language: 'en',
+      ...(LA_VOICE ? { voice_id: LA_VOICE } : {}),
+    },
+  };
+
+  const res = await fetch('https://api.liveavatar.com/v1/sessions/token', {
+    method: 'POST',
+    headers: { 'X-API-KEY': LA_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const raw = await res.text();
+  let data = {};
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    // leave data empty; raw is surfaced in the error below
+  }
+
+  const token = data?.data?.session_token || data?.data?.token || null;
+
+  if (!res.ok || !token) {
+    const err = new Error(
+      `liveavatar_token_${res.status}: ${(data?.message || raw || 'no session_token in response').slice(0, 300)}`
+    );
+    err.status = 502;
+    throw err;
+  }
+
+  return token;
+}
+
+// Mints a session token for the browser. The API key never leaves the server.
+app.post('/api/liveavatar/session', async (req, res) => {
+  try {
+    const token = await mintLiveAvatarToken();
+    res.json({ token, avatarId: LA_AVATAR, sandbox: LA_SANDBOX });
+  } catch (err) {
+    console.error('[liveavatar] session failed:', err.message || err);
+    res.status(err.status || 502).json({ error: err.message || 'liveavatar_unavailable' });
+  }
+});
+
+// Diagnostic: proves the key and avatar ID work before any client code exists.
+// Safe to open in a browser — never returns the API key or a usable token.
+app.get('/api/liveavatar/diag', async (req, res) => {
+  const out = {
+    apiKeyPresent: !!LA_KEY,
+    avatarId: LA_AVATAR || null,
+    voiceId: LA_VOICE || null,
+    sandbox: LA_SANDBOX,
+  };
+  try {
+    const token = await mintLiveAvatarToken();
+    res.json({ ...out, ok: true, tokenMinted: true, tokenPrefix: token.slice(0, 6) + '...' });
+  } catch (err) {
+    console.error('[liveavatar] diag failed:', err.message || err);
+    res.status(err.status || 502).json({ ...out, ok: false, tokenMinted: false, error: err.message || 'unknown' });
+  }
 });
 
 // Chat
