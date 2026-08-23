@@ -9,6 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ===== Config =====
 const PREVIEW_VIDEO =
   process.env.MIKE_PREVIEW_VIDEO_URL ||
   process.env.MIKE_SOURCE_VIDEO_URL ||
@@ -18,7 +19,9 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const ELEVEN_MODEL = process.env.ELEVENLABS_MODEL || 'eleven_flash_v2_5';
 const FAL_MODEL = process.env.FAL_LIPSYNC_MODEL || 'veed/lipsync/v2';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  : null;
 
 if (process.env.FAL_KEY) {
   fal.config({ credentials: process.env.FAL_KEY });
@@ -27,30 +30,38 @@ if (process.env.FAL_KEY) {
 app.disable('x-powered-by');
 app.use(express.json({ limit: '15mb' }));
 
+// ===== Helpers =====
 const requireKey = (key, name) => {
   if (!key) {
-    const e = new Error(`${name}_not_configured`);
-    e.status = 503;
-    throw e;
+    const err = new Error(`${name}_not_configured`);
+    err.status = 503;
+    throw err;
   }
 };
 
-let cachedVoice = null;
+let cachedVoiceId = null;
 
-const resolveMikeVoice = async () => {
-  if (process.env.ELEVENLABS_VOICE_ID) return process.env.ELEVENLABS_VOICE_ID;
-  if (cachedVoice) return cachedVoice;
+async function resolveMikeVoice() {
+  if (process.env.ELEVENLABS_VOICE_ID) {
+    return process.env.ELEVENLABS_VOICE_ID;
+  }
+  if (cachedVoiceId) return cachedVoiceId;
 
   requireKey(process.env.ELEVENLABS_API_KEY, 'elevenlabs');
 
-  const r = await fetch(
+  const res = await fetch(
     'https://api.elevenlabs.io/v2/voices?page_size=100&voice_type=non-default',
-    { headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY } }
+    {
+      headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY },
+    }
   );
 
-  if (!r.ok) throw new Error(`elevenlabs_voice_list_${r.status}`);
+  if (!res.ok) {
+    throw new Error(`elevenlabs_voice_list_${res.status}`);
+  }
 
-  const voices = (await r.json()).voices || [];
+  const data = await res.json();
+  const voices = data.voices || [];
 
   const ranked = voices
     .map((v) => {
@@ -60,28 +71,34 @@ const resolveMikeVoice = async () => {
       if (/diesel|bin/.test(text)) score += 80;
       if (/doer|tough/.test(text)) score += 60;
       if (/southern|country|texas|american/.test(text)) score += 25;
-      if (v.voice_type === 'personal' || v.category === 'cloned' || v.category === 'generated') score += 20;
-      return { v, score };
+      if (['personal', 'cloned', 'generated'].includes(v.category) || v.voice_type === 'personal') {
+        score += 20;
+      }
+      return { voice: v, score };
     })
     .sort((a, b) => b.score - a.score);
 
-  if (!ranked.length) throw new Error('elevenlabs_no_custom_voice');
+  if (!ranked.length) {
+    throw new Error('elevenlabs_no_suitable_voice');
+  }
 
-  cachedVoice = ranked[0].v.voice_id;
-  console.log('mike_voice_selected', ranked[0].v.name, cachedVoice);
-  return cachedVoice;
-};
+  cachedVoiceId = ranked[0].voice.voice_id;
+  console.log(`[voice] selected: ${ranked[0].voice.name} (${cachedVoiceId})`);
+  return cachedVoiceId;
+}
 
-// Health check
+// ===== Routes =====
+
+// Health
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
     service: 'mike-ai',
-    directPipeline: true,
+    openaiConfigured: !!process.env.OPENAI_API_KEY,
     voiceConfigured: !!process.env.ELEVENLABS_API_KEY,
     lipSyncConfigured: !!process.env.FAL_KEY,
-    openaiConfigured: !!process.env.OPENAI_API_KEY,
     model: OPENAI_MODEL,
+    timestamp: new Date().toISOString(),
   });
 });
 
@@ -89,18 +106,26 @@ app.get('/api/health', (req, res) => {
 app.post('/api/ask', async (req, res) => {
   try {
     requireKey(process.env.OPENAI_API_KEY, 'openai');
+    if (!openai) throw new Error('openai_client_missing');
 
     const message = String(req.body?.message || '').trim();
-    if (!message) return res.status(400).json({ error: 'message_required' });
+    if (!message) {
+      return res.status(400).json({ error: 'message_required' });
+    }
 
-    const history = Array.isArray(req.body?.history) ? req.body.history.slice(-10) : [];
+    const history = Array.isArray(req.body?.history)
+      ? req.body.history.slice(-10)
+      : [];
 
     const input = [
       ...history.map((m) => ({
         role: m.role === 'mike' ? 'assistant' : 'user',
         content: [{ type: 'input_text', text: String(m.text || '') }],
       })),
-      { role: 'user', content: [{ type: 'input_text', text: message }] },
+      {
+        role: 'user',
+        content: [{ type: 'input_text', text: message }],
+      },
     ];
 
     const response = await openai.responses.create({
@@ -110,24 +135,29 @@ app.post('/api/ask', async (req, res) => {
       input,
     });
 
-    res.json({ text: response.output_text?.trim() || "I'm here. Give me another shot." });
-  } catch (e) {
-    console.error('openai_failed', e);
-    res.status(e.status || 502).json({ error: e.message || 'mike_ai_unavailable' });
+    const text = response.output_text?.trim() || "I'm here. Give me another shot.";
+    res.json({ text });
+  } catch (err) {
+    console.error('[ask] failed:', err.message || err);
+    res.status(err.status || 502).json({
+      error: err.message || 'mike_ai_unavailable',
+    });
   }
 });
 
-// TTS + optional lip-sync queue
+// TTS + optional lip-sync
 app.post('/api/tts', async (req, res) => {
   try {
     requireKey(process.env.ELEVENLABS_API_KEY, 'elevenlabs');
 
     const text = String(req.body?.text || '').trim();
-    if (!text) return res.status(400).json({ error: 'text_required' });
+    if (!text) {
+      return res.status(400).json({ error: 'text_required' });
+    }
 
     const voiceId = await resolveMikeVoice();
 
-    const r = await fetch(
+    const ttsRes = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_22050_32`,
       {
         method: 'POST',
@@ -149,25 +179,27 @@ app.post('/api/tts', async (req, res) => {
       }
     );
 
-    if (!r.ok) {
-      const errText = await r.text();
-      throw new Error(`elevenlabs_tts_${r.status}:${errText.slice(0, 300)}`);
+    if (!ttsRes.ok) {
+      const errText = await ttsRes.text();
+      throw new Error(`elevenlabs_tts_${ttsRes.status}: ${errText.slice(0, 200)}`);
     }
 
-    const audioBuffer = Buffer.from(await r.arrayBuffer());
+    const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
     const audioBase64 = audioBuffer.toString('base64');
 
     let generationId = null;
 
-    // Try to queue lip-sync (non-blocking for the response)
+    // Try lip-sync only if FAL_KEY exists (non-blocking)
     if (process.env.FAL_KEY) {
       try {
-        console.log('tts_avatar_upload_start', audioBuffer.length);
+        console.log('[tts] uploading audio for lip-sync, size:', audioBuffer.length);
 
-        const audioFile = new File([audioBuffer], 'mike-response.mp3', { type: 'audio/mpeg' });
+        const audioFile = new File([audioBuffer], 'mike-response.mp3', {
+          type: 'audio/mpeg',
+        });
         const audioUrl = await fal.storage.upload(audioFile);
 
-        console.log('tts_avatar_audio_uploaded', audioUrl);
+        console.log('[tts] audio uploaded:', audioUrl);
 
         const queued = await fal.queue.submit(FAL_MODEL, {
           input: {
@@ -178,11 +210,13 @@ app.post('/api/tts', async (req, res) => {
         });
 
         generationId = queued.request_id;
-        console.log('tts_avatar_queued', generationId);
-      } catch (avatarError) {
-        console.error('tts_avatar_queue_failed', avatarError?.message || avatarError);
-        // We still return the audio so the voice works even if avatar fails
+        console.log('[tts] lip-sync queued:', generationId);
+      } catch (avatarErr) {
+        console.error('[tts] lip-sync failed (voice will still work):', avatarErr.message || avatarErr);
+        // Continue — we still return the audio
       }
+    } else {
+      console.log('[tts] FAL_KEY not set — skipping lip-sync');
     }
 
     res.json({
@@ -191,29 +225,35 @@ app.post('/api/tts', async (req, res) => {
       voiceId,
       generationId,
     });
-  } catch (e) {
-    console.error('tts_failed', e);
-    res.status(e.status || 502).json({ error: e.message || 'mike_voice_unavailable' });
+  } catch (err) {
+    console.error('[tts] failed:', err.message || err);
+    res.status(err.status || 502).json({
+      error: err.message || 'mike_voice_unavailable',
+    });
   }
 });
 
-// Manual lip-sync endpoint
+// Manual lip-sync submit
 app.post('/api/avatar', async (req, res) => {
   try {
     requireKey(process.env.FAL_KEY, 'fal');
 
     const audioBase64 = String(req.body?.audioBase64 || '').trim();
-    if (!audioBase64) return res.status(400).json({ error: 'audio_required' });
+    if (!audioBase64) {
+      return res.status(400).json({ error: 'audio_required' });
+    }
 
     const audioBytes = Buffer.from(audioBase64, 'base64');
-    if (!audioBytes.length) return res.status(400).json({ error: 'audio_invalid' });
+    if (!audioBytes.length) {
+      return res.status(400).json({ error: 'audio_invalid' });
+    }
 
-    console.log('lipsync_audio_upload_start', audioBytes.length);
+    console.log('[avatar] uploading audio, size:', audioBytes.length);
 
-    const audioFile = new File([audioBytes], 'mike-response.mp3', { type: 'audio/mpeg' });
+    const audioFile = new File([audioBytes], 'mike-response.mp3', {
+      type: 'audio/mpeg',
+    });
     const audioUrl = await fal.storage.upload(audioFile);
-
-    console.log('lipsync_audio_uploaded', audioUrl);
 
     const { request_id } = await fal.queue.submit(FAL_MODEL, {
       input: {
@@ -223,11 +263,13 @@ app.post('/api/avatar', async (req, res) => {
       headers: { 'X-Fal-No-Retry': '1' },
     });
 
-    console.log('lipsync_queued', request_id);
+    console.log('[avatar] queued:', request_id);
     res.json({ generationId: request_id });
-  } catch (e) {
-    console.error('lipsync_submit_failed', e);
-    res.status(e.status || 502).json({ error: e.message || 'lipsync_unavailable' });
+  } catch (err) {
+    console.error('[avatar] submit failed:', err.message || err);
+    res.status(err.status || 502).json({
+      error: err.message || 'lipsync_unavailable',
+    });
   }
 });
 
@@ -241,9 +283,11 @@ app.get('/api/avatar/:id', async (req, res) => {
 
     if (status.status === 'COMPLETED') {
       const result = await fal.queue.result(FAL_MODEL, { requestId: id });
+      const videoUrl = result?.data?.video?.url || null;
+
       return res.json({
         status: 'completed',
-        videoUrl: result.data?.video?.url || null,
+        videoUrl,
       });
     }
 
@@ -252,43 +296,49 @@ app.get('/api/avatar/:id', async (req, res) => {
     }
 
     res.json({ status: 'processing' });
-  } catch (e) {
-    console.error('lipsync_status_failed', e);
-    res.status(e.status || 502).json({ error: e.message || 'lipsync_status_unavailable' });
+  } catch (err) {
+    console.error('[avatar] status failed:', err.message || err);
+    res.status(err.status || 502).json({
+      error: err.message || 'lipsync_status_unavailable',
+    });
   }
 });
 
-// Proxy the source / preview video
+// Proxy the source video
 app.get('/api/avatar-preview', async (req, res) => {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30000);
+  const timer = setTimeout(() => controller.abort(), 25000);
 
   try {
     const range = req.headers.range;
     const headers = range ? { Range: range } : {};
 
-    const r = await fetch(PREVIEW_VIDEO, {
+    const upstream = await fetch(PREVIEW_VIDEO, {
       headers,
       signal: controller.signal,
     });
 
-    if (!r.ok || !r.body) throw new Error(`preview_fetch_${r.status}`);
+    if (!upstream.ok || !upstream.body) {
+      throw new Error(`preview_fetch_${upstream.status}`);
+    }
 
-    res.status(r.status);
+    res.status(upstream.status);
 
     for (const name of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
-      const value = r.headers.get(name);
+      const value = upstream.headers.get(name);
       if (value) res.setHeader(name, value);
     }
 
     res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
 
-    Readable.fromWeb(r.body).pipe(res);
-  } catch (e) {
-    console.error('avatar_preview_failed', e);
+    Readable.fromWeb(upstream.body).pipe(res);
+  } catch (err) {
+    console.error('[preview] failed:', err.message || err);
     if (!res.headersSent) {
-      res.status(e.name === 'AbortError' ? 504 : 502).json({ error: 'avatar_preview_unavailable' });
+      res.status(err.name === 'AbortError' ? 504 : 502).json({
+        error: 'avatar_preview_unavailable',
+      });
     }
   } finally {
     clearTimeout(timer);
@@ -299,23 +349,29 @@ app.get('/api/avatar-preview', async (req, res) => {
 app.use((req, res, next) => {
   if (
     /(^|\/)\.(env|git|svn|hg)(?:$|\/)/i.test(req.path) ||
-    /^(?:\/)(?:config\.json|wp-admin|wp-login\.php|phpmyadmin|server-status|actuator|telescope|trace\.axd|setup\/|tracking\.php|set_captcha_validated\.php)/i.test(req.path)
+    /^(?:\/)(?:config\.json|wp-admin|wp-login\.php|phpmyadmin|server-status|actuator|telescope|trace\.axd)/i.test(req.path)
   ) {
     return res.status(404).end();
   }
   next();
 });
 
-app.use(express.static(path.join(__dirname, '..', 'dist'), {
-  maxAge: '1h',
-  etag: true,
-  dotfiles: 'deny',
-}));
+// Static + SPA fallback
+app.use(
+  express.static(path.join(__dirname, '..', 'dist'), {
+    maxAge: '1h',
+    etag: true,
+    dotfiles: 'deny',
+  })
+);
 
 app.use((req, res) => {
   res.sendFile(path.join(__dirname, '..', 'dist', 'index.html'));
 });
 
 app.listen(PORT, () => {
-  console.log(`Mike AI direct pipeline listening on ${PORT}`);
+  console.log(`[mike-ai] listening on port ${PORT}`);
+  console.log(`[mike-ai] openai: ${!!process.env.OPENAI_API_KEY}`);
+  console.log(`[mike-ai] elevenlabs: ${!!process.env.ELEVENLABS_API_KEY}`);
+  console.log(`[mike-ai] fal: ${!!process.env.FAL_KEY}`);
 });
