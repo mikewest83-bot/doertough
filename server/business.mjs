@@ -8,9 +8,8 @@
 // Shopify auth note: as of Jan 1 2026 Shopify no longer issues permanent
 // shpat_ tokens. Dev Dashboard apps get a client ID + secret, which are
 // exchanged for a short-lived token via the client credentials grant.
-// This file mints that token on demand and caches it until just before
-// it expires. A legacy shpat_ token, if you still have one, still works
-// and takes precedence.
+// The token endpoint expects a FORM-ENCODED body, not JSON, and returns
+// non-JSON error text on failure - both handled below.
 //
 // Env:
 //   SHOPIFY_STORE_DOMAIN    default sae061-ws.myshopify.com
@@ -51,21 +50,36 @@ async function getShopifyToken() {
     return tokenCache.value;
   }
 
+  // Form-encoded, per Shopify's client-credentials-grant docs. A JSON body
+  // here returns a 400 with a non-JSON error page.
   const res = await fetch(`https://${SHOPIFY_DOMAIN}/admin/oauth/access_token`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    },
+    body: new URLSearchParams({
+      grant_type: 'client_credentials',
       client_id: SHOPIFY_CLIENT_ID,
       client_secret: SHOPIFY_CLIENT_SECRET,
-      grant_type: 'client_credentials',
     }),
     signal: AbortSignal.timeout(10000),
   });
 
-  const body = await res.json().catch(() => ({}));
+  // Read as text first. Shopify's OAuth errors ("Oauth error shop_not_permitted",
+  // "application_cannot_be_found") come back as plain text, not JSON, and get
+  // lost entirely if we only try to parse JSON.
+  const raw = await res.text();
+  let body = {};
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    // leave body empty; raw is what we report
+  }
 
   if (!res.ok || !body.access_token) {
-    const detail = body.error_description || body.error || JSON.stringify(body).slice(0, 200);
+    const detail = body.error_description || body.error || raw.slice(0, 300) || '(empty response body)';
+    console.error(`[shopify] token request failed ${res.status}: ${detail}`);
     throw new Error(`shopify_token_${res.status}: ${detail}`);
   }
 
@@ -75,7 +89,9 @@ async function getShopifyToken() {
     expiresAt: Date.now() + lifetimeMs * 0.9,
   };
 
-  console.log(`[shopify] minted access token, valid ~${Math.round(lifetimeMs / 3600000)}h`);
+  console.log(
+    `[shopify] minted access token, valid ~${Math.round(lifetimeMs / 3600000)}h, scopes: ${body.scope || 'unknown'}`
+  );
   return tokenCache.value;
 }
 
@@ -92,7 +108,13 @@ async function shopifyGraphQL(query, variables = {}) {
     signal: AbortSignal.timeout(10000),
   });
 
-  const body = await res.json().catch(() => ({}));
+  const raw = await res.text();
+  let body = {};
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    // leave body empty; raw is reported below
+  }
 
   // A 401 on a token we thought was good means it was revoked early.
   // Drop the cache so the next call mints a fresh one.
@@ -101,9 +123,11 @@ async function shopifyGraphQL(query, variables = {}) {
   }
 
   if (!res.ok) {
-    throw new Error(`shopify_${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
+    console.error(`[shopify] graphql ${res.status}: ${raw.slice(0, 300)}`);
+    throw new Error(`shopify_${res.status}: ${raw.slice(0, 200)}`);
   }
   if (body.errors) {
+    console.error(`[shopify] graphql errors: ${JSON.stringify(body.errors).slice(0, 300)}`);
     throw new Error(`shopify_graphql: ${JSON.stringify(body.errors).slice(0, 200)}`);
   }
 
@@ -143,6 +167,8 @@ export async function getStoreSales({ days } = {}) {
 
   const data = await shopifyGraphQL(ORDERS_QUERY, { q: `created_at:>=${sinceDay}` });
   const orders = (data?.orders?.edges || []).map((e) => e.node);
+
+  console.log(`[shopify] store sales ok - ${orders.length} orders in last ${window}d`);
 
   let gross = 0;
   let currency = 'USD';
@@ -199,9 +225,13 @@ async function alpaca(pathname) {
   });
 
   if (res.status === 401 || res.status === 403) {
+    const raw = await res.text().catch(() => '');
+    console.error(`[bot] alpaca ${res.status} on ${ALPACA_BASE}${pathname}: ${raw.slice(0, 200)}`);
     throw new Error('alpaca_unauthorized');
   }
   if (!res.ok) {
+    const raw = await res.text().catch(() => '');
+    console.error(`[bot] alpaca ${res.status} on ${ALPACA_BASE}${pathname}: ${raw.slice(0, 200)}`);
     throw new Error(`alpaca_${res.status}`);
   }
 
@@ -210,17 +240,23 @@ async function alpaca(pathname) {
 
 export async function getBotStatus() {
   if (!ALPACA_KEY || !ALPACA_SECRET) {
+    console.warn('[bot] ALPACA_KEY / ALPACA_SECRET not set on this service');
     return {
       configured: false,
       note: 'The trading account is not connected here - ALPACA_KEY / ALPACA_SECRET are not set on this server.',
     };
   }
 
+  console.log(`[bot] querying alpaca ${ALPACA_PAPER ? 'paper' : 'live'} endpoint (${ALPACA_BASE})`);
+
   let account;
   try {
     account = await alpaca('/v2/account');
   } catch (err) {
     if (String(err.message) === 'alpaca_unauthorized') {
+      console.error(
+        `[bot] credentials rejected on the ${ALPACA_PAPER ? 'paper' : 'live'} endpoint - check PAPER matches the key type`
+      );
       return {
         configured: true,
         error: 'auth_failed',
@@ -240,6 +276,10 @@ export async function getBotStatus() {
 
   const equity = money(account.equity);
   const cash = money(account.cash);
+
+  console.log(
+    `[bot] alpaca ok - status ${account.status}, equity ${equity}, ${positions.length} open positions`
+  );
 
   return {
     configured: true,
