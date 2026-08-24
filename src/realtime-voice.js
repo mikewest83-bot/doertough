@@ -3,6 +3,7 @@ import { Conversation } from '@elevenlabs/client';
 let conversation = null;
 let connected = false;
 let starting = false;
+let installed = false;
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -34,28 +35,45 @@ async function startRealtime() {
   if (starting || connected) return;
   starting = true;
   setVisual('listening');
+
   try {
     if (!window.isSecureContext) throw new Error('Mike voice requires a secure HTTPS connection.');
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error('This browser does not support microphone access.');
+
+    // Keep the microphone permission request inside the user's click gesture.
     await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
 
-    const tokenResponse = await fetch('/api/speech/token', { headers: (() => {
-      try { const token = localStorage.getItem('mike_token'); return token ? { Authorization: `Bearer ${token}` } : {}; } catch { return {}; }
-    })() });
+    const tokenResponse = await fetch('/api/speech/token', {
+      cache: 'no-store',
+      headers: (() => {
+        try {
+          const token = localStorage.getItem('mike_token');
+          return token ? { Authorization: `Bearer ${token}` } : {};
+        } catch {
+          return {};
+        }
+      })(),
+    });
+
     if (!tokenResponse.ok) {
       const body = await tokenResponse.json().catch(() => ({}));
       throw new Error(body.error || `Could not start Mike realtime voice (${tokenResponse.status}).`);
     }
-    const { token, agentId } = await tokenResponse.json();
 
+    const { token } = await tokenResponse.json();
+    if (!token) throw new Error('Mike realtime voice returned no session token.');
+
+    // The WebRTC conversation token already identifies the Speech Engine.
+    // Do not also pass agentId; keeping the session token as the sole
+    // connection credential avoids mixing agent and Speech Engine identifiers.
     conversation = await Conversation.startSession({
-      agentId,
       conversationToken: token,
       connectionType: 'webrtc',
       onConnect: () => {
         connected = true;
         starting = false;
         setVisual('listening');
-        console.log('[mike-realtime] connected');
+        console.log('[mike-realtime] WebRTC connected');
       },
       onDisconnect: () => {
         connected = false;
@@ -66,8 +84,9 @@ async function startRealtime() {
       },
       onError: (error) => {
         starting = false;
-        console.error('[mike-realtime] error:', error);
-        setVisual('ready', 'Mike voice connection failed. Tap Talk to Mike and try again.');
+        connected = false;
+        console.error('[mike-realtime] SDK error:', error);
+        setVisual('ready', `Mike voice connection failed: ${error?.message || 'unknown realtime error'}`);
       },
       onModeChange: ({ mode }) => setVisual(mode === 'speaking' ? 'speaking' : 'listening'),
       onMessage: (message) => {
@@ -103,9 +122,12 @@ async function toggleRealtime(event) {
 }
 
 function install() {
+  if (installed) return true;
   const box = $('.voice-box');
   const button = $('.voice-talk');
   if (!box || !button) return false;
+
+  installed = true;
 
   // Capture before React's click handlers so the legacy SpeechRecognition/MP3
   // path cannot run at the same time as the realtime WebRTC session.
@@ -116,6 +138,7 @@ function install() {
   }, true);
 
   button.textContent = 'Talk to Mike';
+  window.__MIKE_REALTIME__ = { startRealtime, stopRealtime };
   console.log('[mike-realtime] voice-first WebRTC mode installed');
   return true;
 }
