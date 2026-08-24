@@ -12,6 +12,11 @@ import { MIKE_INSTRUCTIONS } from './persona.mjs';
 import { migrate } from './db.mjs';
 import { initializeSpeechEngine, getSpeechEngineToken } from './speech-engine.mjs';
 import {
+  verifyStripeSignature,
+  stripeWebhookConfigured,
+  handleStripeWebhook,
+} from './stripe-webhook.mjs';
+import {
   register,
   login,
   me,
@@ -64,6 +69,54 @@ if (process.env.FAL_KEY) {
 }
 
 app.disable('x-powered-by');
+
+// ===== Stripe webhook =====
+// This MUST be registered before express.json(). Stripe signs the exact
+// bytes it sent; once the JSON parser replaces req.body with an object the
+// raw payload is gone and every signature check fails. express.raw() is
+// scoped to this one path, so the rest of the app still gets parsed JSON.
+app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  if (!stripeWebhookConfigured()) {
+    console.error('[stripe] STRIPE_WEBHOOK_SECRET is not set — rejecting webhook.');
+    return res.status(503).json({ error: 'stripe_webhook_not_configured' });
+  }
+
+  if (!Buffer.isBuffer(req.body)) {
+    // Only happens if a body parser sneaks in above this route.
+    console.error('[stripe] raw body unavailable — express.raw() did not run first.');
+    return res.status(500).json({ error: 'raw_body_unavailable' });
+  }
+
+  const rawBody = req.body.toString('utf8');
+  const ok = verifyStripeSignature(
+    rawBody,
+    req.get('stripe-signature'),
+    process.env.STRIPE_WEBHOOK_SECRET
+  );
+
+  if (!ok) {
+    console.warn('[stripe] signature verification failed');
+    return res.status(400).json({ error: 'invalid_signature' });
+  }
+
+  let event;
+  try {
+    event = JSON.parse(rawBody);
+  } catch {
+    return res.status(400).json({ error: 'invalid_json' });
+  }
+
+  // Acknowledge before doing the work. Stripe times out at 20s and retries
+  // any non-2xx; a slow handler turns into duplicate deliveries.
+  res.json({ received: true });
+
+  try {
+    await handleStripeWebhook(event);
+  } catch (err) {
+    console.error('[stripe] handler error:', err);
+  }
+});
+
 app.use(express.json({ limit: '15mb' }));
 installGuards(app);
 
