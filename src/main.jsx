@@ -3,7 +3,7 @@ import { Mic, Send, Volume2, ArrowRight, Lightbulb, Square, User, LogOut, X } fr
 import { createRoot } from 'react-dom/client';
 import './style.css';
 
-const SILENCE = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjEwMAAAAAAAAAAAAAAA//tUxAADB8AhSmxhIIEVCSiJrDCQBTcu3UrAIwUdkRgQbFAZC1CQEwTJ9mjRvBA4UOLD8nKVOWfh+UlK3z/177OXrfOdKl7pyn3Xf//WreyTRUoAWgBgkOAGbZHBgG1OF6zM82DWbZaUmMBptgQhGjsyYqc9ae9XFz280948NMBWInljyzsNRFLPWdnZGWrddDsjK1unuSrVN9jJsK8KuQtQCtMBjCEtImISdNKJOopIpBFpNSMbIHCSRpRR5iakjTiyzLhchUUBwCgyKiweBv/7UsQbg8it7f8AAAAI3JOR1nAAAOAgAAg0AKQANEmZgAA7CAA=';
+const SILENCE = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjEwMAAAAAAAAAAAAAAA//tUxAADB8AhSmxhIIEVCSiJrDCQBTcu3UrAIwUdkRgQbFAZC1CQEwTJ9mjRvBA4UOLD8nKVOWfh+UlK3z/177OXrfOdKl7pynX3f//WreyTRUoAWgBgkOAGbZHBgG1OF6zM82DWbZaUmMBptgQhGjsyYqc9ae9XFz280948NMBWInljyzsNRFLPWdnZGWrddDsjK1unuSrVN9jJsK8KuQtQCtMBjCEtImISdNKJOopIpBFpNSMbIHCSRpRR5iakjTiyzLhchUUBwCgyKiweBv/7UsQbg8it7f8AAAAI3JOR1nAAAOAgAAg0AKQANEmZgAA7CAA=';
 
 const TOKEN_KEY = 'mike_token';
 
@@ -209,28 +209,11 @@ function App() {
       if (job !== speakJobRef.current) return;
       if (!data.audioBase64) throw new Error('Mike returned no audio.');
 
-      const ctx = unlockAudio();
-      if (ctx) {
-        const raw = atob(data.audioBase64);
-        const bytes = new Uint8Array(raw.length);
-        for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
-        const buffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
-        if (job !== speakJobRef.current) return;
-        const source = ctx.createBufferSource();
-        source.buffer = buffer;
-        source.connect(ctx.destination);
-        sourceRef.current = source;
-        source.onended = () => {
-          if (job === speakJobRef.current) sourceRef.current = null;
-        };
-        if (ctx.state !== 'running') await ctx.resume();
-        source.start(0);
-        const durationMs = Math.max(250, buffer.duration * 1000);
-        await new Promise((resolve) => setTimeout(resolve, durationMs));
-        if (job === speakJobRef.current) setStatus('ready');
-        return;
-      }
-
+      // Prefer the native HTML audio element. It handles MP3 decoding and
+      // playback more reliably across Safari/iOS/Chrome than Web Audio's
+      // decodeAudioData path. The browser's play() promise tells us whether
+      // playback actually started, so failures are surfaced instead of being
+      // silently swallowed.
       const raw = atob(data.audioBase64);
       const bytes = new Uint8Array(raw.length);
       for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
@@ -239,12 +222,32 @@ function App() {
       audioUrlRef.current = URL.createObjectURL(blob);
       const el = audioElRef.current;
       if (!el) throw new Error('audio_element_missing');
+      el.volume = 1;
       el.src = audioUrlRef.current;
+      el.load();
+
       await new Promise((resolve, reject) => {
-        el.onended = resolve;
-        el.onerror = () => reject(new Error('Mike generated audio, but this browser could not play it.'));
-        el.play().catch(reject);
+        let settled = false;
+        const cleanup = () => {
+          el.onended = null;
+          el.onerror = null;
+          el.onabort = null;
+        };
+        const finish = (fn, value) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          fn(value);
+        };
+        el.onended = () => finish(resolve);
+        el.onerror = () => finish(reject, new Error('Mike generated audio, but this browser could not play it.'));
+        el.onabort = () => finish(reject, new Error('Mike audio playback was interrupted.'));
+        el.play().then(() => {
+          // Playback has actually started. Keep the pulsing voice state active
+          // until the native player fires ended.
+        }).catch((err) => finish(reject, err));
       });
+
       if (job === speakJobRef.current) setStatus('ready');
       clearAudioUrl();
     } catch (err) {
