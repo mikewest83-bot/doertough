@@ -1,11 +1,9 @@
 // server/live.mjs
 //
-// Keyless live-data tools for Mike AI: weather, news headlines, sports
-// scores, and a delayed stock quote. None of these need an API key.
-// Stocks specifically use Stooq's free quote endpoint, which is delayed
-// roughly 15 minutes — good enough for "how's Apple doing today" but not
-// a real-time ticker. Swap getStockQuote for a keyed provider (e.g.
-// Finnhub) later if real-time quotes matter.
+// Live-data tools for Mike AI: weather, news headlines, sports scores,
+// and stock quotes. Weather/news/sports are keyless. Stocks use Finnhub
+// when FINNHUB_API_KEY is set (real-time), and fall back to Stooq's free
+// CSV endpoint (~15 min delayed) if the key is missing or the call fails.
 
 import Parser from 'rss-parser';
 
@@ -158,38 +156,86 @@ export async function getSportsScores({ league, team } = {}) {
   return { league: key, games: events.slice(0, 10) };
 }
 
-// ===== Stocks (Stooq — free, keyless, ~15min delayed) =====
-export async function getStockQuote({ symbol } = {}) {
-  if (!symbol) throw new Error('symbol_required');
-  const ticker = String(symbol).trim().toLowerCase();
+// ===== Stocks (Finnhub primary, Stooq fallback) =====
 
-  const res = await fetch(`https://stooq.com/q/l/?s=${encodeURIComponent(ticker)}.us&f=sd2t2ohlcv&h&e=csv`, {
-    signal: AbortSignal.timeout(8000),
-  });
+// Finnhub returns { c, d, dp, h, l, o, pc, t }. An unknown symbol comes back
+// as all zeros with a 200, so a zero close is treated as "not found" rather
+// than a real price.
+async function finnhubQuote(ticker) {
+  const key = process.env.FINNHUB_API_KEY;
+  if (!key) return null;
+
+  const q = await fetchJson(
+    `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(ticker)}&token=${encodeURIComponent(key)}`
+  );
+
+  if (!q || !Number(q.c)) return null;
+
+  return {
+    symbol: ticker,
+    price: Number(q.c),
+    change: Number(q.d),
+    changePercent: Number(q.dp),
+    open: Number(q.o),
+    high: Number(q.h),
+    low: Number(q.l),
+    previousClose: Number(q.pc),
+    asOf: q.t ? new Date(Number(q.t) * 1000).toISOString() : new Date().toISOString(),
+    source: 'finnhub',
+    note: 'Real-time quote.',
+  };
+}
+
+async function stooqQuote(ticker) {
+  const res = await fetch(
+    `https://stooq.com/q/l/?s=${encodeURIComponent(ticker.toLowerCase())}.us&f=sd2t2ohlcv&h&e=csv`,
+    { signal: AbortSignal.timeout(8000) }
+  );
   if (!res.ok) throw new Error(`stooq_${res.status}`);
   const csv = await res.text();
   const lines = csv.trim().split('\n');
-  if (lines.length < 2) return { error: `No quote data for "${symbol}".` };
+  if (lines.length < 2) return null;
 
   const headers = lines[0].split(',');
   const values = lines[1].split(',');
   const row = Object.fromEntries(headers.map((h, i) => [h.trim(), values[i]]));
 
-  if (!row.Close || row.Close === 'N/D') {
-    return { error: `Could not find a quote for "${symbol}". Try the ticker symbol (e.g. AAPL).` };
-  }
+  if (!row.Close || row.Close === 'N/D') return null;
 
   return {
-    symbol: symbol.toUpperCase(),
+    symbol: ticker,
     date: row.Date,
     time: row.Time,
     open: row.Open,
     high: row.High,
     low: row.Low,
     close: row.Close,
+    price: Number(row.Close),
     volume: row.Volume,
+    source: 'stooq',
     note: 'Delayed quote (~15min), not real-time.',
   };
+}
+
+export async function getStockQuote({ symbol } = {}) {
+  if (!symbol) throw new Error('symbol_required');
+  const ticker = String(symbol).trim().toUpperCase();
+
+  try {
+    const live = await finnhubQuote(ticker);
+    if (live) return live;
+  } catch (err) {
+    console.error('[stocks] finnhub failed, falling back to stooq:', err.message || err);
+  }
+
+  try {
+    const delayed = await stooqQuote(ticker);
+    if (delayed) return delayed;
+  } catch (err) {
+    console.error('[stocks] stooq failed:', err.message || err);
+  }
+
+  return { error: `Could not find a quote for "${symbol}". Try the ticker symbol (e.g. AAPL).` };
 }
 
 // ===== Tool schemas for the OpenAI Responses API =====
@@ -237,7 +283,8 @@ export const LIVE_TOOLS = [
   {
     type: 'function',
     name: 'get_stock_quote',
-    description: 'Get a recent (delayed ~15min) stock quote for a ticker symbol.',
+    description:
+      'Get a stock quote for a ticker symbol. Real-time when the live provider is available; the response note field says whether it is real-time or delayed.',
     parameters: {
       type: 'object',
       properties: {
