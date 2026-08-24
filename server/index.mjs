@@ -8,9 +8,35 @@ import { LIVE_TOOLS as BASE_TOOLS, LIVE_TOOL_HANDLERS as BASE_HANDLERS } from '.
 import { BUSINESS_TOOLS, BUSINESS_TOOL_HANDLERS } from './business.mjs';
 import { installGuards } from './guard.mjs';
 import { MIKE_INSTRUCTIONS } from './persona.mjs';
+import { migrate } from './db.mjs';
+import {
+  register,
+  login,
+  me,
+  authRequired,
+  optionalAuth,
+  isOwner,
+  authConfigured,
+} from './auth.mjs';
 
 const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS];
 const LIVE_TOOL_HANDLERS = { ...BASE_HANDLERS, ...BUSINESS_TOOL_HANDLERS };
+
+// Tools that read Mike's OWN business data. Everyone else gets the public
+// Mike. These are filtered out of the tool list entirely for non-owners, so
+// the model never even sees that they exist.
+const OWNER_ONLY_TOOLS = new Set(['get_store_sales', 'get_bot_status']);
+
+const PUBLIC_TOOLS = LIVE_TOOLS.filter((t) => !OWNER_ONLY_TOOLS.has(t.name));
+
+const NON_OWNER_NOTE =
+  '\n\nTOOL AVAILABILITY FOR THIS CONVERSATION\n' +
+  'You are talking with a visitor, not Mike. The store-sales and trading-account ' +
+  'tools are not available in this conversation and you cannot see those numbers. ' +
+  'If asked about Doer Tough revenue, order counts, or the trading account balance, ' +
+  'say plainly that those are Mike\'s own private business numbers and you do not ' +
+  'share them. Do not guess, estimate, or invent any figure. Everything else you ' +
+  'know about the portfolio is fair game.';
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -38,6 +64,11 @@ if (process.env.FAL_KEY) {
 app.disable('x-powered-by');
 app.use(express.json({ limit: '15mb' }));
 installGuards(app);
+
+// ===== Accounts =====
+app.post('/api/auth/register', register);
+app.post('/api/auth/login', login);
+app.get('/api/auth/me', authRequired, me);
 
 // ===== Helpers =====
 const requireKey = (key, name) => {
@@ -108,6 +139,7 @@ app.get('/api/health', (req, res) => {
     lipSyncConfigured: !!process.env.FAL_KEY,
     liveAvatarConfigured: !!process.env.LIVEAVATAR_API_KEY && !!process.env.LIVEAVATAR_AVATAR_ID,
     liveToolsConfigured: true,
+    accountsConfigured: authConfigured(),
     model: OPENAI_MODEL,
     timestamp: new Date().toISOString(),
   });
@@ -179,7 +211,7 @@ app.post('/api/liveavatar/session', async (req, res) => {
 });
 
 // Diagnostic: proves the key and avatar ID work before any client code exists.
-// Safe to open in a browser â never returns the API key or a usable token.
+// Safe to open in a browser - never returns the API key or a usable token.
 app.get('/api/liveavatar/diag', async (req, res) => {
   const out = {
     apiKeyPresent: !!LA_KEY,
@@ -197,7 +229,7 @@ app.get('/api/liveavatar/diag', async (req, res) => {
 });
 
 // Chat (with live-data tool calling)
-app.post('/api/ask', async (req, res) => {
+app.post('/api/ask', optionalAuth, async (req, res) => {
   try {
     requireKey(process.env.OPENAI_API_KEY, 'openai');
     if (!openai) throw new Error('openai_client_missing');
@@ -222,6 +254,11 @@ app.post('/api/ask', async (req, res) => {
       },
     ];
 
+    // Owner sees their own business data; everyone else does not.
+    const owner = isOwner(req.user);
+    const tools = owner ? LIVE_TOOLS : PUBLIC_TOOLS;
+    const instructions = owner ? MIKE_INSTRUCTIONS : MIKE_INSTRUCTIONS + NON_OWNER_NOTE;
+
     let text = "I'm here. Give me another shot.";
 
     // Function-calling loop: Mike can pull live data before answering.
@@ -229,9 +266,9 @@ app.post('/api/ask', async (req, res) => {
     for (let round = 0; round < 4; round += 1) {
       const response = await openai.responses.create({
         model: OPENAI_MODEL,
-        instructions: MIKE_INSTRUCTIONS,
+        instructions,
         input,
-        tools: LIVE_TOOLS,
+        tools,
       });
 
       const calls = (response.output || []).filter((item) => item.type === 'function_call');
@@ -256,7 +293,14 @@ app.post('/api/ask', async (req, res) => {
         const handler = LIVE_TOOL_HANDLERS[call.name];
         let output;
         try {
-          output = handler ? await handler(args) : { error: `Unknown tool "${call.name}".` };
+          if (!owner && OWNER_ONLY_TOOLS.has(call.name)) {
+            // Should be unreachable - the tool isn't in the list a non-owner
+            // gets - but a model can hallucinate a call, so refuse here too.
+            console.warn(`[ask] blocked owner-only tool ${call.name} for non-owner`);
+            output = { error: 'not_available', note: "That is Mike's own private business data." };
+          } else {
+            output = handler ? await handler(args) : { error: `Unknown tool "${call.name}".` };
+          }
         } catch (toolErr) {
           console.error(`[ask] tool ${call.name} failed:`, toolErr.message || toolErr);
           output = { error: toolErr.message || 'tool_unavailable' };
@@ -349,10 +393,10 @@ app.post('/api/tts', async (req, res) => {
         console.log('[tts] lip-sync queued:', generationId);
       } catch (avatarErr) {
         console.error('[tts] lip-sync failed (voice will still work):', avatarErr.message || avatarErr);
-        // Continue â we still return the audio
+        // Continue - we still return the audio
       }
     } else {
-      console.log('[tts] lip-sync disabled â voice only');
+      console.log('[tts] lip-sync disabled - voice only');
     }
 
     res.json({
@@ -505,9 +549,14 @@ app.use((req, res) => {
   res.sendFile(path.join(__dirname, '..', 'dist', 'index.html'));
 });
 
+// Schema is idempotent; a failure here logs and leaves accounts disabled
+// rather than taking the whole server down.
+migrate().catch((err) => console.error('[db] migrate threw:', err.message || err));
+
 app.listen(PORT, () => {
   console.log(`[mike-ai] listening on port ${PORT}`);
   console.log(`[mike-ai] openai: ${!!process.env.OPENAI_API_KEY}`);
   console.log(`[mike-ai] elevenlabs: ${!!process.env.ELEVENLABS_API_KEY}`);
   console.log(`[mike-ai] fal: ${!!process.env.FAL_KEY}`);
+  console.log(`[mike-ai] accounts: ${authConfigured()}`);
 });
