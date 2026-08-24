@@ -4,6 +4,7 @@ import { Readable } from 'stream';
 import { fileURLToPath } from 'url';
 import OpenAI from 'openai';
 import { fal } from '@fal-ai/client';
+import { LIVE_TOOLS, LIVE_TOOL_HANDLERS } from './live.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -18,6 +19,11 @@ const PREVIEW_VIDEO =
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const ELEVEN_MODEL = process.env.ELEVENLABS_MODEL || 'eleven_flash_v2_5';
 const FAL_MODEL = process.env.FAL_LIPSYNC_MODEL || 'veed/lipsync/v2';
+
+const MIKE_INSTRUCTIONS =
+  'You are Mike AI, the upbeat Doer Tough everyday copilot. Speak naturally, confidently, clearly, and with a warm Southern American conversational feel. Use excellent grammar and concise useful answers. ' +
+  'You have live tools for current weather, news headlines, sports scores, and stock quotes â use them whenever the user asks about any of those instead of guessing from memory. Stock quotes are delayed about 15 minutes; only mention that if the user specifically asks about real-time/live-tick pricing. ' +
+  'Do not claim to know other private or rapidly-changing facts beyond what the tools give you. When current facts matter and no tool applies, say they should be verified.';
 
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -98,6 +104,7 @@ app.get('/api/health', (req, res) => {
     voiceConfigured: !!process.env.ELEVENLABS_API_KEY,
     lipSyncConfigured: !!process.env.FAL_KEY,
     liveAvatarConfigured: !!process.env.LIVEAVATAR_API_KEY && !!process.env.LIVEAVATAR_AVATAR_ID,
+    liveToolsConfigured: true,
     model: OPENAI_MODEL,
     timestamp: new Date().toISOString(),
   });
@@ -169,7 +176,7 @@ app.post('/api/liveavatar/session', async (req, res) => {
 });
 
 // Diagnostic: proves the key and avatar ID work before any client code exists.
-// Safe to open in a browser — never returns the API key or a usable token.
+// Safe to open in a browser â never returns the API key or a usable token.
 app.get('/api/liveavatar/diag', async (req, res) => {
   const out = {
     apiKeyPresent: !!LA_KEY,
@@ -186,7 +193,7 @@ app.get('/api/liveavatar/diag', async (req, res) => {
   }
 });
 
-// Chat
+// Chat (with live-data tool calling)
 app.post('/api/ask', async (req, res) => {
   try {
     requireKey(process.env.OPENAI_API_KEY, 'openai');
@@ -201,7 +208,7 @@ app.post('/api/ask', async (req, res) => {
       ? req.body.history.slice(-10)
       : [];
 
-    const input = [
+    let input = [
       ...history.map((m) => ({
         role: m.role === 'mike' ? 'assistant' : 'user',
         content: [{ type: m.role === 'mike' ? 'output_text' : 'input_text', text: String(m.text || '') }],
@@ -212,14 +219,54 @@ app.post('/api/ask', async (req, res) => {
       },
     ];
 
-    const response = await openai.responses.create({
-      model: OPENAI_MODEL,
-      instructions:
-        'You are Mike AI, the upbeat Doer Tough everyday copilot. Speak naturally, confidently, clearly, and with a warm Southern American conversational feel. Use excellent grammar and concise useful answers. Do not claim to know private facts. When current facts matter, say they should be verified.',
-      input,
-    });
+    let text = "I'm here. Give me another shot.";
 
-    const text = response.output_text?.trim() || "I'm here. Give me another shot.";
+    // Function-calling loop: Mike can pull live data before answering.
+    // Capped so a misbehaving tool call can't loop forever.
+    for (let round = 0; round < 4; round += 1) {
+      const response = await openai.responses.create({
+        model: OPENAI_MODEL,
+        instructions: MIKE_INSTRUCTIONS,
+        input,
+        tools: LIVE_TOOLS,
+      });
+
+      const calls = (response.output || []).filter((item) => item.type === 'function_call');
+
+      if (!calls.length) {
+        text = response.output_text?.trim() || text;
+        break;
+      }
+
+      // Carry the model's own output forward so it has the context of its
+      // own tool calls when it sees the results next round.
+      input = [...input, ...response.output];
+
+      for (const call of calls) {
+        let args = {};
+        try {
+          args = call.arguments ? JSON.parse(call.arguments) : {};
+        } catch {
+          // leave args empty; the handler below errors on missing fields
+        }
+
+        const handler = LIVE_TOOL_HANDLERS[call.name];
+        let output;
+        try {
+          output = handler ? await handler(args) : { error: `Unknown tool "${call.name}".` };
+        } catch (toolErr) {
+          console.error(`[ask] tool ${call.name} failed:`, toolErr.message || toolErr);
+          output = { error: toolErr.message || 'tool_unavailable' };
+        }
+
+        input.push({
+          type: 'function_call_output',
+          call_id: call.call_id,
+          output: JSON.stringify(output),
+        });
+      }
+    }
+
     res.json({ text });
   } catch (err) {
     console.error('[ask] failed:', err.message || err);
@@ -299,10 +346,10 @@ app.post('/api/tts', async (req, res) => {
         console.log('[tts] lip-sync queued:', generationId);
       } catch (avatarErr) {
         console.error('[tts] lip-sync failed (voice will still work):', avatarErr.message || avatarErr);
-        // Continue — we still return the audio
+        // Continue â we still return the audio
       }
     } else {
-      console.log('[tts] lip-sync disabled — voice only');
+      console.log('[tts] lip-sync disabled â voice only');
     }
 
     res.json({
