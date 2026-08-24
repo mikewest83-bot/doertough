@@ -4,7 +4,13 @@ import { Readable } from 'stream';
 import { fileURLToPath } from 'url';
 import OpenAI from 'openai';
 import { fal } from '@fal-ai/client';
-import { LIVE_TOOLS, LIVE_TOOL_HANDLERS } from './live.mjs';
+import { LIVE_TOOLS as BASE_TOOLS, LIVE_TOOL_HANDLERS as BASE_HANDLERS } from './live.mjs';
+import { BUSINESS_TOOLS, BUSINESS_TOOL_HANDLERS } from './business.mjs';
+import { installGuards } from './guard.mjs';
+
+const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS];
+const LIVE_TOOL_HANDLERS = { ...BASE_HANDLERS, ...BUSINESS_TOOL_HANDLERS };
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -35,6 +41,7 @@ if (process.env.FAL_KEY) {
 
 app.disable('x-powered-by');
 app.use(express.json({ limit: '15mb' }));
+installGuards(app);
 
 // ===== Helpers =====
 const requireKey = (key, name) => {
