@@ -1,0 +1,243 @@
+// server/business.mjs
+//
+// Doer Tough business tools for Mike AI: store sales (Shopify Admin API)
+// and trading bot status (Alpaca). Both degrade gracefully — if credentials
+// aren't set, the tool returns a plain note instead of throwing, so Mike
+// says "that isn't wired up yet" rather than erroring out mid-answer.
+//
+// Env:
+//   SHOPIFY_STORE_DOMAIN   default sae061-ws.myshopify.com
+//   SHOPIFY_ADMIN_TOKEN    Admin API access token (needs read_orders, read_products)
+//   SHOPIFY_API_VERSION    default 2025-01
+//   ALPACA_KEY / ALPACA_SECRET
+//   PAPER                  'false' for the live endpoint; defaults to paper
+
+const SHOPIFY_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN || 'sae061-ws.myshopify.com';
+const SHOPIFY_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN || '';
+const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || '2025-01';
+
+const ALPACA_KEY = process.env.ALPACA_KEY || '';
+const ALPACA_SECRET = process.env.ALPACA_SECRET || '';
+const ALPACA_PAPER = String(process.env.PAPER || 'true') !== 'false';
+const ALPACA_BASE = ALPACA_PAPER
+  ? 'https://paper-api.alpaca.markets'
+  : 'https://api.alpaca.markets';
+
+const money = (n) => Math.round(Number(n || 0) * 100) / 100;
+
+// ===== Shopify =====
+
+async function shopifyGraphQL(query, variables = {}) {
+  const res = await fetch(`https://${SHOPIFY_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
+    method: 'POST',
+    headers: {
+      'X-Shopify-Access-Token': SHOPIFY_TOKEN,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ query, variables }),
+    signal: AbortSignal.timeout(10000),
+  });
+
+  const body = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    throw new Error(`shopify_${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
+  }
+  if (body.errors) {
+    throw new Error(`shopify_graphql: ${JSON.stringify(body.errors).slice(0, 200)}`);
+  }
+
+  return body.data;
+}
+
+const ORDERS_QUERY = `
+  query MikeOrders($q: String!) {
+    orders(first: 100, query: $q, sortKey: CREATED_AT, reverse: true) {
+      edges {
+        node {
+          name
+          createdAt
+          displayFulfillmentStatus
+          displayFinancialStatus
+          currentTotalPriceSet { shopMoney { amount currencyCode } }
+          lineItems(first: 20) {
+            edges { node { title quantity } }
+          }
+        }
+      }
+    }
+  }
+`;
+
+export async function getStoreSales({ days } = {}) {
+  if (!SHOPIFY_TOKEN) {
+    return {
+      configured: false,
+      note: 'Shopify is not connected yet — SHOPIFY_ADMIN_TOKEN is not set on the server.',
+    };
+  }
+
+  const window = Math.min(Math.max(Number(days) || 7, 1), 90);
+  const since = new Date(Date.now() - window * 86400_000);
+  const sinceDay = since.toISOString().slice(0, 10);
+
+  const data = await shopifyGraphQL(ORDERS_QUERY, { q: `created_at:>=${sinceDay}` });
+  const orders = (data?.orders?.edges || []).map((e) => e.node);
+
+  let gross = 0;
+  let currency = 'USD';
+  const productCounts = new Map();
+
+  for (const order of orders) {
+    const amount = order?.currentTotalPriceSet?.shopMoney?.amount;
+    gross += Number(amount || 0);
+    currency = order?.currentTotalPriceSet?.shopMoney?.currencyCode || currency;
+
+    for (const li of order?.lineItems?.edges || []) {
+      const title = li?.node?.title || 'Unknown item';
+      productCounts.set(title, (productCounts.get(title) || 0) + Number(li?.node?.quantity || 0));
+    }
+  }
+
+  const topProducts = [...productCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([title, units]) => ({ title, units }));
+
+  return {
+    configured: true,
+    store: 'Doer Tough (doertough.com)',
+    windowDays: window,
+    since: sinceDay,
+    orderCount: orders.length,
+    grossSales: money(gross),
+    currency,
+    averageOrderValue: orders.length ? money(gross / orders.length) : 0,
+    topProducts,
+    recentOrders: orders.slice(0, 5).map((o) => ({
+      order: o.name,
+      placedAt: o.createdAt,
+      total: money(o?.currentTotalPriceSet?.shopMoney?.amount),
+      payment: o.displayFinancialStatus,
+      fulfillment: o.displayFulfillmentStatus,
+    })),
+    note: orders.length
+      ? undefined
+      : `No orders in the last ${window} days. The store is live, it just hasn't sold in this window.`,
+  };
+}
+
+// ===== Alpaca =====
+
+async function alpaca(pathname) {
+  const res = await fetch(`${ALPACA_BASE}${pathname}`, {
+    headers: {
+      'APCA-API-KEY-ID': ALPACA_KEY,
+      'APCA-API-SECRET-KEY': ALPACA_SECRET,
+    },
+    signal: AbortSignal.timeout(10000),
+  });
+
+  if (res.status === 401 || res.status === 403) {
+    throw new Error('alpaca_unauthorized');
+  }
+  if (!res.ok) {
+    throw new Error(`alpaca_${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function getBotStatus() {
+  if (!ALPACA_KEY || !ALPACA_SECRET) {
+    return {
+      configured: false,
+      note: 'The trading account is not connected here — ALPACA_KEY / ALPACA_SECRET are not set on this server.',
+    };
+  }
+
+  let account;
+  try {
+    account = await alpaca('/v2/account');
+  } catch (err) {
+    if (String(err.message) === 'alpaca_unauthorized') {
+      return {
+        configured: true,
+        error: 'auth_failed',
+        mode: ALPACA_PAPER ? 'paper' : 'live',
+        note: `Alpaca rejected the credentials on the ${ALPACA_PAPER ? 'paper' : 'live'} endpoint. Paper and live keys are separate pairs and can't be swapped.`,
+      };
+    }
+    throw err;
+  }
+
+  let positions = [];
+  try {
+    positions = await alpaca('/v2/positions');
+  } catch (err) {
+    console.error('[bot] positions failed:', err.message || err);
+  }
+
+  const equity = money(account.equity);
+  const cash = money(account.cash);
+
+  return {
+    configured: true,
+    mode: ALPACA_PAPER ? 'paper' : 'live',
+    accountStatus: account.status,
+    tradingBlocked: !!account.trading_blocked,
+    equity,
+    cash,
+    buyingPower: money(account.buying_power),
+    openPositions: positions.length,
+    positions: positions.slice(0, 10).map((p) => ({
+      symbol: p.symbol,
+      qty: Number(p.qty),
+      marketValue: money(p.market_value),
+      unrealizedPL: money(p.unrealized_pl),
+      unrealizedPLPercent: money(Number(p.unrealized_plpc || 0) * 100),
+    })),
+    note:
+      equity === 0
+        ? 'The account is funded at zero, so the bot cannot open new positions regardless of signals.'
+        : undefined,
+  };
+}
+
+// ===== Tool schemas =====
+export const BUSINESS_TOOLS = [
+  {
+    type: 'function',
+    name: 'get_store_sales',
+    description:
+      "Get recent sales performance for Mike's Doer Tough Shopify store: order count, gross sales, average order value, best-selling products, and the most recent orders. Use for any question about how the store or the business is doing.",
+    parameters: {
+      type: 'object',
+      properties: {
+        days: {
+          type: 'number',
+          description: 'How many days back to look. Defaults to 7, max 90.',
+        },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'get_bot_status',
+    description:
+      "Get the current state of Mike's automated trading account on Alpaca: paper or live mode, account status, equity, cash, buying power, and open positions with unrealized P/L. Use for any question about the bot, DoerBot, StockBot, or how trading is going.",
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    },
+  },
+];
+
+export const BUSINESS_TOOL_HANDLERS = {
+  get_store_sales: getStoreSales,
+  get_bot_status: getBotStatus,
+};
