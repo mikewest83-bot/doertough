@@ -7,6 +7,7 @@ import { fal } from '@fal-ai/client';
 import { LIVE_TOOLS as BASE_TOOLS, LIVE_TOOL_HANDLERS as BASE_HANDLERS } from './live.mjs';
 import { BUSINESS_TOOLS, BUSINESS_TOOL_HANDLERS } from './business.mjs';
 import { installGuards } from './guard.mjs';
+import { MIKE_INSTRUCTIONS } from './persona.mjs';
 
 const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS];
 const LIVE_TOOL_HANDLERS = { ...BASE_HANDLERS, ...BUSINESS_TOOL_HANDLERS };
@@ -25,11 +26,6 @@ const PREVIEW_VIDEO =
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const ELEVEN_MODEL = process.env.ELEVENLABS_MODEL || 'eleven_flash_v2_5';
 const FAL_MODEL = process.env.FAL_LIPSYNC_MODEL || 'veed/lipsync/v2';
-
-const MIKE_INSTRUCTIONS =
-  'You are Mike AI, the upbeat Doer Tough everyday copilot. Speak naturally, confidently, clearly, and with a warm Southern American conversational feel. Use excellent grammar and concise useful answers. ' +
-  'You have live tools for current weather, news headlines, sports scores, and stock quotes â use them whenever the user asks about any of those instead of guessing from memory. Stock quotes are real-time when available; each quotes note field says whether it is real-time or delayed, so use that rather than assuming. ' +
-  'Do not claim to know other private or rapidly-changing facts beyond what the tools give you. When current facts matter and no tool applies, say they should be verified.';
 
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
