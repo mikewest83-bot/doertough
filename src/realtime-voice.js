@@ -1,0 +1,127 @@
+import { Conversation } from '@elevenlabs/client';
+
+let conversation = null;
+let connected = false;
+let starting = false;
+
+const $ = (selector) => document.querySelector(selector);
+
+function setVisual(mode, error = '') {
+  const box = $('.voice-box');
+  const state = $('.voice-state strong');
+  const hint = $('.voice-hint');
+  const status = $('.status');
+  if (!box || !state) return;
+
+  box.classList.toggle('is-listening', mode === 'listening');
+  box.classList.toggle('is-speaking', mode === 'speaking');
+  state.textContent = error ? 'MIKE VOICE ERROR' : mode === 'speaking' ? 'MIKE IS TALKING' : mode === 'listening' ? 'MIKE IS LISTENING' : connected ? 'MIKE IS READY' : 'MIKE IS HERE';
+  if (status) status.textContent = `● ${error ? 'MIKE VOICE ERROR' : mode === 'speaking' ? 'MIKE IS TALKING' : mode === 'listening' ? 'MIKE IS LISTENING' : connected ? 'MIKE IS READY' : 'MIKE IS HERE'}`;
+  if (hint) hint.textContent = error || (mode === 'speaking' ? 'Mike is talking.' : mode === 'listening' ? 'Go ahead. Mike is listening.' : connected ? 'Talk naturally. Mike will listen and respond.' : 'Tap here or the button below to talk with Mike.');
+}
+
+function addBubble(role, text) {
+  const chat = $('.chat');
+  if (!chat || !text) return;
+  const bubble = document.createElement('div');
+  bubble.className = `bubble ${role}`;
+  bubble.textContent = text;
+  chat.appendChild(bubble);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+async function startRealtime() {
+  if (starting || connected) return;
+  starting = true;
+  setVisual('listening');
+  try {
+    if (!window.isSecureContext) throw new Error('Mike voice requires a secure HTTPS connection.');
+    await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+
+    const tokenResponse = await fetch('/api/speech/token', { headers: (() => {
+      try { const token = localStorage.getItem('mike_token'); return token ? { Authorization: `Bearer ${token}` } : {}; } catch { return {}; }
+    })() });
+    if (!tokenResponse.ok) {
+      const body = await tokenResponse.json().catch(() => ({}));
+      throw new Error(body.error || `Could not start Mike realtime voice (${tokenResponse.status}).`);
+    }
+    const { token, agentId } = await tokenResponse.json();
+
+    conversation = await Conversation.startSession({
+      agentId,
+      conversationToken: token,
+      connectionType: 'webrtc',
+      onConnect: () => {
+        connected = true;
+        starting = false;
+        setVisual('listening');
+        console.log('[mike-realtime] connected');
+      },
+      onDisconnect: () => {
+        connected = false;
+        starting = false;
+        conversation = null;
+        setVisual('ready');
+        console.log('[mike-realtime] disconnected');
+      },
+      onError: (error) => {
+        starting = false;
+        console.error('[mike-realtime] error:', error);
+        setVisual('ready', 'Mike voice connection failed. Tap Talk to Mike and try again.');
+      },
+      onModeChange: ({ mode }) => setVisual(mode === 'speaking' ? 'speaking' : 'listening'),
+      onMessage: (message) => {
+        if (!message) return;
+        const text = message.message || message.text || '';
+        if (!text) return;
+        if (message.source === 'user') addBubble('user', text);
+        if (message.source === 'ai') addBubble('mike', text);
+      },
+    });
+  } catch (error) {
+    connected = false;
+    starting = false;
+    console.error('[mike-realtime] start failed:', error);
+    setVisual('ready', error?.message || 'Mike voice could not start.');
+  }
+}
+
+async function stopRealtime() {
+  starting = false;
+  if (!conversation) return;
+  try { await conversation.endSession(); } catch (error) { console.warn('[mike-realtime] end failed:', error); }
+  conversation = null;
+  connected = false;
+  setVisual('ready');
+}
+
+async function toggleRealtime(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  if (connected || conversation) await stopRealtime();
+  else await startRealtime();
+}
+
+function install() {
+  const box = $('.voice-box');
+  const button = $('.voice-talk');
+  if (!box || !button) return false;
+
+  // Capture before React's click handlers so the legacy SpeechRecognition/MP3
+  // path cannot run at the same time as the realtime WebRTC session.
+  box.addEventListener('click', toggleRealtime, true);
+  button.addEventListener('click', toggleRealtime, true);
+  box.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') toggleRealtime(event);
+  }, true);
+
+  button.textContent = 'Talk to Mike';
+  console.log('[mike-realtime] voice-first WebRTC mode installed');
+  return true;
+}
+
+const timer = setInterval(() => {
+  if (install()) clearInterval(timer);
+}, 100);
+
+window.addEventListener('beforeunload', () => { try { conversation?.endSession(); } catch {} });
