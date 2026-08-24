@@ -1,9 +1,35 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Mic, Send, Volume2, ArrowRight, Lightbulb, Square } from 'lucide-react';
+import { Mic, Send, Volume2, ArrowRight, Lightbulb, Square, User, LogOut, X } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
 
 const SILENCE = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjEwMAAAAAAAAAAAAAAA//tUxAADB8AhSmxhIIEVCSiJrDCQBTcu3UrAIwUdkRgQbFAZC1CQEwTJ9mjRvBA4UOLD8nKVOWfh+UlK3z/177OXrfOdKl7pyn3Xf//WreyTRUoAWgBgkOAGbZHBgG1OF6zM82DWbZaUmMBptgQhGjsyYqc9ae9XFz280948NMBWInljyzsNRFLPWdnZGWrddDsjK1unuSrVN9jJsK8KuQtQCtMBjCEtImISdNKJOopIpBFpNSMbIHCSRpRR5iakjTiyzLhchUUBwCgyKiweBv/7UsQbg8it7f8AAAAI3JOR1nAAAOAgAAg0AKQANEmZgAA7CAA=';
+
+const TOKEN_KEY = 'mike_token';
+
+const readToken = () => {
+  try {
+    return localStorage.getItem(TOKEN_KEY) || '';
+  } catch {
+    return '';
+  }
+};
+
+const writeToken = (token) => {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // private browsing - the session simply won't survive a reload
+  }
+};
+
+// Attaches the bearer token when signed in. Anonymous calls still work;
+// Mike is public and only answers with more when he knows who you are.
+const authHeaders = () => {
+  const token = readToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
 
 const fetchJson = async (url, options = {}, timeout = 60000) => {
   const controller = new AbortController();
@@ -26,6 +52,13 @@ function App() {
   const [listening, setListening] = useState(false);
   const [conversationMode, setConversationMode] = useState(false);
   const [error, setError] = useState('');
+  const [user, setUser] = useState(null);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [authMode, setAuthMode] = useState('login');
+  const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' });
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [accountsOn, setAccountsOn] = useState(false);
   const audioElRef = useRef(null);
   const recognitionRef = useRef(null);
   const audioContextRef = useRef(null);
@@ -170,7 +203,7 @@ function App() {
     try {
       const data = await fetchJson('/api/tts', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ text }),
       }, 60000);
       if (job !== speakJobRef.current) return;
@@ -223,6 +256,39 @@ function App() {
     }
   };
 
+  const submitAuth = async (e) => {
+    e?.preventDefault?.();
+    if (authBusy) return;
+    setAuthBusy(true);
+    setAuthError('');
+    const path = authMode === 'login' ? '/api/auth/login' : '/api/auth/register';
+    const body =
+      authMode === 'login'
+        ? { email: authForm.email, password: authForm.password }
+        : authForm;
+    try {
+      const data = await fetchJson(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }, 20000);
+      writeToken(data.token);
+      setUser(data.user);
+      setAuthOpen(false);
+      setAuthForm({ name: '', email: '', password: '' });
+    } catch (err) {
+      setAuthError(err.message || 'That did not work. Try again.');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const signOut = () => {
+    writeToken('');
+    setUser(null);
+    setMessages([{ role: 'mike', text: "Signed out. I'm still here if you want to talk." }]);
+  };
+
   const ask = async (raw) => {
     const text = (raw || '').trim();
     if (!text || busy) return;
@@ -236,7 +302,7 @@ function App() {
     try {
       const data = await fetchJson('/api/ask', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ message: text, history }),
       }, 55000);
       setMessages((prev) => [...prev, { role: 'mike', text: data.text }]);
@@ -256,6 +322,28 @@ function App() {
     }
   };
 
+  // Restore the session on load, and find out whether this server has
+  // accounts turned on at all.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const health = await fetchJson('/api/health', {}, 10000);
+        if (!cancelled) setAccountsOn(!!health.accountsConfigured);
+      } catch {
+        // health is best-effort; the sign-in button just stays hidden
+      }
+      if (!readToken()) return;
+      try {
+        const data = await fetchJson('/api/auth/me', { headers: authHeaders() }, 10000);
+        if (!cancelled) setUser(data.user);
+      } catch {
+        writeToken('');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') { setConversation(false); recognitionRef.current?.abort(); stopSpeaking(); } };
     window.addEventListener('keydown', onKey);
@@ -274,8 +362,67 @@ function App() {
       <audio ref={audioElRef} playsInline preload="auto" />
       <header>
         <div className="brand"><b>M</b><div><strong>MIKE AI</strong><small>DOER TOUGH</small></div></div>
-        <span className="status">● {statusText}</span>
+        <div className="header-right">
+          <span className="status">● {statusText}</span>
+          {accountsOn && (user ? (
+            <button className="auth-btn" onClick={signOut} title={user.email}>
+              <LogOut size={15} /> {user.name.split(' ')[0]}
+            </button>
+          ) : (
+            <button className="auth-btn" onClick={() => { setAuthError(''); setAuthOpen(true); }}>
+              <User size={15} /> Sign in
+            </button>
+          ))}
+        </div>
       </header>
+
+      {authOpen && (
+        <div className="auth-overlay" role="dialog" aria-modal="true" onClick={(e) => { if (e.target === e.currentTarget) setAuthOpen(false); }}>
+          <div className="auth-card">
+            <button className="auth-close" onClick={() => setAuthOpen(false)} aria-label="Close"><X size={18} /></button>
+            <h2>{authMode === 'login' ? 'Welcome back' : 'Make an account'}</h2>
+            <p className="auth-sub">
+              {authMode === 'login'
+                ? 'Sign in and Mike picks up where you left off.'
+                : 'So Mike remembers you and your conversations stay yours.'}
+            </p>
+            <form onSubmit={submitAuth} className="auth-form">
+              {authMode === 'register' && (
+                <input
+                  placeholder="Your name"
+                  value={authForm.name}
+                  autoComplete="name"
+                  onChange={(e) => setAuthForm({ ...authForm, name: e.target.value })}
+                />
+              )}
+              <input
+                type="email"
+                placeholder="Email"
+                value={authForm.email}
+                autoComplete="email"
+                onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+              />
+              <input
+                type="password"
+                placeholder={authMode === 'login' ? 'Password' : 'Password (8+ characters)'}
+                value={authForm.password}
+                autoComplete={authMode === 'login' ? 'current-password' : 'new-password'}
+                onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+              />
+              {authError && <div className="auth-error">{authError}</div>}
+              <button type="submit" disabled={authBusy}>
+                {authBusy ? 'Working...' : authMode === 'login' ? 'Sign in' : 'Create account'}
+              </button>
+            </form>
+            <button
+              className="auth-switch"
+              onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); setAuthError(''); }}
+            >
+              {authMode === 'login' ? "No account yet? Make one." : 'Already have an account? Sign in.'}
+            </button>
+          </div>
+        </div>
+      )}
 
       <section className="voice-hero">
         <div className={'voice-box ' + (listening ? 'is-listening' : speaking ? 'is-speaking' : '')} onClick={toggleConversation} role="button" tabIndex={0} aria-label={conversationMode ? 'Stop talking with Mike' : 'Start talking with Mike'} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleConversation(); }}>
