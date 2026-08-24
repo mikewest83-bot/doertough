@@ -1,4 +1,5 @@
 import express from 'express';
+import http from 'http';
 import path from 'path';
 import { Readable } from 'stream';
 import { fileURLToPath } from 'url';
@@ -9,6 +10,7 @@ import { BUSINESS_TOOLS, BUSINESS_TOOL_HANDLERS } from './business.mjs';
 import { installGuards } from './guard.mjs';
 import { MIKE_INSTRUCTIONS } from './persona.mjs';
 import { migrate } from './db.mjs';
+import { initializeSpeechEngine, getSpeechEngineToken } from './speech-engine.mjs';
 import {
   register,
   login,
@@ -126,6 +128,17 @@ async function resolveMikeVoice() {
   console.log(`[voice] selected: ${ranked[0].voice.name} (${cachedVoiceId})`);
   return cachedVoiceId;
 }
+
+// ===== Realtime voice =====
+app.get('/api/speech/token', optionalAuth, async (req, res) => {
+  try {
+    const result = await getSpeechEngineToken();
+    res.json(result);
+  } catch (err) {
+    console.error('[speech-engine] token failed:', err.message || err);
+    res.status(err.status || 502).json({ error: err.message || 'speech_engine_unavailable' });
+  }
+});
 
 // ===== Routes =====
 
@@ -553,10 +566,18 @@ app.use((req, res) => {
 // rather than taking the whole server down.
 migrate().catch((err) => console.error('[db] migrate threw:', err.message || err));
 
-app.listen(PORT, () => {
+const server = http.createServer(app);
+
+server.listen(PORT, async () => {
   console.log(`[mike-ai] listening on port ${PORT}`);
   console.log(`[mike-ai] openai: ${!!process.env.OPENAI_API_KEY}`);
   console.log(`[mike-ai] elevenlabs: ${!!process.env.ELEVENLABS_API_KEY}`);
   console.log(`[mike-ai] fal: ${!!process.env.FAL_KEY}`);
   console.log(`[mike-ai] accounts: ${authConfigured()}`);
+  try {
+    const engineId = await initializeSpeechEngine(server);
+    console.log(`[mike-ai] realtime voice ready: ${engineId || 'disabled'}`);
+  } catch (err) {
+    console.error('[mike-ai] realtime voice initialization failed:', err.message || err);
+  }
 });
