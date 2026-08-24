@@ -1,20 +1,33 @@
 // server/business.mjs
 //
 // Doer Tough business tools for Mike AI: store sales (Shopify Admin API)
-// and trading bot status (Alpaca). Both degrade gracefully — if credentials
+// and trading bot status (Alpaca). Both degrade gracefully - if credentials
 // aren't set, the tool returns a plain note instead of throwing, so Mike
 // says "that isn't wired up yet" rather than erroring out mid-answer.
 //
+// Shopify auth note: as of Jan 1 2026 Shopify no longer issues permanent
+// shpat_ tokens. Dev Dashboard apps get a client ID + secret, which are
+// exchanged for a short-lived token via the client credentials grant.
+// This file mints that token on demand and caches it until just before
+// it expires. A legacy shpat_ token, if you still have one, still works
+// and takes precedence.
+//
 // Env:
-//   SHOPIFY_STORE_DOMAIN   default sae061-ws.myshopify.com
-//   SHOPIFY_ADMIN_TOKEN    Admin API access token (needs read_orders, read_products)
-//   SHOPIFY_API_VERSION    default 2025-01
+//   SHOPIFY_STORE_DOMAIN    default sae061-ws.myshopify.com
+//   SHOPIFY_CLIENT_ID       Dev Dashboard app client ID
+//   SHOPIFY_CLIENT_SECRET   Dev Dashboard app client secret (shpss_...)
+//   SHOPIFY_ADMIN_TOKEN     optional legacy shpat_ token; overrides the above
+//   SHOPIFY_API_VERSION     default 2026-07
 //   ALPACA_KEY / ALPACA_SECRET
-//   PAPER                  'false' for the live endpoint; defaults to paper
+//   PAPER                   'false' for the live endpoint; defaults to paper
 
 const SHOPIFY_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN || 'sae061-ws.myshopify.com';
-const SHOPIFY_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN || '';
-const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || '2025-01';
+const SHOPIFY_CLIENT_ID = process.env.SHOPIFY_CLIENT_ID || '';
+const SHOPIFY_CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET || '';
+const SHOPIFY_LEGACY_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN || '';
+const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || '2026-07';
+
+const shopifyConfigured = !!SHOPIFY_LEGACY_TOKEN || !!(SHOPIFY_CLIENT_ID && SHOPIFY_CLIENT_SECRET);
 
 const ALPACA_KEY = process.env.ALPACA_KEY || '';
 const ALPACA_SECRET = process.env.ALPACA_SECRET || '';
@@ -25,13 +38,54 @@ const ALPACA_BASE = ALPACA_PAPER
 
 const money = (n) => Math.round(Number(n || 0) * 100) / 100;
 
-// ===== Shopify =====
+// ===== Shopify auth =====
+
+// Cached access token. Shopify issues these for ~24h; we refresh at 90% of
+// the stated lifetime so a request never lands on an expiring token.
+let tokenCache = { value: '', expiresAt: 0 };
+
+async function getShopifyToken() {
+  if (SHOPIFY_LEGACY_TOKEN) return SHOPIFY_LEGACY_TOKEN;
+
+  if (tokenCache.value && Date.now() < tokenCache.expiresAt) {
+    return tokenCache.value;
+  }
+
+  const res = await fetch(`https://${SHOPIFY_DOMAIN}/admin/oauth/access_token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_id: SHOPIFY_CLIENT_ID,
+      client_secret: SHOPIFY_CLIENT_SECRET,
+      grant_type: 'client_credentials',
+    }),
+    signal: AbortSignal.timeout(10000),
+  });
+
+  const body = await res.json().catch(() => ({}));
+
+  if (!res.ok || !body.access_token) {
+    const detail = body.error_description || body.error || JSON.stringify(body).slice(0, 200);
+    throw new Error(`shopify_token_${res.status}: ${detail}`);
+  }
+
+  const lifetimeMs = Number(body.expires_in || 86400) * 1000;
+  tokenCache = {
+    value: body.access_token,
+    expiresAt: Date.now() + lifetimeMs * 0.9,
+  };
+
+  console.log(`[shopify] minted access token, valid ~${Math.round(lifetimeMs / 3600000)}h`);
+  return tokenCache.value;
+}
 
 async function shopifyGraphQL(query, variables = {}) {
+  const token = await getShopifyToken();
+
   const res = await fetch(`https://${SHOPIFY_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
     method: 'POST',
     headers: {
-      'X-Shopify-Access-Token': SHOPIFY_TOKEN,
+      'X-Shopify-Access-Token': token,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ query, variables }),
@@ -39,6 +93,12 @@ async function shopifyGraphQL(query, variables = {}) {
   });
 
   const body = await res.json().catch(() => ({}));
+
+  // A 401 on a token we thought was good means it was revoked early.
+  // Drop the cache so the next call mints a fresh one.
+  if (res.status === 401) {
+    tokenCache = { value: '', expiresAt: 0 };
+  }
 
   if (!res.ok) {
     throw new Error(`shopify_${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
@@ -70,10 +130,10 @@ const ORDERS_QUERY = `
 `;
 
 export async function getStoreSales({ days } = {}) {
-  if (!SHOPIFY_TOKEN) {
+  if (!shopifyConfigured) {
     return {
       configured: false,
-      note: 'Shopify is not connected yet — SHOPIFY_ADMIN_TOKEN is not set on the server.',
+      note: 'Shopify is not connected yet - no Shopify credentials are set on the server.',
     };
   }
 
@@ -152,7 +212,7 @@ export async function getBotStatus() {
   if (!ALPACA_KEY || !ALPACA_SECRET) {
     return {
       configured: false,
-      note: 'The trading account is not connected here — ALPACA_KEY / ALPACA_SECRET are not set on this server.',
+      note: 'The trading account is not connected here - ALPACA_KEY / ALPACA_SECRET are not set on this server.',
     };
   }
 
