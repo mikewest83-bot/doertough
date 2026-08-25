@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node scripts/patch-openai-realtime.mjs && vite build",
     "start": "node server/index.mjs"
   },
   "dependencies": {
