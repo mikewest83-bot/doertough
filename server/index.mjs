@@ -1,5 +1,6 @@
 import express from 'express';
 import http from 'http';
+import crypto from 'crypto';
 import path from 'path';
 import { Readable } from 'stream';
 import { fileURLToPath } from 'url';
@@ -15,10 +16,18 @@ import {
   migrate,
   hasPro,
   recordVoiceSession,
+  closeVoiceSession,
   countVoiceSessions,
   countVoiceSessionsGlobal,
+  countVoiceSeconds,
+  countVoiceSecondsGlobal,
 } from './db.mjs';
-import { createCheckoutSession, createPortalSession, billingConfigured } from './billing.mjs';
+import {
+  createCheckoutSession,
+  createPortalSession,
+  billingConfigured,
+  hasActiveSubscription,
+} from './billing.mjs';
 import { initializeSpeechEngine, getSpeechEngineToken } from './speech-engine.mjs';
 import {
   verifyStripeSignature,
@@ -211,6 +220,18 @@ const VOICE_SESSIONS_PRO = Number(process.env.VOICE_SESSIONS_PRO || 40);
 const VOICE_SESSIONS_FREE = Number(process.env.VOICE_SESSIONS_FREE || 1);
 const VOICE_SESSIONS_GLOBAL = Number(process.env.VOICE_SESSIONS_GLOBAL || 120);
 
+// MINUTE budget - the one that actually tracks the bill, since ElevenLabs
+// charges per minute and a session count can't tell a 20-second chat from a
+// 10-minute one. Both budgets apply; whichever runs out first stops the
+// session. Keep MAX_SESSION_SECONDS equal to the engine's own
+// max_duration_seconds in speech-engine.mjs, or the reservation under-charges.
+//
+// Env: VOICE_MINUTES_PRO (200) · VOICE_MINUTES_FREE (10) · VOICE_MINUTES_GLOBAL (5000)
+const MAX_SESSION_SECONDS = Number(process.env.VOICE_MAX_SESSION_SECONDS || 600);
+const VOICE_MINUTES_PRO = Number(process.env.VOICE_MINUTES_PRO || 200);
+const VOICE_MINUTES_FREE = Number(process.env.VOICE_MINUTES_FREE || 10);
+const VOICE_MINUTES_GLOBAL = Number(process.env.VOICE_MINUTES_GLOBAL || 5000);
+
 app.get('/api/speech/token', async (req, res) => {
   try {
     if (!req.user) {
@@ -221,20 +242,43 @@ app.get('/api/speech/token', async (req, res) => {
     }
 
     const pro = hasPro(req.user);
-    const allowance = pro ? VOICE_SESSIONS_PRO : VOICE_SESSIONS_FREE;
-    const used = await countVoiceSessions(req.user.id);
-    if (used >= allowance) {
-      return res.status(402).json({
+    const outOfBudget = () =>
+      res.status(402).json({
         error: pro ? 'voice_allowance_reached' : 'upgrade_required',
         message: pro
           ? "You've used this month's voice time. It resets on a rolling 30-day window."
           : 'Start your free trial to talk with Mike.',
       });
+
+    // Gate 1: session count.
+    const allowance = pro ? VOICE_SESSIONS_PRO : VOICE_SESSIONS_FREE;
+    const used = await countVoiceSessions(req.user.id);
+    if (used >= allowance) return outOfBudget();
+
+    // Gate 2: minutes. There has to be room for a FULL session, not a
+    // sliver - otherwise someone with 30 seconds left starts a call that
+    // runs ten minutes and overshoots the budget anyway.
+    const secondsAllowance = (pro ? VOICE_MINUTES_PRO : VOICE_MINUTES_FREE) * 60;
+    const secondsUsed = await countVoiceSeconds(req.user.id);
+    if (secondsUsed + MAX_SESSION_SECONDS > secondsAllowance) {
+      console.log(
+        `[speech-engine] account #${req.user.id} out of minutes ` +
+          `(${Math.round(secondsUsed / 60)}/${secondsAllowance / 60})`
+      );
+      return outOfBudget();
     }
 
+    // Gate 3: the workspace-wide pool, on both units.
     const globalUsed = await countVoiceSessionsGlobal();
-    if (globalUsed >= VOICE_SESSIONS_GLOBAL) {
-      console.error(`[speech-engine] global session ceiling hit (${globalUsed})`);
+    const globalSeconds = await countVoiceSecondsGlobal();
+    if (
+      globalUsed >= VOICE_SESSIONS_GLOBAL ||
+      globalSeconds + MAX_SESSION_SECONDS > VOICE_MINUTES_GLOBAL * 60
+    ) {
+      console.error(
+        `[speech-engine] global ceiling hit - ${globalUsed} sessions, ` +
+          `${Math.round(globalSeconds / 60)} minutes`
+      );
       return res.status(503).json({
         error: 'voice_capacity_reached',
         message: 'Mike is at capacity right now. Try again a bit later.',
@@ -242,11 +286,60 @@ app.get('/api/speech/token', async (req, res) => {
     }
 
     const result = await getSpeechEngineToken();
-    await recordVoiceSession(req.user.id, result.agentId);
-    res.json(result);
+
+    // Charge the worst case now. The client hands the key back on hangup to
+    // settle it down to the real duration; if it never does, the full
+    // reservation stands.
+    const sessionKey = crypto.randomUUID();
+    await recordVoiceSession(req.user.id, result.agentId, {
+      sessionKey,
+      reservedSeconds: MAX_SESSION_SECONDS,
+    });
+
+    res.json({
+      ...result,
+      sessionKey,
+      maxSessionSeconds: MAX_SESSION_SECONDS,
+      minutesRemaining: Math.max(0, Math.floor((secondsAllowance - secondsUsed) / 60)),
+    });
   } catch (err) {
     console.error('[speech-engine] token failed:', err.message || err);
     res.status(err.status || 502).json({ error: err.message || 'speech_engine_unavailable' });
+  }
+});
+
+// Settle a finished voice session. The browser posts the real duration when
+// the call ends, which releases the unused part of the reservation.
+//
+// This trusts the client to report honestly, which is fine because it can
+// only ever REDUCE its own allowance usage below the worst case already
+// charged - and the session-count gate still applies in parallel, so
+// under-reporting cannot buy unlimited calls. The value is clamped to one
+// session's maximum and the update is single-use.
+app.post('/api/speech/session-end', authRequired, async (req, res) => {
+  try {
+    const sessionKey = String(req.body?.sessionKey || '').trim();
+    if (!sessionKey) return res.status(400).json({ error: 'session_key_required' });
+
+    const reported = Number(req.body?.seconds);
+    if (!Number.isFinite(reported) || reported < 0) {
+      return res.status(400).json({ error: 'seconds_invalid' });
+    }
+
+    const seconds = Math.min(Math.round(reported), MAX_SESSION_SECONDS);
+    const row = await closeVoiceSession(sessionKey, req.user.id, seconds);
+
+    if (!row) {
+      // Unknown key, someone else's session, or already settled. Not an
+      // error worth surfacing - the reservation simply stands.
+      return res.json({ settled: false });
+    }
+
+    console.log(`[speech-engine] session settled: ${seconds}s for account #${req.user.id}`);
+    res.json({ settled: true, seconds });
+  } catch (err) {
+    console.error('[speech-engine] settle failed:', err.message || err);
+    res.status(500).json({ error: 'settle_failed' });
   }
 });
 
@@ -256,6 +349,19 @@ app.get('/api/speech/token', async (req, res) => {
 // that actually paid.
 app.post('/api/billing/checkout', authRequired, async (req, res) => {
   try {
+    // An account that already subscribes gets the management portal, not a
+    // second checkout. Handing back a portal URL under the same `url` key
+    // means an older client that just follows `url` still does the right
+    // thing rather than erroring.
+    if (hasActiveSubscription(req.user)) {
+      console.log(`[billing] account #${req.user.id} already subscribed - routing to portal`);
+      const portal = await createPortalSession(req.user);
+      return res.json({
+        ...portal,
+        alreadySubscribed: true,
+        message: 'You already have Mike AI Pro. This opens your billing settings.',
+      });
+    }
     res.json(await createCheckoutSession(req.user));
   } catch (err) {
     console.error('[billing] checkout failed:', err.message || err);
@@ -304,6 +410,14 @@ app.get('/api/health', (req, res) => {
     liveAvatarConfigured: !!process.env.LIVEAVATAR_API_KEY && !!process.env.LIVEAVATAR_AVATAR_ID,
     liveToolsConfigured: true,
     toolCount: LIVE_TOOLS.length,
+    voiceBudget: {
+      maxSessionSeconds: MAX_SESSION_SECONDS,
+      proMinutes: VOICE_MINUTES_PRO,
+      freeMinutes: VOICE_MINUTES_FREE,
+      globalMinutes: VOICE_MINUTES_GLOBAL,
+      proSessions: VOICE_SESSIONS_PRO,
+      globalSessions: VOICE_SESSIONS_GLOBAL,
+    },
     accountsConfigured: authConfigured(),
     billingConfigured: billingConfigured(),
     model: OPENAI_MODEL,
