@@ -14,7 +14,14 @@
 
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { dbEnabled, createUser, getUserByEmail, getUserById, touchUser } from './db.mjs';
+import {
+  dbEnabled,
+  createUser,
+  getUserByEmail,
+  getUserById,
+  touchUser,
+  hasPro,
+} from './db.mjs';
 
 const JWT_SECRET = process.env.JWT_SECRET || '';
 const TOKEN_TTL = '30d';
@@ -25,11 +32,19 @@ export const authConfigured = () => dbEnabled && !!JWT_SECRET;
 
 const sign = (user) => jwt.sign({ uid: String(user.id) }, JWT_SECRET, { expiresIn: TOKEN_TTL });
 
+// What the browser is allowed to know about an account. Subscription state is
+// included so the UI can show the right button, but it is only ever READ here
+// - the Stripe webhook is the only thing that writes it.
 export const publicUser = (u) => ({
   id: String(u.id),
   name: u.name,
   email: u.email,
   isOwner: isOwner(u),
+  plan: u.plan || 'free',
+  isPro: hasPro(u),
+  subscriptionStatus: u.subscription_status || null,
+  currentPeriodEnd: u.current_period_end || null,
+  hasBillingAccount: !!u.stripe_customer_id,
 });
 
 // The owner is the single account allowed to see Mike's own business data.
@@ -90,7 +105,8 @@ export async function register(req, res) {
     const passwordHash = await bcrypt.hash(String(password), 12);
     const user = await createUser({ email: cleanEmail, name: cleanName, passwordHash });
 
-    console.log(`[auth] new account: ${cleanEmail}`);
+    // Log the account creation without printing the address itself.
+    console.log(`[auth] new account #${user.id}`);
     res.json({ token: sign(user), user: publicUser(user) });
   } catch (err) {
     console.error('[auth] register failed:', err.message || err);
@@ -143,7 +159,9 @@ async function userFromRequest(req) {
 
 // Hard gate: 401 if there is no valid session.
 export async function authRequired(req, res, next) {
-  const user = await userFromRequest(req);
+  // optionalAuth runs app-wide before the guard, so req.user is usually
+  // already resolved by the time we get here.
+  const user = req.user || (await userFromRequest(req));
   if (!user) {
     return res.status(401).json({ error: 'Sign in to continue.' });
   }
@@ -156,7 +174,7 @@ export async function authRequired(req, res, next) {
 // signed-in visitor simply gets more.
 export async function optionalAuth(req, res, next) {
   try {
-    req.user = await userFromRequest(req);
+    if (!req.user) req.user = await userFromRequest(req);
   } catch {
     req.user = null;
   }
