@@ -34,10 +34,20 @@ function addBubble(role, text) {
 // Ships a failure to the server so it shows up in the deploy log. The realtime
 // session breaks in the browser, on the leg to ElevenLabs' LiveKit host, which
 // the server otherwise never sees. Best-effort: never let reporting throw.
-async function reportFailure(phase, error) {
+async function reportFailure(phase, error, context) {
   try {
     const extraKeys = ['reason', 'code', 'status', 'context', 'detail', 'cause', 'stack'];
     const extra = {};
+    // The SDK hands onError a SECOND argument for server-sent error events —
+    // errorType, code, debugMessage, details. That object holds the actual
+    // reason; the message string is only ever "Server error: Unknown error".
+    if (context !== undefined && context !== null) {
+      try {
+        extra.sdkContext = JSON.stringify(context, Object.getOwnPropertyNames(context)).slice(0, 600);
+      } catch {
+        extra.sdkContext = String(context).slice(0, 600);
+      }
+    }
     for (const key of extraKeys) {
       const value = error?.[key];
       if (value === undefined || value === null) continue;
@@ -104,11 +114,11 @@ function sessionOptions(token, iceTransportPolicy) {
       setVisual('ready');
       console.log('[mike-realtime] disconnected');
     },
-    onError: (error) => {
+    onError: (error, context) => {
       starting = false;
       connected = false;
-      console.error('[mike-realtime] SDK error:', error);
-      reportFailure('sdk_error', error);
+      console.error('[mike-realtime] SDK error:', error, context);
+      reportFailure('sdk_error', error, context);
       setVisual('ready', `Mike voice connection failed: ${error?.message || 'unknown realtime error'}`);
     },
     onModeChange: ({ mode }) => setVisual(mode === 'speaking' ? 'speaking' : 'listening'),
