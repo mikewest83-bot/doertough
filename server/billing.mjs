@@ -4,7 +4,16 @@
 const STRIPE_API = 'https://api.stripe.com/v1';
 const SECRET = process.env.STRIPE_SECRET_KEY || '';
 const PRICE_ID = process.env.STRIPE_PRICE_ID || '';
-const APP_URL = process.env.PUBLIC_APP_URL || 'https://doertoughmikeai.com';
+// Where Stripe sends the customer back to. This is DELIBERATELY separate from
+// PUBLIC_APP_URL: that variable is currently the Railway host and also feeds
+// the speech engine's WebSocket URL, which is working and must not move. The
+// session cookie is scoped to the custom domain, so returning a paying
+// customer to the Railway host lands them logged out on a URL they do not
+// recognise, moments after they paid.
+//
+// Precedence: BILLING_RETURN_URL, then the canonical brand domain. Set
+// BILLING_RETURN_URL to http://localhost:3000 for local testing.
+const RETURN_URL = String(process.env.BILLING_RETURN_URL || 'https://doertoughmikeai.com').replace(/\/+$/, '');
 const TRIAL_DAYS = Number(process.env.PRO_TRIAL_DAYS || 3);
 
 export const billingConfigured = () => !!SECRET && !!PRICE_ID;
@@ -45,8 +54,8 @@ export async function createCheckoutSession(user) {
     'line_items[0][price]': PRICE_ID,
     'line_items[0][quantity]': 1,
     client_reference_id: String(user.id),
-    success_url: `${APP_URL}/?checkout=success`,
-    cancel_url: `${APP_URL}/?checkout=cancelled`,
+    success_url: `${RETURN_URL}/?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${RETURN_URL}/?checkout=cancelled`,
     allow_promotion_codes: 'true',
     'subscription_data[metadata][mike_user_id]': String(user.id),
   };
@@ -60,7 +69,7 @@ export async function createCheckoutSession(user) {
 export async function createPortalSession(user) {
   if (!billingConfigured()) { const err = new Error('billing_not_configured'); err.status = 503; throw err; }
   if (!user.stripe_customer_id) { const err = new Error('no_subscription'); err.status = 400; throw err; }
-  const session = await stripePost('/billing_portal/sessions', { customer: user.stripe_customer_id, return_url: `${APP_URL}/` });
+  const session = await stripePost('/billing_portal/sessions', { customer: user.stripe_customer_id, return_url: `${RETURN_URL}/` });
   return { url: session.url };
 }
 
