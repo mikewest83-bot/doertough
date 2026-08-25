@@ -33,7 +33,14 @@ const PROTECTED = [
 
 // Auth routes get their own, tighter budget. Unlimited password attempts undo
 // every other precaution in the login handler.
-const AUTH_PROTECTED = ['/api/auth/login', '/api/auth/register'];
+const AUTH_PROTECTED = [
+  '/api/auth/login',
+  '/api/auth/register',
+  // Reset endpoints are password-guessing adjacent: forgot-password is an
+  // email-enumeration probe if left open, reset-password is a token guess.
+  '/api/auth/forgot-password',
+  '/api/auth/reset-password',
+];
 
 const DEFAULT_ORIGINS = [
   'https://doertoughmikeai.com',
