@@ -75,6 +75,26 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_end              TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS users_stripe_customer_idx ON users (stripe_customer_id);
 
+-- Bumped whenever a password changes. The number is baked into every JWT, so
+-- raising it invalidates tokens issued before the change - a stolen or shared
+-- session cannot outlive a password reset.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INT NOT NULL DEFAULT 0;
+
+-- Password reset tickets. Only the SHA-256 of the token is stored, so a leak
+-- of this table does not hand anyone a working reset link. Single use, and
+-- short lived.
+CREATE TABLE IF NOT EXISTS password_resets (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at    TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS password_resets_hash_idx ON password_resets (token_hash);
+CREATE INDEX IF NOT EXISTS password_resets_user_idx ON password_resets (user_id);
+
 -- One row per realtime voice session handed out. This is what stops a single
 -- visitor consuming the workspace's monthly ElevenLabs minutes.
 CREATE TABLE IF NOT EXISTS voice_sessions (
@@ -164,6 +184,56 @@ export async function createUser({ email, name, passwordHash }) {
     [normalizeEmail(email), String(name).trim(), passwordHash]
   );
   return rows[0];
+}
+
+// Issue a reset ticket. Any older unused ticket for this account is burned
+// first, so requesting a second link silently kills the first.
+export async function createPasswordReset(userId, tokenHash, expiresAt) {
+  await query(
+    `UPDATE password_resets SET used_at = now()
+      WHERE user_id = $1 AND used_at IS NULL`,
+    [userId]
+  );
+  const { rows } = await query(
+    `INSERT INTO password_resets (user_id, token_hash, expires_at)
+     VALUES ($1, $2, $3)
+     RETURNING *`,
+    [userId, tokenHash, expiresAt]
+  );
+  return rows[0];
+}
+
+export async function findPasswordReset(tokenHash) {
+  const { rows } = await query(
+    `SELECT * FROM password_resets
+      WHERE token_hash = $1
+        AND used_at IS NULL
+        AND expires_at > now()`,
+    [tokenHash]
+  );
+  return rows[0] || null;
+}
+
+// Consume the ticket and set the new password in one shot. token_version is
+// bumped in the same statement, which signs out every existing session.
+export async function consumePasswordReset(resetId, userId, passwordHash) {
+  const { rows } = await query(
+    `UPDATE password_resets SET used_at = now()
+      WHERE id = $1 AND used_at IS NULL
+      RETURNING id`,
+    [resetId]
+  );
+  if (!rows[0]) return null;
+
+  const updated = await query(
+    `UPDATE users
+        SET password_hash = $2,
+            token_version = token_version + 1
+      WHERE id = $1
+      RETURNING *`,
+    [userId, passwordHash]
+  );
+  return updated.rows[0] || null;
 }
 
 export async function touchUser(id) {
