@@ -16,6 +16,8 @@ const ENGINE_WS_URL = `${PUBLIC_URL.replace(/^http/, 'ws')}${WS_PATH}`;
 const MIKE_VOICE_NAME = 'Mike AI - Doer Tough Southern';
 const MIKE_VOICE_DESCRIPTION = 'A confident, friendly American man in his 40s with a thick, authentic Southern American English accent and a natural Southern drawl. Think South Carolina, Georgia, or Tennessee rather than Northern or neutral American. Blue-collar, hardworking, upbeat, warm and conversational. Deep, masculine, resonant but clear voice, slightly fast conversational pace, excellent Southern enunciation, natural pauses, relaxed country character. Sounds like a real Southern guy talking one-on-one, not a radio announcer, actor, caricature, or exaggerated cowboy.';
 const MIKE_VOICE_TEXT = 'Alright, let us keep this simple. We are going to do the work, stay tough, and keep moving forward. You do not have to have everything figured out today. Take the next step, handle what is in front of you, and let us get it done.';
+const MIKE_TTS = { model_id: 'eleven_flash_v2', stability: 0.52, speed: 1.1, similarity_boost: 0.85, optimize_streaming_latency: 3, agent_output_audio_format: 'pcm_24000' };
+const MIKE_TURN = { turn_timeout: 5, silence_end_call_timeout: -1, turn_eagerness: 'normal', mode: 'turn' };
 const requireKey = (key, name) => { if (!key) throw new Error(`${name}_not_configured`); };
 const elevenlabs = process.env.ELEVENLABS_API_KEY ? new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY }) : null;
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
@@ -67,7 +69,7 @@ async function resolveCompatibleVoiceId() {
 }
 async function syncAndVerifyEngine(engineId) {
   const headers = { 'xi-api-key': process.env.ELEVENLABS_API_KEY, 'Content-Type': 'application/json' }; const url = `https://api.elevenlabs.io/v1/speech-engine/${encodeURIComponent(engineId)}`; const voiceId = await resolveCompatibleVoiceId();
-  const updateResponse = await fetch(url, { method: 'PATCH', headers, body: JSON.stringify({ speech_engine: { ws_url: ENGINE_WS_URL }, tts: { voice_id: voiceId } }) });
+  const updateResponse = await fetch(url, { method: 'PATCH', headers, body: JSON.stringify({ speech_engine: { ws_url: ENGINE_WS_URL }, tts: { ...MIKE_TTS, voice_id: voiceId }, turn: MIKE_TURN }) });
   if (!updateResponse.ok) { const raw = await updateResponse.text(); throw new Error(`speech_engine_update_${updateResponse.status}: ${raw.slice(0, 500)}`); }
   const updated = await updateResponse.json().catch(() => null); const actualUrl = updated?.speech_engine?.ws_url || null; const actualVoiceId = updated?.tts?.voice_id || null;
   if (actualUrl !== ENGINE_WS_URL) throw new Error(`speech_engine_ws_url_mismatch: expected=${ENGINE_WS_URL} actual=${actualUrl || 'missing'}`);
@@ -80,7 +82,7 @@ async function ensureEngine() {
   const listResponse = await fetch(searchUrl, { headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY } });
   if (listResponse.ok) { const data = await listResponse.json(); const existing = (data.speech_engines || []).find((item) => item.name === ENGINE_NAME); if (existing?.speech_engine_id) { cachedEngineId = existing.speech_engine_id; return syncAndVerifyEngine(cachedEngineId); } }
   const voiceId = await resolveCompatibleVoiceId();
-  const createResponse = await fetch('https://api.elevenlabs.io/v1/speech-engine', { method: 'POST', headers, body: JSON.stringify({ name: ENGINE_NAME, speech_engine: { ws_url: ENGINE_WS_URL }, asr: { quality: 'high', provider: 'elevenlabs', user_input_audio_format: 'pcm_16000' }, tts: { model_id: 'eleven_flash_v2', voice_id: voiceId, agent_output_audio_format: 'pcm_24000', optimize_streaming_latency: 3, stability: 0.55, speed: 1.08, similarity_boost: 0.85 }, turn: { turn_timeout: 6, silence_end_call_timeout: -1, turn_eagerness: 'normal', mode: 'turn' }, vad: { background_voice_detection: false }, conversation: { max_duration_seconds: 600, client_events: ['audio', 'interruption', 'agent_response', 'user_transcript'] }, language: 'en', tags: ['mike-ai', 'doer-tough', 'production'], overrides: { first_message: false } }) });
+  const createResponse = await fetch('https://api.elevenlabs.io/v1/speech-engine', { method: 'POST', headers, body: JSON.stringify({ name: ENGINE_NAME, speech_engine: { ws_url: ENGINE_WS_URL }, asr: { quality: 'high', provider: 'elevenlabs', user_input_audio_format: 'pcm_16000' }, tts: MIKE_TTS, turn: MIKE_TURN, vad: { background_voice_detection: false }, conversation: { max_duration_seconds: 600, client_events: ['audio', 'interruption', 'agent_response', 'user_transcript'] }, language: 'en', tags: ['mike-ai', 'doer-tough', 'production'], overrides: { first_message: false } }) });
   const raw = await createResponse.text(); if (!createResponse.ok) throw new Error(`speech_engine_create_${createResponse.status}: ${raw.slice(0, 500)}`); const data = JSON.parse(raw); cachedEngineId = data.speech_engine_id; console.log(`[speech-engine] created ${cachedEngineId} with upstream ${ENGINE_WS_URL}`); return cachedEngineId;
 }
 function transcriptToInput(transcript) { return transcript.map((item) => ({ role: item.role === 'agent' ? 'assistant' : 'user', content: item.content })); }
@@ -96,7 +98,7 @@ async function respondToTranscript(transcript, signal, session) {
     for (const call of calls) {
       let args = {}; try { args = call.arguments ? JSON.parse(call.arguments) : {}; } catch {}
       const handler = VOICE_TOOL_HANDLERS[call.name]; let output;
-      try { output = handler ? await handler(args) : { error: `Unknown tool "${call.name}".` }; } catch (toolErr) { console.error(`[speech-engine] voice tool ${call.name} failed:`, toolErr.message || toolErr); output = { error: toolErr.message || 'tool_unavailable' }; }
+      try { output = handler ? await handler(args) : { error: `Unknown tool \"${call.name}\".` }; } catch (toolErr) { console.error(`[speech-engine] voice tool ${call.name} failed:`, toolErr.message || toolErr); output = { error: toolErr.message || 'tool_unavailable' }; }
       input.push({ type: 'function_call_output', call_id: call.call_id, output: JSON.stringify(output) });
     }
   }
