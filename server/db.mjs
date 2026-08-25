@@ -84,8 +84,24 @@ CREATE TABLE IF NOT EXISTS voice_sessions (
   started_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Minute accounting. ElevenLabs bills by the minute, not by the session, so
+-- a session count alone can't bound the cost: a 20-second chat and a
+-- 10-minute one used to cost the same against the budget.
+--
+-- reserved_seconds is charged UP FRONT at the worst case (the engine's own
+-- max_duration_seconds). actual_seconds replaces it when the client reports
+-- the real duration on hangup. A session that is never reported -- crash,
+-- closed tab, hostile client -- keeps its full reservation, so the budget
+-- fails CLOSED rather than leaking free minutes.
+ALTER TABLE voice_sessions ADD COLUMN IF NOT EXISTS reserved_seconds INT NOT NULL DEFAULT 600;
+ALTER TABLE voice_sessions ADD COLUMN IF NOT EXISTS actual_seconds   INT;
+ALTER TABLE voice_sessions ADD COLUMN IF NOT EXISTS session_key      TEXT;
+ALTER TABLE voice_sessions ADD COLUMN IF NOT EXISTS ended_at         TIMESTAMPTZ;
+
 CREATE INDEX IF NOT EXISTS voice_sessions_user_time_idx ON voice_sessions (user_id, started_at);
 CREATE INDEX IF NOT EXISTS voice_sessions_time_idx ON voice_sessions (started_at);
+CREATE UNIQUE INDEX IF NOT EXISTS voice_sessions_key_idx ON voice_sessions (session_key)
+  WHERE session_key IS NOT NULL;
 
 -- Saved conversations, so history is built server-side instead of being
 -- posted up by the browser on every turn.
@@ -231,14 +247,33 @@ export async function setSubscriptionState(userId, {
 
 // ===== Voice metering =====
 
-export async function recordVoiceSession(userId, engineId) {
+export async function recordVoiceSession(userId, engineId, { sessionKey, reservedSeconds } = {}) {
   const { rows } = await query(
-    `INSERT INTO voice_sessions (user_id, engine_id)
-     VALUES ($1, $2)
+    `INSERT INTO voice_sessions (user_id, engine_id, session_key, reserved_seconds)
+     VALUES ($1, $2, $3, COALESCE($4, 600))
      RETURNING *`,
-    [userId, engineId || null]
+    [userId, engineId || null, sessionKey || null, reservedSeconds ?? null]
   );
   return rows[0];
+}
+
+// Reconcile a finished session down to what it actually used. Single-use: the
+// WHERE clause refuses a second report for the same key, so a replayed call
+// can't keep shrinking the bill. The caller is responsible for clamping
+// `seconds` to the per-session maximum before this is reached.
+export async function closeVoiceSession(sessionKey, userId, seconds) {
+  if (!sessionKey) return null;
+  const { rows } = await query(
+    `UPDATE voice_sessions
+        SET actual_seconds = $3,
+            ended_at = now()
+      WHERE session_key = $1
+        AND user_id = $2
+        AND actual_seconds IS NULL
+      RETURNING *`,
+    [String(sessionKey), userId, Math.max(0, Math.round(Number(seconds) || 0))]
+  );
+  return rows[0] || null;
 }
 
 // The voice budget resets on a rolling 30-day window.
@@ -262,6 +297,28 @@ export async function countVoiceSessionsGlobal() {
       WHERE started_at >= now() - interval '30 days'`
   );
   return rows[0]?.count || 0;
+}
+
+// Minutes actually owed, on the same rolling 30-day window. An open session
+// counts at its full reservation until it reports in.
+export async function countVoiceSeconds(userId) {
+  const { rows } = await query(
+    `SELECT COALESCE(SUM(COALESCE(actual_seconds, reserved_seconds)), 0)::int AS seconds
+       FROM voice_sessions
+      WHERE user_id = $1
+        AND started_at >= now() - interval '30 days'`,
+    [userId]
+  );
+  return rows[0]?.seconds || 0;
+}
+
+export async function countVoiceSecondsGlobal() {
+  const { rows } = await query(
+    `SELECT COALESCE(SUM(COALESCE(actual_seconds, reserved_seconds)), 0)::int AS seconds
+       FROM voice_sessions
+      WHERE started_at >= now() - interval '30 days'`
+  );
+  return rows[0]?.seconds || 0;
 }
 
 // ===== Conversations =====
