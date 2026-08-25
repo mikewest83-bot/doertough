@@ -7,6 +7,8 @@ import OpenAI from 'openai';
 import { fal } from '@fal-ai/client';
 import { LIVE_TOOLS as BASE_TOOLS, LIVE_TOOL_HANDLERS as BASE_HANDLERS } from './live.mjs';
 import { BUSINESS_TOOLS, BUSINESS_TOOL_HANDLERS } from './business.mjs';
+import { FREE_TOOLS, FREE_TOOL_HANDLERS } from './free-tools.mjs';
+import { FIELD_TOOLS, FIELD_TOOL_HANDLERS } from './field-tools.mjs';
 import { installGuards } from './guard.mjs';
 import { MIKE_INSTRUCTIONS } from './persona.mjs';
 import {
@@ -33,13 +35,18 @@ import {
   authConfigured,
 } from './auth.mjs';
 
-const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS];
-const LIVE_TOOL_HANDLERS = { ...BASE_HANDLERS, ...BUSINESS_TOOL_HANDLERS };
+const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS];
+const LIVE_TOOL_HANDLERS = {
+  ...BASE_HANDLERS,
+  ...BUSINESS_TOOL_HANDLERS,
+  ...FREE_TOOL_HANDLERS,
+  ...FIELD_TOOL_HANDLERS,
+};
 
 // Tools that read Mike's OWN business data. Everyone else gets the public
 // Mike. These are filtered out of the tool list entirely for non-owners, so
 // the model never even sees that they exist.
-const OWNER_ONLY_TOOLS = new Set(['get_store_sales', 'get_bot_status']);
+const OWNER_ONLY_TOOLS = new Set(['get_store_sales', 'get_bot_status', 'get_btc_rsi']);
 
 const PUBLIC_TOOLS = LIVE_TOOLS.filter((t) => !OWNER_ONLY_TOOLS.has(t.name));
 
@@ -296,6 +303,7 @@ app.get('/api/health', (req, res) => {
     lipSyncConfigured: !!process.env.FAL_KEY,
     liveAvatarConfigured: !!process.env.LIVEAVATAR_API_KEY && !!process.env.LIVEAVATAR_AVATAR_ID,
     liveToolsConfigured: true,
+    toolCount: LIVE_TOOLS.length,
     accountsConfigured: authConfigured(),
     billingConfigured: billingConfigured(),
     model: OPENAI_MODEL,
