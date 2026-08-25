@@ -51,6 +51,21 @@ export function stripeWebhookConfigured() {
 // Anything else - past_due, canceled, unpaid, incomplete - drops to free.
 const PRO_STATUSES = new Set(['active', 'trialing']);
 
+// Stripe's 2025-03-31 "Basil" API version removed `invoice.subscription` and
+// moved it to `invoice.parent.subscription_details.subscription`. Read both,
+// so this works whichever API version the account is pinned to. Without this
+// the invoice.paid branch below silently no-ops on a current version.
+function subscriptionIdOf(invoice) {
+  if (!invoice) return null;
+  if (invoice.parent?.type === 'subscription_details') {
+    const fromParent = invoice.parent?.subscription_details?.subscription;
+    if (fromParent) return typeof fromParent === 'string' ? fromParent : fromParent.id;
+  }
+  const legacy = invoice.subscription;
+  if (legacy) return typeof legacy === 'string' ? legacy : legacy.id;
+  return null;
+}
+
 function periodEndOf(subscription) {
   return (
     subscription?.current_period_end ||
@@ -173,9 +188,16 @@ export async function handleStripeWebhook(event) {
     case 'invoice.paid': {
       const invoice = event.data.object;
       const user = await getUserByStripeCustomer(invoice.customer);
-      if (!user || !invoice.subscription) return;
+      if (!user) return;
 
-      const subscription = await fetchSubscription(invoice.subscription);
+      const subscriptionId = subscriptionIdOf(invoice);
+      if (!subscriptionId) {
+        // A one-off invoice with no subscription attached - nothing to renew.
+        console.log(`[stripe] invoice ${invoice.id} is not subscription-linked, ignoring`);
+        return;
+      }
+
+      const subscription = await fetchSubscription(subscriptionId);
       if (subscription) await applySubscription(user, subscription);
       break;
     }
