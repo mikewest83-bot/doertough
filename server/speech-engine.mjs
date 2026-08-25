@@ -2,10 +2,14 @@ import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 import OpenAI from 'openai';
 import { LIVE_TOOLS, LIVE_TOOL_HANDLERS } from './live.mjs';
 import { BUSINESS_TOOLS, BUSINESS_TOOL_HANDLERS } from './business.mjs';
+import { FREE_TOOLS } from './free-tools.mjs';
+import { FIELD_TOOLS } from './field-tools.mjs';
 import { MIKE_INSTRUCTIONS } from './persona.mjs';
 
-const OWNER_ONLY_TOOLS = new Set(['get_store_sales', 'get_bot_status']);
-const VOICE_TOOLS = [...LIVE_TOOLS, ...BUSINESS_TOOLS].filter((t) => !OWNER_ONLY_TOOLS.has(t.name));
+const OWNER_ONLY_TOOLS = new Set(['get_store_sales', 'get_bot_status', 'get_btc_rsi']);
+const VOICE_TOOLS = [...LIVE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS].filter(
+  (t) => !OWNER_ONLY_TOOLS.has(t.name)
+);
 const ENGINE_NAME = 'Mike AI Realtime Voice v2';
 const PUBLIC_URL = process.env.PUBLIC_APP_URL || 'https://doertoughmikeai.com';
 const WS_PATH = '/speech-engine';
