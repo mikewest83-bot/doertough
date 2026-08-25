@@ -29,11 +29,28 @@ async function fetchSessionToken() {
   return body.token;
 }
 function sessionOptions(token) {
-  return { conversationToken:token, connectionType:'webrtc', onConnect:()=>{connected=true;starting=false;setVisual('listening');console.log('[mike-realtime] WebRTC connected');}, onDisconnect:()=>{connected=false;starting=false;conversation=null;setVisual('ready');console.log('[mike-realtime] disconnected');}, onError:(error,context)=>{starting=false;connected=false;console.error('[mike-realtime][SDK ERROR]',error,context);reportFailure('sdk_error',error,context);setVisual('ready','Mike couldn\'t connect right now. Please try again.');}, onModeChange:({mode})=>setVisual(mode==='speaking'?'speaking':'listening'), onMessage:(message)=>{const text=message?.message||message?.text||'';if(!text)return;if(message.source==='user')addBubble('user',text);if(message.source==='ai')addBubble('mike',text);} };
+  return {
+    conversationToken: token,
+    connectionType: 'webrtc',
+    webRtc: { iceTransportPolicy: 'relay' },
+    onConnect:()=>{connected=true;starting=false;setVisual('listening');console.log('[mike-realtime] WebRTC connected');},
+    onDisconnect:(details)=>{connected=false;starting=false;conversation=null;console.log('[mike-realtime] disconnected',details);reportFailure('disconnect',new Error('WebRTC session disconnected'),details);setVisual('ready');},
+    onError:(error,context)=>{starting=false;connected=false;console.error('[mike-realtime][SDK ERROR]',error,context);reportFailure('sdk_error',error,context);setVisual('ready','Mike couldn\'t connect right now. Please try again.');},
+    onModeChange:({mode})=>setVisual(mode==='speaking'?'speaking':'listening'),
+    onMessage:(message)=>{const text=message?.message||message?.text||'';if(!text)return;if(message.source==='user')addBubble('user',text);if(message.source==='ai')addBubble('mike',text);}
+  };
 }
 async function startRealtime(){
   if(starting||connected)return; starting=true; setVisual('listening');
-  try { if(!window.isSecureContext)throw new Error('Mike voice requires a secure HTTPS connection.'); if(!navigator.mediaDevices?.getUserMedia)throw new Error('This browser does not support microphone access.'); const token=await fetchSessionToken(); console.log('[mike-realtime][DIAGNOSTIC] token received; starting WebRTC session'); conversation=await Conversation.startSession(sessionOptions(token)); }
+  try {
+    if(!window.isSecureContext)throw new Error('Mike voice requires a secure HTTPS connection.');
+    if(!navigator.mediaDevices?.getUserMedia)throw new Error('This browser does not support microphone access.');
+    const permissionStream = await navigator.mediaDevices.getUserMedia({audio:true});
+    permissionStream.getTracks().forEach((track)=>track.stop());
+    const token=await fetchSessionToken();
+    console.log('[mike-realtime][DIAGNOSTIC] token received; starting WebRTC session with TURN relay');
+    conversation=await Conversation.startSession(sessionOptions(token));
+  }
   catch(error){connected=false;starting=false;console.error('[mike-realtime] start failed:',error);await reportFailure('start_failed',error);const entitlement=error?.code==='upgrade_required'||error?.code==='voice_allowance_reached'||error?.status===402;setVisual('ready',entitlement?(error?.message||'Start your free trial to talk with Mike.'):'Mike couldn\'t connect right now. Please try again.');}
 }
 async function stopRealtime(){starting=false;if(conversation){try{await conversation.endSession();}catch(error){console.warn('[mike-realtime] end failed:',error);}}conversation=null;connected=false;setVisual('ready');}
