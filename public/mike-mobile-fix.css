@@ -24,16 +24,82 @@
   .voice-puck{height:58px!important;min-height:58px!important;margin-top:4px!important}
 }
 
-/* Final visual lock: use the real D/T elements, not the old SVG asset. */
-.orb-core{background:#080b0f!important;box-shadow:inset 0 0 0 7px #05070a,inset 0 0 0 9px #1d2228,0 0 0 2px #f26b2144,0 10px 30px #000!important;overflow:hidden!important}
-.orb-core:before{content:""!important;display:none!important;background:none!important}
-.orb-core:after{content:"M I K E"!important;position:absolute!important;left:50%!important;bottom:13%!important;top:auto!important;transform:translateX(-50%)!important;width:auto!important;height:auto!important;border:0!important;background:none!important;color:#27a9ff!important;font-family:Inter,system-ui,sans-serif!important;font-size:17px!important;font-weight:900!important;letter-spacing:.25em!important;line-height:1!important;text-shadow:0 0 12px #27a9ff,0 2px 7px #000!important;white-space:nowrap!important;z-index:5!important}
-.orb-core span{display:block!important;position:absolute!important;left:50%!important;top:24%!important;bottom:auto!important;transform:translateX(-101%)!important;margin:0!important;padding:0!important;font-family:Arial Black,Arial,sans-serif!important;font-size:58px!important;font-weight:900!important;line-height:1!important;letter-spacing:-.08em!important;color:#fff!important;text-shadow:0 3px 8px #000!important;z-index:6!important}
-.orb-core em{display:block!important;position:absolute!important;left:50%!important;top:24%!important;bottom:auto!important;transform:translateX(-2%)!important;margin:0!important;padding:0!important;font-family:Arial Black,Arial,sans-serif!important;font-size:58px!important;font-weight:900!important;line-height:1!important;letter-spacing:-.08em!important;color:#f26b21!important;text-shadow:0 3px 8px #000!important;z-index:7!important;font-style:normal!important}
-.orb-core{background-color:#080b0f!important;background-image:linear-gradient(#fff,#fff),linear-gradient(#f26b21,#f26b21)!important;background-repeat:no-repeat!important;background-size:64% 4px,58% 3px!important;background-position:50% 62%,50% 69%!important}
+/* FINAL MIKE CORE: crisp DT + white/orange bars + blue MIKE. */
+.orb-core{
+  position:relative!important;
+  background-color:#080b0f!important;
+  background-image:linear-gradient(to bottom,#fff 0 4px,transparent 4px 8px,#f26b21 8px 12px,transparent 12px)!important;
+  background-repeat:no-repeat!important;
+  background-size:64% 12px!important;
+  background-position:50% 62%!important;
+  box-shadow:inset 0 0 0 7px #05070a,inset 0 0 0 9px #1d2228,0 0 0 2px #f26b2144,0 10px 30px #000!important;
+  overflow:hidden!important;
+}
+.orb-core:before{content:""!important;display:none!important}
+.orb-core:after{
+  content:"M I K E"!important;
+  position:absolute!important;
+  left:50%!important;
+  bottom:12%!important;
+  top:auto!important;
+  transform:translateX(-50%)!important;
+  width:auto!important;
+  height:auto!important;
+  margin:0!important;
+  padding:0!important;
+  border:0!important;
+  background:none!important;
+  color:#27a9ff!important;
+  font-family:Inter,system-ui,sans-serif!important;
+  font-size:17px!important;
+  font-weight:900!important;
+  letter-spacing:.25em!important;
+  line-height:1!important;
+  text-shadow:0 0 12px #27a9ff,0 2px 7px #000!important;
+  white-space:nowrap!important;
+  z-index:5!important;
+}
+.orb-core span{
+  display:block!important;
+  position:absolute!important;
+  left:50%!important;
+  top:24%!important;
+  bottom:auto!important;
+  transform:translateX(-101%)!important;
+  margin:0!important;
+  padding:0!important;
+  font-family:Arial Black,Arial,sans-serif!important;
+  font-size:58px!important;
+  font-weight:900!important;
+  line-height:1!important;
+  letter-spacing:-.08em!important;
+  color:#fff!important;
+  text-shadow:0 3px 8px #000!important;
+  z-index:6!important;
+}
+.orb-core em{
+  display:block!important;
+  position:absolute!important;
+  left:50%!important;
+  top:24%!important;
+  bottom:auto!important;
+  transform:translateX(-2%)!important;
+  margin:0!important;
+  padding:0!important;
+  font-family:Arial Black,Arial,sans-serif!important;
+  font-size:58px!important;
+  font-weight:900!important;
+  line-height:1!important;
+  letter-spacing:-.08em!important;
+  color:#f26b21!important;
+  text-shadow:0 3px 8px #000!important;
+  z-index:7!important;
+  font-style:normal!important;
+}
 @media(max-width:390px){
   .orb-core span,.orb-core em{font-size:54px!important;top:24%!important}
   .orb-core:after{font-size:15px!important}
+  .orb-core{background-size:64% 11px!important;background-position:50% 62%!important}
 }
 
 /* Header DT lockup: white D, orange T, clean and touching. */
