@@ -31,6 +31,33 @@ function addBubble(role, text) {
   chat.scrollTop = chat.scrollHeight;
 }
 
+// Ships a failure to the server so it shows up in the deploy log. The realtime
+// session breaks in the browser, on the leg to ElevenLabs' LiveKit host, which
+// the server otherwise never sees. Best-effort: never let reporting throw.
+async function reportFailure(phase, error) {
+  try {
+    const extraKeys = ['reason', 'code', 'status', 'context', 'detail', 'cause', 'stack'];
+    const extra = {};
+    for (const key of extraKeys) {
+      const value = error?.[key];
+      if (value === undefined || value === null) continue;
+      extra[key] = typeof value === 'object' ? JSON.stringify(value).slice(0, 300) : String(value).slice(0, 300);
+    }
+    await fetch('/api/client-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phase,
+        name: error?.name || typeof error,
+        message: error?.message || String(error),
+        extra: JSON.stringify(extra),
+      }),
+    });
+  } catch {
+    // reporting is diagnostic only
+  }
+}
+
 // The session token is single-use in practice: a failed room join burns it, so
 // each connection attempt fetches its own.
 async function fetchSessionToken() {
@@ -81,6 +108,7 @@ function sessionOptions(token, iceTransportPolicy) {
       starting = false;
       connected = false;
       console.error('[mike-realtime] SDK error:', error);
+      reportFailure('sdk_error', error);
       setVisual('ready', `Mike voice connection failed: ${error?.message || 'unknown realtime error'}`);
     },
     onModeChange: ({ mode }) => setVisual(mode === 'speaking' ? 'speaking' : 'listening'),
@@ -115,6 +143,7 @@ async function startRealtime() {
       // A blocked UDP path surfaces here as a bare connection failure before
       // the session exists. Retry once over TURN before giving up.
       console.warn('[mike-realtime] direct connection failed, retrying over TURN relay:', directError);
+      reportFailure('webrtc_direct', directError);
       setVisual('listening');
       starting = true;
       conversation = await Conversation.startSession(sessionOptions(await fetchSessionToken(), 'relay'));
@@ -123,6 +152,7 @@ async function startRealtime() {
     connected = false;
     starting = false;
     console.error('[mike-realtime] start failed:', error);
+    reportFailure('start_failed', error);
     setVisual('ready', error?.message || 'Mike voice could not start.');
   }
 }
