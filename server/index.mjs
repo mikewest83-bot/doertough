@@ -9,7 +9,14 @@ import { LIVE_TOOLS as BASE_TOOLS, LIVE_TOOL_HANDLERS as BASE_HANDLERS } from '.
 import { BUSINESS_TOOLS, BUSINESS_TOOL_HANDLERS } from './business.mjs';
 import { installGuards } from './guard.mjs';
 import { MIKE_INSTRUCTIONS } from './persona.mjs';
-import { migrate } from './db.mjs';
+import {
+  migrate,
+  hasPro,
+  recordVoiceSession,
+  countVoiceSessions,
+  countVoiceSessionsGlobal,
+} from './db.mjs';
+import { createCheckoutSession, createPortalSession, billingConfigured } from './billing.mjs';
 import { initializeSpeechEngine, getSpeechEngineToken } from './speech-engine.mjs';
 import {
   verifyStripeSignature,
@@ -44,7 +51,6 @@ const NON_OWNER_NOTE =
   'say plainly that those are Mike\'s own private business numbers and you do not ' +
   'share them. Do not guess, estimate, or invent any figure. Everything else you ' +
   'know about the portfolio is fair game.';
-
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -118,6 +124,10 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
 });
 
 app.use(express.json({ limit: '15mb' }));
+
+// Resolve the signed-in user before the guard runs, so rate limits key on the
+// account rather than the IP. optionalAuth never rejects.
+app.use(optionalAuth);
 installGuards(app);
 
 // ===== Accounts =====
@@ -183,13 +193,75 @@ async function resolveMikeVoice() {
 }
 
 // ===== Realtime voice =====
-app.get('/api/speech/token', optionalAuth, async (req, res) => {
+//
+// Every token handed out here is a billable ElevenLabs conversation, and the
+// plan's agent minutes are a single pool for the WHOLE site. Three gates:
+// you need an account, your plan has a monthly budget, and a global ceiling
+// stops one busy day draining the month for everyone.
+//
+// Env: VOICE_SESSIONS_PRO (40) · VOICE_SESSIONS_FREE (1) · VOICE_SESSIONS_GLOBAL (120)
+const VOICE_SESSIONS_PRO = Number(process.env.VOICE_SESSIONS_PRO || 40);
+const VOICE_SESSIONS_FREE = Number(process.env.VOICE_SESSIONS_FREE || 1);
+const VOICE_SESSIONS_GLOBAL = Number(process.env.VOICE_SESSIONS_GLOBAL || 120);
+
+app.get('/api/speech/token', async (req, res) => {
   try {
+    if (!req.user) {
+      return res.status(401).json({
+        error: 'sign_in_required',
+        message: 'Sign in to talk with Mike.',
+      });
+    }
+
+    const pro = hasPro(req.user);
+    const allowance = pro ? VOICE_SESSIONS_PRO : VOICE_SESSIONS_FREE;
+    const used = await countVoiceSessions(req.user.id);
+    if (used >= allowance) {
+      return res.status(402).json({
+        error: pro ? 'voice_allowance_reached' : 'upgrade_required',
+        message: pro
+          ? "You've used this month's voice time. It resets on a rolling 30-day window."
+          : 'Start your free trial to talk with Mike.',
+      });
+    }
+
+    const globalUsed = await countVoiceSessionsGlobal();
+    if (globalUsed >= VOICE_SESSIONS_GLOBAL) {
+      console.error(`[speech-engine] global session ceiling hit (${globalUsed})`);
+      return res.status(503).json({
+        error: 'voice_capacity_reached',
+        message: 'Mike is at capacity right now. Try again a bit later.',
+      });
+    }
+
     const result = await getSpeechEngineToken();
+    await recordVoiceSession(req.user.id, result.agentId);
     res.json(result);
   } catch (err) {
     console.error('[speech-engine] token failed:', err.message || err);
     res.status(err.status || 502).json({ error: err.message || 'speech_engine_unavailable' });
+  }
+});
+
+// ===== Billing =====
+// Checkout is created here rather than linked to directly, so the session
+// carries client_reference_id and the webhook can grant Pro to the account
+// that actually paid.
+app.post('/api/billing/checkout', authRequired, async (req, res) => {
+  try {
+    res.json(await createCheckoutSession(req.user));
+  } catch (err) {
+    console.error('[billing] checkout failed:', err.message || err);
+    res.status(err.status || 502).json({ error: err.message || 'checkout_unavailable' });
+  }
+});
+
+app.post('/api/billing/portal', authRequired, async (req, res) => {
+  try {
+    res.json(await createPortalSession(req.user));
+  } catch (err) {
+    console.error('[billing] portal failed:', err.message || err);
+    res.status(err.status || 502).json({ error: err.message || 'portal_unavailable' });
   }
 });
 
@@ -225,6 +297,7 @@ app.get('/api/health', (req, res) => {
     liveAvatarConfigured: !!process.env.LIVEAVATAR_API_KEY && !!process.env.LIVEAVATAR_AVATAR_ID,
     liveToolsConfigured: true,
     accountsConfigured: authConfigured(),
+    billingConfigured: billingConfigured(),
     model: OPENAI_MODEL,
     timestamp: new Date().toISOString(),
   });
@@ -295,26 +368,8 @@ app.post('/api/liveavatar/session', async (req, res) => {
   }
 });
 
-// Diagnostic: proves the key and avatar ID work before any client code exists.
-// Safe to open in a browser - never returns the API key or a usable token.
-app.get('/api/liveavatar/diag', async (req, res) => {
-  const out = {
-    apiKeyPresent: !!LA_KEY,
-    avatarId: LA_AVATAR || null,
-    voiceId: LA_VOICE || null,
-    sandbox: LA_SANDBOX,
-  };
-  try {
-    const token = await mintLiveAvatarToken();
-    res.json({ ...out, ok: true, tokenMinted: true, tokenPrefix: token.slice(0, 6) + '...' });
-  } catch (err) {
-    console.error('[liveavatar] diag failed:', err.message || err);
-    res.status(err.status || 502).json({ ...out, ok: false, tokenMinted: false, error: err.message || 'unknown' });
-  }
-});
-
 // Chat (with live-data tool calling)
-app.post('/api/ask', optionalAuth, async (req, res) => {
+app.post('/api/ask', async (req, res) => {
   try {
     requireKey(process.env.OPENAI_API_KEY, 'openai');
     if (!openai) throw new Error('openai_client_missing');
@@ -384,7 +439,7 @@ app.post('/api/ask', optionalAuth, async (req, res) => {
             console.warn(`[ask] blocked owner-only tool ${call.name} for non-owner`);
             output = { error: 'not_available', note: "That is Mike's own private business data." };
           } else {
-            output = handler ? await handler(args) : { error: `Unknown tool "${call.name}".` };
+            output = handler ? await handler(args) : { error: `Unknown tool \"${call.name}\".` };
           }
         } catch (toolErr) {
           console.error(`[ask] tool ${call.name} failed:`, toolErr.message || toolErr);
