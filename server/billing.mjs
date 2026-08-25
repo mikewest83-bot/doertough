@@ -45,9 +45,33 @@ async function stripePost(path, params) {
   return data;
 }
 
+// Does Stripe already have a live subscription for this account?
+//
+// Deliberately NOT hasPro(): that returns true for OWNER_EMAIL regardless of
+// billing state, so using it here would send the owner to a portal he has no
+// Stripe customer for. This asks the narrower question - did a real
+// subscription get recorded - so the owner can still test a real purchase.
+export function hasActiveSubscription(user) {
+  if (!user) return false;
+  if (!user.stripe_customer_id || !user.stripe_subscription_id) return false;
+  if (!['active', 'trialing'].includes(String(user.subscription_status || ''))) return false;
+  if (user.current_period_end && new Date(user.current_period_end) < new Date()) return false;
+  return true;
+}
+
 export async function createCheckoutSession(user) {
   if (!billingConfigured()) {
     const err = new Error('billing_not_configured'); err.status = 503; throw err;
+  }
+
+  // Refuse to sell a second subscription to an account that already has one.
+  // Without this, clicking upgrade twice creates two live subscriptions on one
+  // account - the "charged twice for the same billing period" case the refund
+  // policy commits us to refunding. Send them to manage what they have instead.
+  if (hasActiveSubscription(user)) {
+    const err = new Error('already_subscribed');
+    err.status = 409;
+    throw err;
   }
   const params = {
     mode: 'subscription',
