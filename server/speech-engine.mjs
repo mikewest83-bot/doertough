@@ -129,7 +129,7 @@ function transcriptToInput(transcript) { return transcript.map((item) => ({ role
 async function respondToTranscript(transcript, signal, session) {
   requireKey(process.env.OPENAI_API_KEY, 'openai');
   if (!openai) throw new Error('openai_client_missing');
-  const response = await openai.responses.create({ model: process.env.OPENAI_MODEL || 'gpt-4o-mini', instructions: MIKE_INSTRUCTIONS + '\n\nVOICE CONVERSATION MODE: Keep spoken responses natural, concise, and easy to say aloud. Do not use markdown-heavy formatting. Do not mention that another service is generating your voice.', input: transcriptToInput(transcript), tools: VOICE_TOOLS, stream: true, signal });
+  const response = await openai.responses.create({ model: process.env.OPENAI_MODEL || 'gpt-4o-mini', instructions: MIKE_INSTRUCTIONS + '\n\nVOICE CONVERSATION MODE: Keep spoken responses natural, concise, and easy to say aloud. Do not use markdown-heavy formatting. Do not mention that another service is generating your voice.', input: transcriptToInput(transcript), tools: VOICE_TOOLS, stream: true }, { signal });
   await session.sendResponse(response);
 }
 
