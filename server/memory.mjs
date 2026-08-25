@@ -4,11 +4,24 @@
 // separate from Mike's personality instructions so personality can evolve
 // without rewriting what Mike has learned about a user.
 import { query, dbEnabled } from './db.mjs';
-import { getOperatingSnapshot, operatingSystemPrompt } from './operating-system.mjs';
+import {
+  getOperatingSnapshot,
+  operatingSystemPrompt,
+  setCurrentFocus,
+  updateFocus,
+  addAction,
+  completeAction,
+  recordDecision,
+  recordPattern,
+} from './operating-system.mjs';
 
 let ready = false;
 
-const CATEGORIES = new Set(['preference', 'goal', 'project', 'context', 'learned']);
+// `operating_system` is a virtual API category. OS records live in their own
+// normalized tables and are exposed through the existing /api/memory routes so
+// the frontend has one authenticated context API to talk to.
+const CATEGORIES = new Set(['preference', 'goal', 'project', 'context', 'learned', 'operating_system']);
+const MEMORY_CATEGORIES = new Set(['preference', 'goal', 'project', 'context', 'learned']);
 
 async function ensureMemorySchema() {
   if (!dbEnabled || ready) return dbEnabled;
@@ -38,16 +51,61 @@ function clean(value, max = 1000) {
   return String(value || '').trim().slice(0, max);
 }
 
+async function listOperatingMemories(userId) {
+  const snapshot = await getOperatingSnapshot(userId);
+  if (!snapshot) return [];
+  const out = [];
+  for (const item of snapshot.focus || []) out.push({ id: `os:focus:${item.id}`, category: 'operating_system', memory: `FOCUS: ${item.title}${item.description ? ` — ${item.description}` : ''}`, importance: item.priority === 'critical' ? 5 : item.priority === 'high' ? 4 : 3, source: 'mike-os', ...item });
+  for (const item of snapshot.actions || []) out.push({ id: `os:action:${item.id}`, category: 'operating_system', memory: `ACTION: ${item.title}`, importance: item.priority === 'critical' ? 5 : item.priority === 'high' ? 4 : 3, source: 'mike-os', ...item });
+  for (const item of snapshot.decisions || []) out.push({ id: `os:decision:${item.id}`, category: 'operating_system', memory: `DECISION: ${item.decision}`, importance: 4, source: 'mike-os', ...item });
+  for (const item of snapshot.patterns || []) out.push({ id: `os:pattern:${item.id}`, category: 'operating_system', memory: `PATTERN: ${item.pattern}`, importance: item.confidence, source: 'mike-os', ...item });
+  return out;
+}
+
+async function saveOperatingMemory(userId, payload) {
+  let data = payload;
+  if (typeof payload === 'string') {
+    try { data = JSON.parse(payload); } catch { return null; }
+  }
+  if (!data || typeof data !== 'object') return null;
+  const type = clean(data.type, 30).toLowerCase();
+  const action = clean(data.action || 'create', 30).toLowerCase();
+
+  if (type === 'focus') {
+    if (action === 'update') return updateFocus(userId, data.id, data);
+    if (action === 'complete') return updateFocus(userId, data.id, { status: 'done' });
+    return setCurrentFocus(userId, data);
+  }
+  if (type === 'action') {
+    if (action === 'complete') return completeAction(userId, data.id, data.outcome || '');
+    return addAction(userId, data);
+  }
+  if (type === 'decision') return recordDecision(userId, data);
+  if (type === 'pattern') return recordPattern(userId, data);
+  return null;
+}
+
+async function deleteOperatingMemory(userId, id) {
+  const [prefix, type, rawId] = String(id || '').split(':');
+  if (prefix !== 'os' || !type || !rawId) return false;
+  if (!dbEnabled) return false;
+  const table = type === 'focus' ? 'mike_focus' : type === 'action' ? 'mike_actions' : type === 'decision' ? 'mike_decisions' : type === 'pattern' ? 'mike_patterns' : null;
+  if (!table) return false;
+  const result = type === 'pattern'
+    ? await query(`UPDATE ${table} SET active = false, updated_at = now() WHERE id = $1 AND user_id = $2 AND active = true`, [rawId, userId])
+    : await query(`UPDATE ${table} SET status = 'abandoned', updated_at = now() WHERE id = $1 AND user_id = $2 AND status <> 'abandoned'`, [rawId, userId]);
+  return result.rowCount > 0;
+}
+
 export async function saveMemory(userId, { category, memory, importance = 3, source = 'conversation' }) {
-  if (!userId || !(await ensureMemorySchema())) return null;
-  const safeCategory = CATEGORIES.has(category) ? category : 'context';
+  if (!userId) return null;
+  if (category === 'operating_system') return saveOperatingMemory(userId, memory);
+  if (!MEMORY_CATEGORIES.has(category) || !(await ensureMemorySchema())) return null;
+  const safeCategory = category;
   const safeMemory = clean(memory);
   if (!safeMemory) return null;
   const safeImportance = Math.min(5, Math.max(1, Math.round(Number(importance) || 3)));
 
-  // Avoid accumulating near-duplicate memories. Exact matches are refreshed;
-  // materially different memories remain separate so history is not silently
-  // overwritten.
   const existing = await query(
     `SELECT id FROM user_memories
       WHERE user_id = $1 AND category = $2 AND active = true AND lower(memory) = lower($3)
@@ -73,9 +131,11 @@ export async function saveMemory(userId, { category, memory, importance = 3, sou
 }
 
 export async function listMemories(userId, { category, limit = 100 } = {}) {
-  if (!userId || !(await ensureMemorySchema())) return [];
+  if (!userId) return [];
+  if (category === 'operating_system') return (await listOperatingMemories(userId)).slice(0, Math.min(200, Math.max(1, Math.round(Number(limit) || 100))));
+  if (!(await ensureMemorySchema())) return [];
   const safeLimit = Math.min(200, Math.max(1, Math.round(Number(limit) || 100)));
-  if (category && CATEGORIES.has(category)) {
+  if (category && MEMORY_CATEGORIES.has(category)) {
     const { rows } = await query(
       `SELECT id, category, memory, importance, source, created_at, updated_at, last_used_at
          FROM user_memories
@@ -118,13 +178,26 @@ async function addOperatingContext(userId, memories) {
   }
 }
 
+async function learnExplicitMemory(userId, queryText) {
+  const text = clean(queryText, 1200);
+  const match = text.match(/^(?:please\s+)?(?:remember|don't forget|do not forget|keep in mind|from now on|going forward)\s+(?:that\s+)?(.+)$/i);
+  if (!match) return null;
+  const memory = clean(match[1], 1000);
+  if (!memory) return null;
+  return saveMemory(userId, {
+    category: 'context',
+    memory,
+    importance: 5,
+    source: 'explicit-user',
+  });
+}
+
 export async function getRelevantMemories(userId, queryText, limit = 12) {
   if (!userId || !(await ensureMemorySchema())) return [];
+  await learnExplicitMemory(userId, queryText).catch((err) => console.error('[memory] explicit learn failed:', err.message || err));
   const words = clean(queryText, 800).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3).slice(0, 12);
   if (!words.length) return addOperatingContext(userId, await listMemories(userId, { limit }));
 
-  // Lightweight lexical retrieval keeps v1 dependency-free. We can replace
-  // this with embeddings later without changing the memory API.
   const clauses = words.map((_, i) => `memory ILIKE $${i + 2}`).join(' OR ');
   const params = [userId, ...words.map((w) => `%${w}%`), Math.min(50, Math.max(1, limit))];
   const { rows } = await query(
@@ -147,7 +220,9 @@ export async function getRelevantMemories(userId, queryText, limit = 12) {
 }
 
 export async function deleteMemory(userId, id) {
-  if (!userId || !(await ensureMemorySchema())) return false;
+  if (!userId) return false;
+  if (String(id).startsWith('os:')) return deleteOperatingMemory(userId, id);
+  if (!(await ensureMemorySchema())) return false;
   const { rowCount } = await query(
     `UPDATE user_memories SET active = false, updated_at = now()
       WHERE id = $1 AND user_id = $2 AND active = true`,
