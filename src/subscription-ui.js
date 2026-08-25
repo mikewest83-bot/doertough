@@ -1,7 +1,37 @@
-const STRIPE_CHECKOUT_URL = 'https://buy.stripe.com/3cI6oH8USaMXd6weqg5J600';
+// src/subscription-ui.js
+//
+// Mike AI Pro button and modal.
+//
+// Checkout is NOT a bare payment link any more. The trial button asks the
+// server to create a Checkout Session for the signed-in account, so the
+// payment arrives at Stripe carrying client_reference_id and the webhook can
+// grant Pro to the right person. A visitor who isn't signed in is sent to the
+// sign-in dialog first - no account, no checkout.
+
 const STYLE_ID = 'mike-subscription-ui-style';
 const BUTTON_ID = 'mike-subscribe-button';
 const MODAL_ID = 'mike-pro-modal';
+
+const readToken = () => {
+  try {
+    return localStorage.getItem('mike_token') || '';
+  } catch {
+    return '';
+  }
+};
+
+async function currentUser() {
+  const token = readToken();
+  if (!token) return null;
+  try {
+    const res = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.user || null;
+  } catch {
+    return null;
+  }
+}
 
 function installStyles() {
   if (document.getElementById(STYLE_ID)) return;
@@ -27,39 +57,194 @@ function installStyles() {
     #${MODAL_ID} .features{display:grid;gap:10px;margin:0 28px 20px}
     #${MODAL_ID} .feature{display:flex;gap:10px;align-items:flex-start;color:#ddd;font-size:13px;line-height:1.4}
     #${MODAL_ID} .check{color:#ff7622;font-weight:900}
-    #${MODAL_ID} .carbon{margin:0 28px 20px;padding:14px;border-radius:14px;background:rgba(44,196,90,.08);border:1px solid rgba(44,196,90,.2);display:flex;gap:10px;align-items:flex-start;font-size:12px;line-height:1.45;color:#cfcfcf}
-    #${MODAL_ID} .carbon-icon{font-size:18px;line-height:1}
-    #${MODAL_ID} .carbon strong{color:#fff}
     #${MODAL_ID} .pro-cta{display:block;width:calc(100% - 56px);margin:0 28px 12px;padding:15px 18px;border:0;border-radius:13px;background:linear-gradient(135deg,#ff7a2b,#e95b0c);color:#fff;cursor:pointer;font-size:14px;font-weight:900;letter-spacing:.03em;box-shadow:0 10px 28px rgba(245,101,20,.2)}
+    #${MODAL_ID} .pro-cta[disabled]{opacity:.65;cursor:default}
+    #${MODAL_ID} .pro-msg{margin:0 28px 12px;padding:11px 13px;border-radius:11px;background:rgba(255,117,34,.1);border:1px solid rgba(255,117,34,.25);color:#ffd2b4;font-size:12.5px;line-height:1.45;display:none}
     #${MODAL_ID} .pro-note{text-align:center;color:#777;font-size:10px;padding:0 28px 22px;line-height:1.45}
-    @media(max-width:640px){#${BUTTON_ID}{padding:8px 10px;font-size:9px}#${BUTTON_ID} .sub-small{display:none}#${MODAL_ID}{padding:12px}#${MODAL_ID} .pro-card{width:min(440px,calc(100vw - 24px));border-radius:20px}#${MODAL_ID} .pro-top{padding:26px 22px 18px}#${MODAL_ID} h2{font-size:27px}#${MODAL_ID} .features,#${MODAL_ID} .carbon{margin-left:22px;margin-right:22px}#${MODAL_ID} .carbon{padding:12px}#${MODAL_ID} .pro-cta{width:calc(100% - 44px);margin-left:22px;margin-right:22px}}
+    #${MODAL_ID} .pro-note a{color:#999}
+    @media(max-width:640px){#${BUTTON_ID}{padding:8px 10px;font-size:9px}#${BUTTON_ID} .sub-small{display:none}#${MODAL_ID}{padding:12px}#${MODAL_ID} .pro-card{width:min(440px,calc(100vw - 24px));border-radius:20px}#${MODAL_ID} .pro-top{padding:26px 22px 18px}#${MODAL_ID} h2{font-size:27px}#${MODAL_ID} .features{margin-left:22px;margin-right:22px}#${MODAL_ID} .pro-cta{width:calc(100% - 44px);margin-left:22px;margin-right:22px}}
   `;
   document.head.appendChild(style);
 }
 
-function closeModal(){document.getElementById(MODAL_ID)?.remove();document.body.style.overflow='';}
-
-function openModal(){
-  if(document.getElementById(MODAL_ID))return;
-  installStyles();
-  const modal=document.createElement('div');
-  modal.id=MODAL_ID;modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');
-  modal.innerHTML=`<div class="pro-card"><button class="pro-close" type="button" aria-label="Close">×</button><section class="pro-top"><div class="pro-badge">MIKE AI PRO</div><h2>Do the work.<br><span>Get your edge.</span></h2><p class="pro-lead">More Mike. More conversations. More help getting things done.</p><div class="pro-price">$19.99 <small>/ month</small></div><div class="trial"><strong>7 DAYS FREE</strong> — try Mike AI Pro before you're charged.</div></section><div class="features"><div class="feature"><span class="check">✓</span><span>Talk with Mike using natural voice conversations.</span></div><div class="feature"><span class="check">✓</span><span>Get practical, straight-to-the-point help whenever you need it.</span></div><div class="feature"><span class="check">✓</span><span>Built for people who want to stop talking and start doing.</span></div></div><div class="carbon"><span class="carbon-icon">🌎</span><span><strong>Do good while you do the work.</strong><br>Mike AI contributes <strong>1% of every subscription</strong> toward permanent CO₂ removal.</span></div><button class="pro-cta" type="button">START 7-DAY FREE TRIAL →</button><div class="pro-note">Secure checkout powered by Stripe. You won't be charged today. Your subscription renews at $19.99/month after the trial unless canceled.</div></div>`;
-  modal.addEventListener('click',e=>{if(e.target===modal)closeModal();});
-  modal.querySelector('.pro-close').addEventListener('click',closeModal);
-  modal.querySelector('.pro-cta').addEventListener('click',()=>window.location.assign(STRIPE_CHECKOUT_URL));
-  document.body.appendChild(modal);document.body.style.overflow='hidden';
+function closeModal() {
+  document.getElementById(MODAL_ID)?.remove();
+  document.body.style.overflow = '';
 }
 
-function addSubscriptionButton(){
-  const headerRight=document.querySelector('.header-right');
-  if(!headerRight||document.getElementById(BUTTON_ID))return;
-  installStyles();
-  const button=document.createElement('button');button.id=BUTTON_ID;button.type='button';button.setAttribute('aria-label','View Mike AI Pro');
-  button.innerHTML='MIKE AI PRO<span class="sub-small">7 DAYS FREE</span>';button.addEventListener('click',openModal);
-  const authButton=headerRight.querySelector('.auth-btn');
-  if(authButton)headerRight.insertBefore(button,authButton);else headerRight.appendChild(button);
+// Opens the app's own sign-in dialog. main.jsx renders it from React state, so
+// the reliable way in from here is the header's Sign in button.
+function openSignIn() {
+  const signIn = document.querySelector('.header-right .auth-btn');
+  if (signIn) {
+    closeModal();
+    signIn.click();
+    return true;
+  }
+  return false;
 }
 
-addSubscriptionButton();
-new MutationObserver(addSubscriptionButton).observe(document.body,{childList:true,subtree:true});
+async function startCheckout(button, message) {
+  const token = readToken();
+
+  if (!token) {
+    message.style.display = 'block';
+    message.textContent = 'Make an account first — that is how your trial gets attached to you.';
+    setTimeout(openSignIn, 900);
+    return;
+  }
+
+  button.disabled = true;
+  const original = button.textContent;
+  button.textContent = 'Opening secure checkout…';
+  message.style.display = 'none';
+
+  try {
+    const res = await fetch('/api/billing/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    });
+
+    const data = await res.json().catch(() => ({}));
+
+    if (res.status === 401) {
+      message.style.display = 'block';
+      message.textContent = 'Your session expired. Sign in again and Mike will pick this back up.';
+      setTimeout(openSignIn, 900);
+      return;
+    }
+
+    if (!res.ok || !data.url) {
+      throw new Error(data.error || `checkout_failed_${res.status}`);
+    }
+
+    window.location.assign(data.url);
+  } catch (error) {
+    console.error('[mike-pro] checkout failed:', error);
+    message.style.display = 'block';
+    message.textContent = 'Could not open checkout just now. Try again in a moment.';
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+async function openBillingPortal(button, message) {
+  const token = readToken();
+  if (!token) return openSignIn();
+
+  button.disabled = true;
+  button.textContent = 'Opening…';
+
+  try {
+    const res = await fetch('/api/billing/portal', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.url) throw new Error(data.error || 'portal_failed');
+    window.location.assign(data.url);
+  } catch (error) {
+    console.error('[mike-pro] portal failed:', error);
+    message.style.display = 'block';
+    message.textContent = 'Could not open billing just now. Try again in a moment.';
+    button.disabled = false;
+    button.textContent = 'Manage subscription';
+  }
+}
+
+async function openModal() {
+  if (document.getElementById(MODAL_ID)) return;
+  installStyles();
+
+  const user = await currentUser();
+  const isPro = !!user?.isPro;
+
+  const modal = document.createElement('div');
+  modal.id = MODAL_ID;
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+
+  const ctaLabel = isPro
+    ? 'Manage subscription'
+    : user
+      ? 'START 7-DAY FREE TRIAL →'
+      : 'CREATE ACCOUNT & START TRIAL →';
+
+  const lead = isPro
+    ? "You're on Pro. Manage or cancel any time."
+    : 'More Mike. More conversations. More help getting things done.';
+
+  modal.innerHTML = `<div class="pro-card">
+    <button class="pro-close" type="button" aria-label="Close">×</button>
+    <section class="pro-top">
+      <div class="pro-badge">MIKE AI PRO</div>
+      <h2>Do the work.<br><span>Get your edge.</span></h2>
+      <p class="pro-lead">${lead}</p>
+      <div class="pro-price">$19.99 <small>/ month</small></div>
+      ${isPro ? '' : '<div class="trial"><strong>7 DAYS FREE</strong> — try Mike AI Pro before you\'re charged.</div>'}
+    </section>
+    <div class="features">
+      <div class="feature"><span class="check">✓</span><span>Talk with Mike using natural voice conversations.</span></div>
+      <div class="feature"><span class="check">✓</span><span>Get practical, straight-to-the-point help whenever you need it.</span></div>
+      <div class="feature"><span class="check">✓</span><span>Built for people who want to stop talking and start doing.</span></div>
+    </div>
+    <div class="pro-msg" role="alert"></div>
+    <button class="pro-cta" type="button">${ctaLabel}</button>
+    <div class="pro-note">
+      Secure checkout powered by Stripe. ${isPro ? '' : "You won't be charged today. Your subscription renews at $19.99/month after the trial unless canceled."}
+      <br><a href="/terms.html">Terms</a> · <a href="/privacy.html">Privacy</a> · <a href="/refunds.html">Refunds</a>
+    </div>
+  </div>`;
+
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeModal();
+  });
+  modal.querySelector('.pro-close').addEventListener('click', closeModal);
+
+  const cta = modal.querySelector('.pro-cta');
+  const message = modal.querySelector('.pro-msg');
+  cta.addEventListener('click', () =>
+    isPro ? openBillingPortal(cta, message) : startCheckout(cta, message)
+  );
+
+  document.body.appendChild(modal);
+  document.body.style.overflow = 'hidden';
+}
+
+function addSubscriptionButton() {
+  const headerRight = document.querySelector('.header-right');
+  if (!headerRight || document.getElementById(BUTTON_ID)) return;
+  installStyles();
+
+  const button = document.createElement('button');
+  button.id = BUTTON_ID;
+  button.type = 'button';
+  button.setAttribute('aria-label', 'View Mike AI Pro');
+  button.innerHTML = 'MIKE AI PRO<span class="sub-small">7 DAYS FREE</span>';
+  button.addEventListener('click', openModal);
+
+  const authButton = headerRight.querySelector('.auth-btn');
+  if (authButton) headerRight.insertBefore(button, authButton);
+  else headerRight.appendChild(button);
+}
+
+const timer = setInterval(() => {
+  addSubscriptionButton();
+  if (document.getElementById(BUTTON_ID)) clearInterval(timer);
+}, 200);
+
+// Coming back from Stripe: clear the query string so a refresh doesn't look
+// like a second purchase, and tell the person where they stand.
+(function handleReturnFromCheckout() {
+  const params = new URLSearchParams(window.location.search);
+  const state = params.get('checkout');
+  if (!state) return;
+
+  window.history.replaceState({}, '', window.location.pathname);
+
+  if (state === 'success') {
+    console.log('[mike-pro] checkout completed');
+    // Give the webhook a moment, then reload so the UI reflects Pro.
+    setTimeout(() => window.location.reload(), 2500);
+  }
+})();
