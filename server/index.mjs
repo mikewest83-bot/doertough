@@ -193,6 +193,25 @@ app.get('/api/speech/token', optionalAuth, async (req, res) => {
   }
 });
 
+// ===== Client-side error reporting =====
+// The realtime voice session fails inside the browser, on the leg between the
+// client and ElevenLabs' LiveKit host — a failure the server never observes.
+// The client posts the raw error here so it lands in the deploy log next to
+// everything else instead of only in a console nobody has open.
+app.post('/api/client-log', (req, res) => {
+  const detail = {
+    phase: String(req.body?.phase || 'unknown').slice(0, 60),
+    name: String(req.body?.name || '').slice(0, 120),
+    message: String(req.body?.message || '').slice(0, 600),
+    extra: String(req.body?.extra || '').slice(0, 900),
+    ua: String(req.get('user-agent') || '').slice(0, 200),
+  };
+  console.error(`[client] ${detail.phase}: ${detail.name || 'Error'}: ${detail.message}`);
+  if (detail.extra) console.error(`[client] ${detail.phase} detail: ${detail.extra}`);
+  console.error(`[client] ${detail.phase} ua: ${detail.ua}`);
+  res.json({ logged: true });
+});
+
 // ===== Routes =====
 
 // Health
