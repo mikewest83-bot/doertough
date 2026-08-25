@@ -19,21 +19,21 @@
 .header-right{min-width:0;max-width:52%;flex:0 1 auto}
 .status{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* Mike identity: make the character's name part of the centerpiece, not just the header. */
-.orb-core{position:relative;display:inline-block}
-.orb-core:after{content:"MIKE";position:absolute;left:50%;bottom:-24px;transform:translateX(-50%);font-size:10px;line-height:1;font-weight:900;letter-spacing:.34em;color:#fff;white-space:nowrap;text-shadow:0 2px 6px #0008}
-.voice-box.is-listening .orb-core:after,.voice-box.is-speaking .orb-core:after{color:#27a9ff;text-shadow:0 0 12px #27a9ff66,0 2px 6px #0008}
+.orb-core{position:relative;display:inline-block;z-index:3}
+.orb-core:after{content:"MIKE" !important;position:absolute;left:50%;bottom:-25px;transform:translateX(-50%);font-size:10px;line-height:1;font-family:Inter,system-ui,sans-serif;font-weight:900;letter-spacing:.30em;color:#ffffff !important;white-space:nowrap;z-index:10;text-shadow:0 2px 7px #000,0 0 10px #000}
+.voice-box.is-listening .orb-core:after,.voice-box.is-speaking .orb-core:after{color:#27a9ff !important;text-shadow:0 0 14px #27a9ff,0 2px 7px #000}
 @media(max-width:760px){
   main{padding-left:12px;padding-right:12px}
   header{gap:10px;align-items:center;flex-wrap:nowrap}
   .brand{min-width:0;flex:1 1 auto}
   .brand strong{font-size:13px}
   .header-right{max-width:52%;gap:7px;flex:0 1 auto}
-  .status{font-size:9px;letter-spacing:.08em;max-width:100%;}
+  .status{font-size:9px;letter-spacing:.08em;max-width:100%}
   .auth-btn{padding:7px 9px;font-size:11px}
   .voice-box{height:min(455px,76vh);padding-top:48px;border-radius:24px}
   .voice-orb{width:112px;height:112px}
   .orb-core{font-size:52px}
-  .orb-core:after{font-size:9px;bottom:-20px}
+  .orb-core:after{font-size:9px;bottom:-21px;letter-spacing:.28em}
   .voice-state{margin-top:31px;font-size:10px;letter-spacing:.13em}
   .wave{height:48px;margin-top:18px;gap:4px}
   .wave i{width:3px}
