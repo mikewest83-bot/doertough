@@ -23,7 +23,7 @@
   letter-spacing:-.02em!important;
 }
 .brand-dt span{font-size:30px!important;color:#fff!important}
-.brand-dt em{font-size:28px!important;color:#f26b21!important;transform:translateY(1px)!important}
+.brand-dt em{font-size:28px!important;color:#fff!important;transform:translateY(1px)!important}
 
 @media(max-width:760px){
   .brand-dt span{font-size:25px!important}
