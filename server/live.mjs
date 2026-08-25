@@ -6,6 +6,7 @@
 // CSV endpoint (~15 min delayed) if the key is missing or the call fails.
 
 import Parser from 'rss-parser';
+import { DICTIONARY_TOOLS, DICTIONARY_TOOL_HANDLERS } from './dictionary-tools.mjs';
 
 const rssParser = new Parser({ timeout: 8000 });
 
@@ -294,6 +295,7 @@ export const LIVE_TOOLS = [
       additionalProperties: false,
     },
   },
+  ...DICTIONARY_TOOLS,
 ];
 
 export const LIVE_TOOL_HANDLERS = {
@@ -301,4 +303,5 @@ export const LIVE_TOOL_HANDLERS = {
   get_news: getNews,
   get_sports_scores: getSportsScores,
   get_stock_quote: getStockQuote,
+  ...DICTIONARY_TOOL_HANDLERS,
 };
