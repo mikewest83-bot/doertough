@@ -1,0 +1,26 @@
+/* Mike AI mobile hero correction — visual only, voice behavior untouched. */
+@media (max-width:760px){
+  .voice-box{height:500px!important;min-height:500px!important;max-height:500px!important;padding-top:18px!important;overflow:hidden!important}
+  .voice-orb{width:210px!important;height:210px!important;flex:0 0 210px!important;margin-top:0!important}
+  .voice-orb:before{inset:-32px!important}
+  .voice-orb:after{inset:-49px!important}
+  .orb-core{width:64%!important;height:64%!important}
+  .orb-core:after{font-size:17px!important;letter-spacing:.22em!important;bottom:6%!important}
+  .voice-state{margin-top:20px!important;font-size:10px!important}
+  .wave{height:30px!important;margin-top:6px!important;gap:3px!important}
+  .wave i{width:3px!important}
+  .voice-hint{font-size:11px!important;margin-top:2px!important}
+  .voice-puck{width:90%!important;height:60px!important;min-height:60px!important;margin-top:4px!important;padding:7px 12px 7px 8px!important}
+  .voice-puck-icon{width:46px!important;height:46px!important;flex-basis:46px!important}
+  .voice-puck-copy strong{font-size:11px!important}
+  .voice-puck-copy small{font-size:9px!important}
+  .voice-puck-arrow{width:20px!important;height:20px!important}
+}
+@media (max-width:390px){
+  .voice-box{height:480px!important;min-height:480px!important;max-height:480px!important;padding-top:16px!important}
+  .voice-orb{width:200px!important;height:200px!important;flex-basis:200px!important}
+  .voice-orb:before{inset:-31px!important}
+  .voice-orb:after{inset:-48px!important}
+  .voice-state{margin-top:19px!important}
+  .voice-puck{height:58px!important;min-height:58px!important;margin-top:4px!important}
+}
