@@ -1,4 +1,12 @@
 import crypto from 'crypto';
+import {
+  dbEnabled,
+  getUserById,
+  getUserByStripeCustomer,
+  attachStripeCustomer,
+  setSubscriptionState,
+} from './db.mjs';
+import { fetchSubscription } from './billing.mjs';
 
 /**
  * Stripe webhook verification without exposing the Stripe secret to the browser.
@@ -39,16 +47,81 @@ export function stripeWebhookConfigured() {
   return Boolean(process.env.STRIPE_WEBHOOK_SECRET);
 }
 
+// A subscription is worth Pro while Stripe says it is active or in trial.
+// Anything else - past_due, canceled, unpaid, incomplete - drops to free.
+const PRO_STATUSES = new Set(['active', 'trialing']);
+
+function periodEndOf(subscription) {
+  return (
+    subscription?.current_period_end ||
+    subscription?.items?.data?.[0]?.current_period_end ||
+    null
+  );
+}
+
+async function applySubscription(user, subscription) {
+  if (!user || !subscription) return;
+
+  const status = subscription.status || null;
+  const plan = PRO_STATUSES.has(status) ? 'pro' : 'free';
+
+  await setSubscriptionState(user.id, {
+    plan,
+    status,
+    subscriptionId: subscription.id,
+    currentPeriodEnd: periodEndOf(subscription),
+    trialEnd: subscription.trial_end || null,
+  });
+
+  console.log(`[stripe] ${user.email} -> plan=${plan} status=${status}`);
+}
+
 export async function handleStripeWebhook(event) {
   console.log(`[stripe] received ${event.type} (${event.id})`);
 
+  if (!dbEnabled) {
+    console.error('[stripe] database not configured - cannot record entitlement');
+    return;
+  }
+
   switch (event.type) {
+    // The moment a checkout completes we learn which account paid, via the
+    // client_reference_id we set when creating the session.
     case 'checkout.session.completed': {
       const session = event.data.object;
-      console.log('[stripe] checkout completed', {
-        customer: session.customer || null,
-        subscription: session.subscription || null,
-      });
+      const userId = session.client_reference_id;
+
+      if (!userId) {
+        console.error(
+          `[stripe] checkout ${session.id} has no client_reference_id - cannot match it to an account`
+        );
+        return;
+      }
+
+      const user = await getUserById(userId);
+      if (!user) {
+        console.error(`[stripe] checkout ${session.id} references unknown user ${userId}`);
+        return;
+      }
+
+      await attachStripeCustomer(user.id, session.customer, session.subscription);
+
+      // The session itself doesn't carry the subscription's status, so read
+      // it back rather than guessing.
+      const subscription = await fetchSubscription(session.subscription);
+      if (subscription) {
+        await applySubscription({ ...user, id: user.id }, subscription);
+      } else {
+        // Fall back to trialing so the customer isn't left locked out while
+        // the subscription events catch up.
+        await setSubscriptionState(user.id, {
+          plan: 'pro',
+          status: 'trialing',
+          subscriptionId: session.subscription,
+          currentPeriodEnd: null,
+          trialEnd: null,
+        });
+      }
       break;
     }
 
@@ -56,25 +129,54 @@ export async function handleStripeWebhook(event) {
     case 'customer.subscription.updated':
     case 'customer.subscription.deleted': {
       const subscription = event.data.object;
-      console.log('[stripe] subscription change', {
-        id: subscription.id,
-        status: subscription.status,
-        customer: subscription.customer,
-        priceId: subscription.items?.data?.[0]?.price?.id || null,
-        currentPeriodEnd: subscription.items?.data?.[0]?.current_period_end || null,
-      });
+
+      // Prefer the metadata we set at checkout; fall back to the customer id.
+      const metaUserId = subscription.metadata?.mike_user_id;
+      const user = metaUserId
+        ? await getUserById(metaUserId)
+        : await getUserByStripeCustomer(subscription.customer);
+
+      if (!user) {
+        console.error(
+          `[stripe] subscription ${subscription.id} has no matching account (customer ${subscription.customer})`
+        );
+        return;
+      }
+
+      if (event.type === 'customer.subscription.deleted') {
+        await setSubscriptionState(user.id, {
+          plan: 'free',
+          status: 'canceled',
+          subscriptionId: subscription.id,
+          currentPeriodEnd: periodEndOf(subscription),
+          trialEnd: null,
+        });
+        console.log(`[stripe] ${user.email} -> plan=free status=canceled`);
+        return;
+      }
+
+      await applySubscription(user, subscription);
       break;
     }
 
-    case 'invoice.paid':
     case 'invoice.payment_failed': {
       const invoice = event.data.object;
-      console.log('[stripe] invoice change', {
-        id: invoice.id,
-        customer: invoice.customer || null,
-        subscription: invoice.subscription || null,
-        status: invoice.status || null,
-      });
+      const user = await getUserByStripeCustomer(invoice.customer);
+      if (!user) return;
+
+      // Don't cut access on the first failure - Stripe retries, and the
+      // subscription events will move the status if it ultimately fails.
+      console.warn(`[stripe] payment failed for ${user.email} (invoice ${invoice.id})`);
+      break;
+    }
+
+    case 'invoice.paid': {
+      const invoice = event.data.object;
+      const user = await getUserByStripeCustomer(invoice.customer);
+      if (!user || !invoice.subscription) return;
+
+      const subscription = await fetchSubscription(invoice.subscription);
+      if (subscription) await applySubscription(user, subscription);
       break;
     }
 
