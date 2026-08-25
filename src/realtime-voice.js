@@ -31,6 +31,69 @@ function addBubble(role, text) {
   chat.scrollTop = chat.scrollHeight;
 }
 
+// The session token is single-use in practice: a failed room join burns it, so
+// each connection attempt fetches its own.
+async function fetchSessionToken() {
+  const tokenResponse = await fetch('/api/speech/token', {
+    cache: 'no-store',
+    headers: (() => {
+      try {
+        const token = localStorage.getItem('mike_token');
+        return token ? { Authorization: `Bearer ${token}` } : {};
+      } catch {
+        return {};
+      }
+    })(),
+  });
+
+  if (!tokenResponse.ok) {
+    const body = await tokenResponse.json().catch(() => ({}));
+    throw new Error(body.error || `Could not start Mike realtime voice (${tokenResponse.status}).`);
+  }
+
+  const { token } = await tokenResponse.json();
+  if (!token) throw new Error('Mike realtime voice returned no session token.');
+  return token;
+}
+
+function sessionOptions(token, iceTransportPolicy) {
+  return {
+    conversationToken: token,
+    connectionType: 'webrtc',
+    // "relay" forces the audio through TURN (TCP/443) instead of direct UDP.
+    // Networks that drop UDP flows — home routers with strict firewalls, some
+    // VPNs, guest wifi — fail the default path with an empty connection error.
+    ...(iceTransportPolicy ? { webRtc: { iceTransportPolicy } } : {}),
+    onConnect: () => {
+      connected = true;
+      starting = false;
+      setVisual('listening');
+      console.log(`[mike-realtime] WebRTC connected${iceTransportPolicy === 'relay' ? ' (TURN relay)' : ''}`);
+    },
+    onDisconnect: () => {
+      connected = false;
+      starting = false;
+      conversation = null;
+      setVisual('ready');
+      console.log('[mike-realtime] disconnected');
+    },
+    onError: (error) => {
+      starting = false;
+      connected = false;
+      console.error('[mike-realtime] SDK error:', error);
+      setVisual('ready', `Mike voice connection failed: ${error?.message || 'unknown realtime error'}`);
+    },
+    onModeChange: ({ mode }) => setVisual(mode === 'speaking' ? 'speaking' : 'listening'),
+    onMessage: (message) => {
+      if (!message) return;
+      const text = message.message || message.text || '';
+      if (!text) return;
+      if (message.source === 'user') addBubble('user', text);
+      if (message.source === 'ai') addBubble('mike', text);
+    },
+  };
+}
+
 async function startRealtime() {
   if (starting || connected) return;
   starting = true;
@@ -43,60 +106,19 @@ async function startRealtime() {
     // Keep the microphone permission request inside the user's click gesture.
     await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
 
-    const tokenResponse = await fetch('/api/speech/token', {
-      cache: 'no-store',
-      headers: (() => {
-        try {
-          const token = localStorage.getItem('mike_token');
-          return token ? { Authorization: `Bearer ${token}` } : {};
-        } catch {
-          return {};
-        }
-      })(),
-    });
-
-    if (!tokenResponse.ok) {
-      const body = await tokenResponse.json().catch(() => ({}));
-      throw new Error(body.error || `Could not start Mike realtime voice (${tokenResponse.status}).`);
-    }
-
-    const { token } = await tokenResponse.json();
-    if (!token) throw new Error('Mike realtime voice returned no session token.');
-
     // The WebRTC conversation token already identifies the Speech Engine.
     // Do not also pass agentId; keeping the session token as the sole
     // connection credential avoids mixing agent and Speech Engine identifiers.
-    conversation = await Conversation.startSession({
-      conversationToken: token,
-      connectionType: 'webrtc',
-      onConnect: () => {
-        connected = true;
-        starting = false;
-        setVisual('listening');
-        console.log('[mike-realtime] WebRTC connected');
-      },
-      onDisconnect: () => {
-        connected = false;
-        starting = false;
-        conversation = null;
-        setVisual('ready');
-        console.log('[mike-realtime] disconnected');
-      },
-      onError: (error) => {
-        starting = false;
-        connected = false;
-        console.error('[mike-realtime] SDK error:', error);
-        setVisual('ready', `Mike voice connection failed: ${error?.message || 'unknown realtime error'}`);
-      },
-      onModeChange: ({ mode }) => setVisual(mode === 'speaking' ? 'speaking' : 'listening'),
-      onMessage: (message) => {
-        if (!message) return;
-        const text = message.message || message.text || '';
-        if (!text) return;
-        if (message.source === 'user') addBubble('user', text);
-        if (message.source === 'ai') addBubble('mike', text);
-      },
-    });
+    try {
+      conversation = await Conversation.startSession(sessionOptions(await fetchSessionToken()));
+    } catch (directError) {
+      // A blocked UDP path surfaces here as a bare connection failure before
+      // the session exists. Retry once over TURN before giving up.
+      console.warn('[mike-realtime] direct connection failed, retrying over TURN relay:', directError);
+      setVisual('listening');
+      starting = true;
+      conversation = await Conversation.startSession(sessionOptions(await fetchSessionToken(), 'relay'));
+    }
   } catch (error) {
     connected = false;
     starting = false;
