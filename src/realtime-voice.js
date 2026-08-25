@@ -54,7 +54,12 @@ async function fetchSessionToken() {
   } catch {}
   const response = await fetch('/api/speech/token', { cache: 'no-store', headers });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || `Could not start Mike realtime voice (${response.status}).`);
+  if (!response.ok) {
+    const err = new Error(body.message || body.error || `Could not start Mike realtime voice (${response.status}).`);
+    err.code = body.error || `http_${response.status}`;
+    err.status = response.status;
+    throw err;
+  }
   if (!body.token) throw new Error('Mike realtime voice returned no session token.');
   return body.token;
 }
@@ -81,7 +86,9 @@ function sessionOptions(token) {
       connected = false;
       console.error('[mike-realtime] SDK error:', error, context);
       reportFailure('sdk_error', error, context);
-      setVisual('ready', `Mike voice connection failed: ${error?.message || 'unknown realtime error'}`);
+      // A realtime infrastructure failure is NOT a subscription failure.
+      // Never send the customer to the Pro screen merely because WebRTC failed.
+      setVisual('ready', `Mike couldn't connect right now. Please try again.`);
     },
     onModeChange: ({ mode }) => setVisual(mode === 'speaking' ? 'speaking' : 'listening'),
     onMessage: (message) => {
@@ -101,12 +108,9 @@ async function startRealtime() {
     if (!window.isSecureContext) throw new Error('Mike voice requires a secure HTTPS connection.');
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('This browser does not support microphone access.');
 
-    // Request permission inside the click gesture, then RELEASE the temporary
-    // stream. Leaving this stream open was racing the SDK's own microphone
-    // capture and can cause NotReadableError/device-busy failures.
-    const permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    permissionStream.getTracks().forEach((track) => track.stop());
-
+    // Do not open a temporary microphone stream here. ElevenLabs/WebRTC owns
+    // microphone capture for the realtime conversation. Requesting and then
+    // releasing a second stream can race WebKit's audio device handling.
     const token = await fetchSessionToken();
     conversation = await Conversation.startSession(sessionOptions(token));
   } catch (error) {
@@ -114,7 +118,11 @@ async function startRealtime() {
     starting = false;
     console.error('[mike-realtime] start failed:', error);
     reportFailure('start_failed', error);
-    setVisual('ready', error?.message || 'Mike voice could not start.');
+    const isEntitlementError = error?.code === 'upgrade_required' || error?.code === 'voice_allowance_reached' || error?.status === 402;
+    const message = isEntitlementError
+      ? (error?.message || 'Start your free trial to talk with Mike.')
+      : 'Mike couldn\'t connect right now. Please try again.';
+    setVisual('ready', message);
   }
 }
 
@@ -141,15 +149,11 @@ function install() {
   const button = $('.voice-talk');
   if (!box || !button) return false;
   installed = true;
-
-  // Run in capture phase and stop propagation so the legacy React
-  // SpeechRecognition/MP3 click handler cannot start a second voice pipeline.
   box.addEventListener('click', toggleRealtime, true);
   button.addEventListener('click', toggleRealtime, true);
   box.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' || event.key === ' ') toggleRealtime(event);
   }, true);
-
   window.__MIKE_REALTIME__ = { startRealtime, stopRealtime };
   console.log('[mike-realtime] voice-first WebRTC mode installed');
   return true;
