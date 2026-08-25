@@ -4,7 +4,7 @@
   .voice-orb{width:210px!important;height:210px!important;flex:0 0 210px!important;margin-top:0!important}
   .voice-orb:before{inset:-32px!important}
   .voice-orb:after{inset:-49px!important}
-  .orb-core{width:64%!important;height:64%!important}
+  .orb-core{width:64%!important;height:64%!important;flex:0 0 auto!important}
   .voice-state{margin-top:20px!important;font-size:10px!important}
   .wave{height:30px!important;margin-top:6px!important;gap:3px!important}
   .wave i{width:3px!important}
@@ -24,15 +24,16 @@
   .voice-puck{height:58px!important;min-height:58px!important;margin-top:4px!important}
 }
 
-/* FINAL MIKE CORE: crisp DT + white/orange bars + blue MIKE. */
+/* FINAL MIKE CORE — approved DT/MIKE lockup, crisp black core. */
 .orb-core{
   position:relative!important;
-  background-color:#080b0f!important;
+  background-color:#070a0e!important;
   background-image:linear-gradient(to bottom,#fff 0 4px,transparent 4px 8px,#f26b21 8px 12px,transparent 12px)!important;
   background-repeat:no-repeat!important;
   background-size:64% 12px!important;
-  background-position:50% 62%!important;
-  box-shadow:inset 0 0 0 7px #05070a,inset 0 0 0 9px #1d2228,0 0 0 2px #f26b2144,0 10px 30px #000!important;
+  background-position:50% 70%!important;
+  border:1px solid #6b727b!important;
+  box-shadow:inset 0 0 0 2px #0b0e12,0 0 0 2px #f26b2166!important;
   overflow:hidden!important;
   isolation:isolate!important;
 }
@@ -41,7 +42,7 @@
   content:"M I K E"!important;
   position:absolute!important;
   left:50%!important;
-  bottom:12%!important;
+  bottom:10%!important;
   top:auto!important;
   transform:translateX(-50%)!important;
   width:auto!important;
@@ -60,6 +61,8 @@
   white-space:nowrap!important;
   z-index:50!important;
 }
+
+/* DT is a single tight visual lockup: white D + orange T, touching at the top. */
 .voice-orb .orb-core > span,
 .voice-orb .orb-core > em{
   display:block!important;
@@ -72,51 +75,67 @@
   font-family:Arial Black,Arial,sans-serif!important;
   font-size:58px!important;
   font-weight:900!important;
-  line-height:1!important;
-  letter-spacing:-.08em!important;
+  line-height:.9!important;
+  letter-spacing:-.11em!important;
   font-style:normal!important;
-  top:24%!important;
+  top:18%!important;
   bottom:auto!important;
   z-index:60!important;
   text-shadow:0 3px 8px #000!important;
 }
 .voice-orb .orb-core > span{left:50%!important;transform:translateX(-101%)!important;color:#fff!important}
 .voice-orb .orb-core > em{left:50%!important;transform:translateX(-2%)!important;color:#f26b21!important}
-@media(max-width:390px){
-  .voice-orb .orb-core > span,.voice-orb .orb-core > em{font-size:54px!important;top:24%!important}
-  .orb-core:after{font-size:15px!important}
-  .orb-core{background-size:64% 11px!important;background-position:50% 62%!important}
+
+/* Status line: dot + MIKE IS HERE stays centered on one line. */
+.voice-state{
+  display:flex!important;
+  flex-direction:row!important;
+  align-items:center!important;
+  justify-content:center!important;
+  flex-wrap:nowrap!important;
+  width:max-content!important;
+  max-width:none!important;
+  white-space:nowrap!important;
+  gap:12px!important;
+}
+.voice-state .state-dot{flex:0 0 auto!important}
+.voice-state strong{
+  display:block!important;
+  width:auto!important;
+  max-width:none!important;
+  white-space:nowrap!important;
+  word-break:normal!important;
+  overflow-wrap:normal!important;
+  line-height:1.1!important;
+  margin:0!important;
 }
 
-/* Status line: dot + MIKE IS HERE must stay on one line. */
-.voice-state{display:flex!important;flex-direction:row!important;align-items:center!important;justify-content:center!important;flex-wrap:nowrap!important;width:max-content!important;max-width:none!important;white-space:nowrap!important;gap:12px!important}
-.voice-state .state-dot{flex:0 0 auto!important}
-.voice-state strong{display:block!important;width:auto!important;max-width:none!important;white-space:nowrap!important;word-break:normal!important;overflow-wrap:normal!important;line-height:1.1!important;margin:0!important}
-
-/* Header mark: clean orange tile with the approved white-D/orange-T lockup. */
+/* Header mark — clean approved orange tile with white D. */
 .brand-dt{font-size:0!important;color:transparent!important;position:relative!important;overflow:hidden!important;background:#f26b21!important}
 .brand-dt:before{content:'D'!important;position:absolute!important;left:22%!important;top:22%!important;display:block!important;font-family:Arial Black,Arial,sans-serif!important;font-weight:900!important;font-size:29px!important;line-height:1!important;color:#fff!important;padding:0!important;text-shadow:none!important;z-index:2!important}
-.brand-dt:after{content:'T'!important;position:absolute!important;left:47%!important;top:22%!important;display:block!important;font-family:Arial Black,Arial,sans-serif!important;font-weight:900!important;font-size:25px!important;line-height:1!important;color:#f26b21!important;-webkit-text-stroke:1px #111!important;text-shadow:1px 1px 0 #111!important;z-index:3!important}
-@media(max-width:760px){.brand-dt{width:48px!important;height:48px!important;flex-basis:48px!important}.brand-dt:before{font-size:29px!important}.brand-dt:after{font-size:23px!important}}
+.brand-dt:after{content:'T'!important;display:none!important}
 
-/* MOCKUP MATCH — larger, sharper center and clean concentric rings. */
+/* APPROVED MOBILE MOCKUP PROPORTIONS. */
 @media(max-width:760px){
   .voice-orb{width:270px!important;height:270px!important;flex-basis:270px!important;margin-top:2px!important}
   .voice-orb:before{inset:-24px!important;border:2px solid #27a9ff!important;box-shadow:0 0 16px #27a9ff33!important}
   .voice-orb:after{inset:-42px!important;border:2px solid #f26b2166!important;box-shadow:none!important}
-  .orb-core{width:66%!important;height:66%!important;background:#070a0e!important;border:1px solid #6b727b!important;box-shadow:inset 0 0 0 2px #0b0e12,0 0 0 2px #f26b2166!important}
-  .voice-orb .orb-core > span,.voice-orb .orb-core > em{font-size:64px!important;top:23%!important}
-  .orb-core:after{font-size:18px!important;bottom:12%!important}
+  .orb-core{width:66%!important;height:66%!important;background-color:#070a0e!important;background-position:50% 70%!important}
+  .voice-orb .orb-core > span,.voice-orb .orb-core > em{font-size:64px!important;top:18%!important}
+  .orb-core:after{font-size:18px!important;bottom:10%!important}
   .voice-state{margin-top:15px!important;font-size:12px!important;gap:12px!important}
   .voice-state .state-dot{width:20px!important;height:20px!important;background:#27a9ff!important;box-shadow:0 0 14px #27a9ff88!important}
   .wave{margin-top:8px!important;height:28px!important}
   .voice-hint{font-size:12px!important;margin-top:4px!important}
   .voice-puck{width:90%!important;height:64px!important;min-height:64px!important;margin-top:8px!important}
   .voice-puck-icon{width:50px!important;height:50px!important;flex-basis:50px!important}
+  .brand-dt{width:48px!important;height:48px!important;flex-basis:48px!important}
+  .brand-dt:before{font-size:29px!important}
 }
 @media(max-width:390px){
   .voice-box{height:500px!important;min-height:500px!important;max-height:500px!important;padding-top:8px!important}
   .voice-orb{width:250px!important;height:250px!important;flex-basis:250px!important}
-  .voice-orb .orb-core > span,.voice-orb .orb-core > em{font-size:58px!important}
+  .voice-orb .orb-core > span,.voice-orb .orb-core > em{font-size:58px!important;top:18%!important}
   .orb-core:after{font-size:16px!important}
+  .orb-core{background-size:64% 11px!important;background-position:50% 70%!important}
 }
