@@ -7,7 +7,7 @@ import { MIKE_INSTRUCTIONS } from './persona.mjs';
 const OWNER_ONLY_TOOLS = new Set(['get_store_sales', 'get_bot_status']);
 const VOICE_TOOLS = [...LIVE_TOOLS, ...BUSINESS_TOOLS].filter((t) => !OWNER_ONLY_TOOLS.has(t.name));
 const VOICE_HANDLERS = { ...LIVE_TOOL_HANDLERS, ...BUSINESS_TOOL_HANDLERS };
-const ENGINE_NAME = 'Mike AI Realtime Voice';
+const ENGINE_NAME = 'Mike AI Realtime Voice v2';
 const PUBLIC_URL = process.env.PUBLIC_APP_URL || 'https://doertoughmikeai.com';
 const WS_PATH = '/speech-engine';
 const ENGINE_WS_URL = `${PUBLIC_URL.replace(/^http/, 'ws')}${WS_PATH}`;
@@ -78,7 +78,7 @@ async function ensureEngine() {
       tts: {
         model_id: 'eleven_flash_v2',
         voice_id: voiceId,
-        agent_output_audio_format: 'pcm_16000',
+        agent_output_audio_format: 'pcm_24000',
         optimize_streaming_latency: 3,
         stability: 0.55,
         speed: 1.08,
