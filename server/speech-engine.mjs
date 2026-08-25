@@ -10,8 +10,9 @@ const ENGINE_NAME = 'Mike AI Realtime Voice v2';
 const PUBLIC_URL = process.env.PUBLIC_APP_URL || 'https://doertoughmikeai.com';
 const WS_PATH = '/speech-engine';
 const ENGINE_WS_URL = `${PUBLIC_URL.replace(/^http/, 'ws')}${WS_PATH}`;
-const MIKE_VOICE_DESCRIPTION = 'A confident, friendly American male in his 40s with a natural Southern country accent. Blue-collar, hardworking, upbeat, warm and conversational. Deep but clear voice, slightly fast pace, excellent enunciation, natural pauses, sounds like a real Southern guy talking one-on-one. Never exaggerated, cartoonish, or announcer-like.';
-const MIKE_VOICE_TEXT = 'Listen, we are going to keep this simple. Do the work, stay tough, and keep moving forward. You do not have to have everything figured out today. Just take the next step and let us get it done.';
+const MIKE_VOICE_NAME = 'Mike AI - Doer Tough Southern';
+const MIKE_VOICE_DESCRIPTION = 'A confident, friendly American man in his 40s with a thick, authentic Southern American English accent and a natural Southern drawl. Think South Carolina, Georgia, or Tennessee rather than Northern or neutral American. Blue-collar, hardworking, upbeat, warm and conversational. Deep, masculine, resonant but clear voice, slightly fast conversational pace, excellent Southern enunciation, natural pauses, relaxed country character. Sounds like a real Southern guy talking one-on-one, not a radio announcer, actor, caricature, or exaggerated cowboy.';
+const MIKE_VOICE_TEXT = 'Alright, let us keep this simple. We are going to do the work, stay tough, and keep moving forward. You do not have to have everything figured out today. Take the next step, handle what is in front of you, and let us get it done.';
 
 const requireKey = (key, name) => { if (!key) throw new Error(`${name}_not_configured`); };
 const elevenlabs = process.env.ELEVENLABS_API_KEY ? new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY }) : null;
@@ -31,7 +32,7 @@ async function createMikeGeneratedVoice() {
   const designResponse = await fetch('https://api.elevenlabs.io/v1/text-to-voice/design', {
     method: 'POST',
     headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model_id: 'eleven_multilingual_ttv_v2', voice_description: MIKE_VOICE_DESCRIPTION, text: MIKE_VOICE_TEXT, auto_generate_text: false, quality: 0.9, guidance_scale: 5 }),
+    body: JSON.stringify({ model_id: 'eleven_multilingual_ttv_v2', voice_description: MIKE_VOICE_DESCRIPTION, text: MIKE_VOICE_TEXT, auto_generate_text: false, quality: 0.9, guidance_scale: 8 }),
   });
   const designRaw = await designResponse.text();
   if (!designResponse.ok) throw new Error(`elevenlabs_voice_design_${designResponse.status}: ${designRaw.slice(0, 500)}`);
@@ -41,13 +42,13 @@ async function createMikeGeneratedVoice() {
   const createResponse = await fetch('https://api.elevenlabs.io/v1/text-to-voice', {
     method: 'POST',
     headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ voice_name: 'Mike AI - Doer Tough', voice_description: MIKE_VOICE_DESCRIPTION, generated_voice_id: generatedVoiceId, labels: { accent: 'American', gender: 'male', use_case: 'conversational', character: 'Mike AI' } }),
+    body: JSON.stringify({ voice_name: MIKE_VOICE_NAME, voice_description: MIKE_VOICE_DESCRIPTION, generated_voice_id: generatedVoiceId, labels: { accent: 'Southern American English', gender: 'male', use_case: 'conversational', character: 'Mike AI', region: 'South Carolina / Georgia / Tennessee' } }),
   });
   const createRaw = await createResponse.text();
   if (!createResponse.ok) throw new Error(`elevenlabs_voice_create_${createResponse.status}: ${createRaw.slice(0, 500)}`);
   const voiceId = JSON.parse(createRaw)?.voice_id;
   if (!voiceId) throw new Error('elevenlabs_voice_create_returned_no_voice_id');
-  console.log(`[speech-engine] created compatible generated Mike voice ${voiceId}`);
+  console.log(`[speech-engine] created Southern Mike voice ${voiceId}`);
   return voiceId;
 }
 
@@ -56,17 +57,15 @@ async function chooseGeneratedVoice() {
   const response = await fetch('https://api.elevenlabs.io/v2/voices?page_size=100&category=generated', { headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY } });
   if (!response.ok) throw new Error(`elevenlabs_generated_voice_list_${response.status}`);
   const data = await response.json();
-  const voices = (data.voices || []).map((voice) => {
+  const voices = data.voices || [];
+  const exact = voices.find((voice) => voice.name === MIKE_VOICE_NAME);
+  if (exact?.voice_id) return exact.voice_id;
+  const southern = voices.filter((voice) => {
     const labels = voice.labels || {};
     const text = `${voice.name || ''} ${voice.description || ''} ${JSON.stringify(labels)}`.toLowerCase();
-    let score = 0;
-    if (/mike ai|doer tough/.test(text)) score += 200;
-    if (labels.gender === 'male' || /\bmale\b/.test(text)) score += 50;
-    if (/southern|country|texas|american/.test(text)) score += 35;
-    if (/deep|raspy|gravel|warm|confident|conversational|natural|friendly/.test(text)) score += 15;
-    return { voice, score };
-  }).sort((a, b) => b.score - a.score);
-  if (voices[0]?.voice?.voice_id) return voices[0].voice.voice_id;
+    return /southern|country|georgia|carolina|tennessee|texas/.test(text) && /male|man/.test(text);
+  });
+  if (southern[0]?.voice_id) return southern[0].voice_id;
   return createMikeGeneratedVoice();
 }
 
@@ -78,14 +77,20 @@ async function resolveCompatibleVoiceId() {
     const category = String(voice?.category || '').toLowerCase();
     const type = String(voice?.voice_type || '').toLowerCase();
     if (voice && !['cloned', 'personal'].includes(category) && type !== 'personal') {
-      cachedCompatibleVoiceId = configured;
-      console.log(`[speech-engine] configured voice is compatible: ${configured} (${voice.category || type || 'unknown'})`);
-      return cachedCompatibleVoiceId;
+      const labels = voice.labels || {};
+      const description = `${voice.name || ''} ${voice.description || ''} ${JSON.stringify(labels)}`.toLowerCase();
+      if (/southern|country|georgia|carolina|tennessee|texas/.test(description)) {
+        cachedCompatibleVoiceId = configured;
+        console.log(`[speech-engine] configured Southern voice is compatible: ${configured}`);
+        return cachedCompatibleVoiceId;
+      }
+      console.warn(`[speech-engine] configured voice ${configured} is compatible but not explicitly Southern; using Mike Southern voice instead.`);
+    } else {
+      console.warn(`[speech-engine] configured voice ${configured} is not compatible with custom LLM Speech Engine. Switching to a generated voice.`);
     }
-    console.warn(`[speech-engine] configured voice ${configured} is not compatible with custom LLM Speech Engine. Switching to a generated voice.`);
   }
   cachedCompatibleVoiceId = await chooseGeneratedVoice();
-  console.log(`[speech-engine] selected compatible generated voice ${cachedCompatibleVoiceId}`);
+  console.log(`[speech-engine] selected Southern-compatible generated voice ${cachedCompatibleVoiceId}`);
   return cachedCompatibleVoiceId;
 }
 
@@ -101,7 +106,7 @@ async function syncAndVerifyEngine(engineId) {
   if (actualUrl !== ENGINE_WS_URL) throw new Error(`speech_engine_ws_url_mismatch: expected=${ENGINE_WS_URL} actual=${actualUrl || 'missing'}`);
   if (actualVoiceId !== voiceId) throw new Error(`speech_engine_voice_mismatch: expected=${voiceId} actual=${actualVoiceId || 'missing'}`);
   console.log(`[speech-engine] verified upstream URL for ${engineId}: ${actualUrl}`);
-  console.log(`[speech-engine] verified compatible TTS voice for ${engineId}: ${actualVoiceId}`);
+  console.log(`[speech-engine] verified Southern-compatible TTS voice for ${engineId}: ${actualVoiceId}`);
   return engineId;
 }
 
