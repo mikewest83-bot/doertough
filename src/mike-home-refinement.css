@@ -1,0 +1,43 @@
+/* Mike AI home-screen refinement: preserve the working realtime voice UI and polish only the visual composition. */
+.voice-box{min-height:0;height:520px;justify-content:flex-start;padding-top:76px}
+.voice-orb{width:148px;height:148px;flex:0 0 auto}
+.voice-orb:before{border-color:#f26b2140}
+.voice-orb:after{border-color:#27a9ff22}
+.voice-box.is-listening .voice-orb:before{border-color:#27a9ff55}
+.voice-box.is-listening .voice-orb:after{border-color:#27a9ff33}
+.voice-box.is-speaking .voice-orb:before{border-color:#27a9ff66}
+.voice-state{margin-top:34px}
+.state-dot{background:#555}
+.voice-box.is-listening .state-dot{background:#27a9ff;box-shadow:0 0 0 7px #27a9ff18,0 0 16px #27a9ff66}
+.voice-box.is-speaking .state-dot{background:#55d6ff;box-shadow:0 0 0 7px #27a9ff18,0 0 20px #27a9ff}
+.wave{margin-top:21px}
+.voice-hint{margin-top:12px}
+.voice-puck{margin-top:13px;width:min(360px,86%);background:linear-gradient(135deg,#121a20,#0a0e12);border-color:#27a9ff22}
+.voice-puck:hover{border-color:#27a9ff77}
+.voice-puck.active{background:linear-gradient(135deg,#13212a,#0b1116);border-color:#27a9ffaa}
+.copy{min-width:0}
+.header-right{min-width:0;max-width:52%;flex:0 1 auto}
+.status{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media(max-width:760px){
+  main{padding-left:12px;padding-right:12px}
+  header{gap:10px;align-items:center;flex-wrap:nowrap}
+  .brand{min-width:0;flex:1 1 auto}
+  .brand strong{font-size:13px}
+  .header-right{max-width:52%;gap:7px;flex:0 1 auto}
+  .status{font-size:9px;letter-spacing:.08em;max-width:100%;}
+  .auth-btn{padding:7px 9px;font-size:11px}
+  .voice-box{height:min(455px,76vh);padding-top:48px;border-radius:24px}
+  .voice-orb{width:112px;height:112px}
+  .orb-core{font-size:52px}
+  .voice-state{margin-top:31px;font-size:10px;letter-spacing:.13em}
+  .wave{height:48px;margin-top:18px;gap:4px}
+  .wave i{width:3px}
+  .voice-hint{font-size:12px;margin-top:10px}
+  .voice-puck{width:min(340px,90%);margin-top:11px}
+}
+@media(max-width:390px){
+  .status{max-width:42vw}
+  .voice-box{height:430px}
+  .voice-orb{width:104px;height:104px}
+  .voice-puck-copy small{font-size:9px}
+}
