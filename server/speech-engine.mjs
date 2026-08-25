@@ -2,14 +2,23 @@ import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 import OpenAI from 'openai';
 import { LIVE_TOOLS, LIVE_TOOL_HANDLERS } from './live.mjs';
 import { BUSINESS_TOOLS, BUSINESS_TOOL_HANDLERS } from './business.mjs';
-import { FREE_TOOLS } from './free-tools.mjs';
-import { FIELD_TOOLS } from './field-tools.mjs';
+import { FREE_TOOLS, FREE_TOOL_HANDLERS } from './free-tools.mjs';
+import { FIELD_TOOLS, FIELD_TOOL_HANDLERS } from './field-tools.mjs';
 import { MIKE_INSTRUCTIONS } from './persona.mjs';
 
 const OWNER_ONLY_TOOLS = new Set(['get_store_sales', 'get_bot_status', 'get_btc_rsi']);
 const VOICE_TOOLS = [...LIVE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS].filter(
   (t) => !OWNER_ONLY_TOOLS.has(t.name)
 );
+// Handlers for everything VOICE_TOOLS actually offers. Owner-only tools are
+// filtered out above, so the model never sees their schema and can never
+// request them by name here - this map only needs to cover what's offered.
+const VOICE_TOOL_HANDLERS = {
+  ...LIVE_TOOL_HANDLERS,
+  ...BUSINESS_TOOL_HANDLERS,
+  ...FREE_TOOL_HANDLERS,
+  ...FIELD_TOOL_HANDLERS,
+};
 const ENGINE_NAME = 'Mike AI Realtime Voice v2';
 const PUBLIC_URL = process.env.PUBLIC_APP_URL || 'https://doertoughmikeai.com';
 const WS_PATH = '/speech-engine';
@@ -135,11 +144,73 @@ async function ensureEngine() {
 }
 
 function transcriptToInput(transcript) { return transcript.map((item) => ({ role: item.role === 'agent' ? 'assistant' : 'user', content: item.content })); }
+
+// Real voice tool-calling. This was previously missing entirely: the model
+// was handed the full VOICE_TOOLS list and would sometimes answer with a
+// tool call instead of text. sendResponse's stream reader only extracts
+// text deltas (confirmed against the SDK source - it has no concept of a
+// function_call event), so a tool-call-only turn produced zero speakable
+// chunks and the conversation went silent while still listening. Adding
+// FREE_TOOLS/FIELD_TOOLS earlier made this far more likely to trigger, since
+// the model now has many more reasons to reach for a tool mid-conversation.
+//
+// Same round-capped tool loop already proven in the /api/ask route in
+// index.mjs, adapted to end in a spoken response instead of a JSON one.
 async function respondToTranscript(transcript, signal, session) {
   requireKey(process.env.OPENAI_API_KEY, 'openai');
   if (!openai) throw new Error('openai_client_missing');
-  const response = await openai.responses.create({ model: process.env.OPENAI_MODEL || 'gpt-4o-mini', instructions: MIKE_INSTRUCTIONS + '\n\nVOICE CONVERSATION MODE: Keep spoken responses natural, concise, and easy to say aloud. Do not use markdown-heavy formatting. Do not mention that another service is generating your voice.', input: transcriptToInput(transcript), tools: VOICE_TOOLS, stream: true }, { signal });
-  await session.sendResponse(response);
+
+  const instructions =
+    MIKE_INSTRUCTIONS +
+    '\n\nVOICE CONVERSATION MODE: Keep spoken responses natural, concise, and easy to say aloud. Do not use markdown-heavy formatting. Do not mention that another service is generating your voice.';
+
+  let input = transcriptToInput(transcript);
+  let text = '';
+
+  for (let round = 0; round < 4; round += 1) {
+    const response = await openai.responses.create(
+      { model: process.env.OPENAI_MODEL || 'gpt-4o-mini', instructions, input, tools: VOICE_TOOLS },
+      { signal }
+    );
+
+    const calls = (response.output || []).filter((item) => item.type === 'function_call');
+
+    if (!calls.length) {
+      text = response.output_text?.trim() || '';
+      break;
+    }
+
+    console.log(`[speech-engine] voice tool round ${round + 1}: ${calls.map((c) => c.name).join(', ')}`);
+
+    // Carry the model's own tool-call turn forward so it has that context
+    // when it sees the results next round.
+    input = [...input, ...response.output];
+
+    for (const call of calls) {
+      let args = {};
+      try {
+        args = call.arguments ? JSON.parse(call.arguments) : {};
+      } catch {
+        // leave args empty; the handler errors on missing required fields
+      }
+
+      const handler = VOICE_TOOL_HANDLERS[call.name];
+      let output;
+      try {
+        output = handler ? await handler(args) : { error: `Unknown tool "${call.name}".` };
+      } catch (toolErr) {
+        console.error(`[speech-engine] voice tool ${call.name} failed:`, toolErr.message || toolErr);
+        output = { error: toolErr.message || 'tool_unavailable' };
+      }
+
+      input.push({ type: 'function_call_output', call_id: call.call_id, output: JSON.stringify(output) });
+    }
+  }
+
+  // Every round produced a tool call with nothing left to say, or the model
+  // otherwise came back empty - speak SOMETHING rather than leaving the
+  // caller in silence again.
+  await session.sendResponse(text || "Sorry, I hit a snag pulling that up. Try asking again.");
 }
 
 export async function initializeSpeechEngine(httpServer) {
