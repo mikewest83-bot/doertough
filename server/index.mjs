@@ -13,6 +13,7 @@ import { FIELD_TOOLS, FIELD_TOOL_HANDLERS } from './field-tools.mjs';
 import { installGuards } from './guard.mjs';
 import { mailerConfigured } from './mailer.mjs';
 import { MIKE_INSTRUCTIONS } from './persona.mjs';
+import { getRelevantMemories, listMemories, saveMemory, deleteMemory, memoryPrompt, CATEGORIES } from './memory.mjs';
 import {
   migrate,
   hasPro,
@@ -525,7 +526,9 @@ app.post('/api/ask', async (req, res) => {
     // Owner sees their own business data; everyone else does not.
     const owner = isOwner(req.user);
     const tools = owner ? LIVE_TOOLS : PUBLIC_TOOLS;
-    const instructions = owner ? MIKE_INSTRUCTIONS : MIKE_INSTRUCTIONS + NON_OWNER_NOTE;
+    const relevantMemories = req.user ? await getRelevantMemories(req.user.id, message, 12) : [];
+const memoryContext = memoryPrompt(relevantMemories);
+const instructions = (owner ? MIKE_INSTRUCTIONS : MIKE_INSTRUCTIONS + NON_OWNER_NOTE) + memoryContext;
 
     let text = "I'm here. Give me another shot.";
 
@@ -588,6 +591,48 @@ app.post('/api/ask', async (req, res) => {
     res.status(err.status || 502).json({
       error: err.message || 'mike_ai_unavailable',
     });
+  }
+});
+
+// === MIKE_MEMORY_WIRED_V1 ===
+// Persistent, account-scoped memory. Memory is deliberately separate
+// from the core persona and can be viewed or deleted by the account.
+app.get('/api/memory', authRequired, async (req, res) => {
+  try {
+    const category = req.query?.category ? String(req.query.category) : undefined;
+    res.json({ memories: await listMemories(req.user.id, { category }) });
+  } catch (err) {
+    console.error('[memory] list failed:', err.message || err);
+    res.status(500).json({ error: 'memory_unavailable' });
+  }
+});
+
+app.post('/api/memory', authRequired, async (req, res) => {
+  try {
+    const category = String(req.body?.category || 'context');
+    const memory = String(req.body?.memory || '').trim();
+    if (!memory) return res.status(400).json({ error: 'memory_required' });
+    if (!CATEGORIES.has(category)) return res.status(400).json({ error: 'memory_category_invalid' });
+    const saved = await saveMemory(req.user.id, {
+      category,
+      memory,
+      importance: req.body?.importance,
+      source: req.body?.source || 'user'
+    });
+    res.json({ memory: saved });
+  } catch (err) {
+    console.error('[memory] save failed:', err.message || err);
+    res.status(500).json({ error: 'memory_save_failed' });
+  }
+});
+
+app.delete('/api/memory/:id', authRequired, async (req, res) => {
+  try {
+    const deleted = await deleteMemory(req.user.id, req.params.id);
+    res.json({ deleted });
+  } catch (err) {
+    console.error('[memory] delete failed:', err.message || err);
+    res.status(500).json({ error: 'memory_delete_failed' });
   }
 });
 
