@@ -138,21 +138,26 @@ function App() {
       if (!data.audioBase64) throw new Error('Mike returned no audio.');
 
       // Use the SAME persistent HTML audio element that was primed by the
-      // user's gesture. Avoid Blob/object URLs here: Safari/WebKit has had
-      // multiple media-element issues around blob URLs. A data URI preserves
-      // the MP3 bytes and MIME type directly on the persistent element.
+      // user's gesture. Feed it a Blob object URL, NOT a data: URI — WebKit
+      // rejects long data: URIs on media elements with MEDIA_ERR_SRC_NOT_
+      // SUPPORTED (code 4), which is why Safari reported "could not play it".
+      // The blob carries the identical MP3 bytes and MIME type.
       const mime = data.mimeType || 'audio/mpeg';
-      const dataUri = `data:${mime};base64,${data.audioBase64}`;
+      const binary = atob(data.audioBase64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+      clearAudioUrl();
+      audioUrlRef.current = URL.createObjectURL(new Blob([bytes], { type: mime }));
       const el = audioElRef.current;
       if (!el) throw new Error('audio_element_missing');
       el.volume = 1;
       el.preload = 'auto';
-      el.src = dataUri;
+      el.src = audioUrlRef.current;
       el.load();
 
       await new Promise((resolve, reject) => {
         let settled = false;
-        const cleanup = () => { el.onended = null; el.onerror = null; el.onabort = null; };
+        const cleanup = () => { el.onended = null; el.onerror = null; el.onabort = null; clearAudioUrl(); };
         const finish = (fn, value) => { if (settled) return; settled = true; cleanup(); fn(value); };
         el.onended = () => finish(resolve);
         el.onerror = () => finish(reject, new Error(`Mike generated audio, but Safari could not play it (media error ${el.error?.code || 'unknown'}).`));
