@@ -14,6 +14,7 @@
 
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import {
   dbEnabled,
   createUser,
@@ -21,7 +22,11 @@ import {
   getUserById,
   touchUser,
   hasPro,
+  createPasswordReset,
+  findPasswordReset,
+  consumePasswordReset,
 } from './db.mjs';
+import { sendPasswordReset } from './mailer.mjs';
 
 const JWT_SECRET = process.env.JWT_SECRET || '';
 const TOKEN_TTL = '30d';
@@ -30,7 +35,17 @@ const OWNER_EMAIL = String(process.env.OWNER_EMAIL || '').trim().toLowerCase();
 
 export const authConfigured = () => dbEnabled && !!JWT_SECRET;
 
-const sign = (user) => jwt.sign({ uid: String(user.id) }, JWT_SECRET, { expiresIn: TOKEN_TTL });
+const sign = (user) =>
+  jwt.sign({ uid: String(user.id), tv: Number(user.token_version || 0) }, JWT_SECRET, {
+    expiresIn: TOKEN_TTL,
+  });
+
+const RESET_TTL_MINUTES = Number(process.env.PASSWORD_RESET_TTL_MINUTES || 60);
+const RESET_BASE_URL = String(
+  process.env.BILLING_RETURN_URL || 'https://doertoughmikeai.com'
+).replace(/\/+$/, '');
+
+const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
 
 // What the browser is allowed to know about an account. Subscription state is
 // included so the UI can show the right button, but it is only ever READ here
@@ -142,6 +157,89 @@ export async function me(req, res) {
   res.json({ user: publicUser(req.user) });
 }
 
+// Ask for a reset link.
+//
+// ALWAYS returns the same 200 whether or not the address has an account.
+// Anything else turns this endpoint into a way to test which emails are
+// registered - the same reason login has one error message for both failures.
+export async function requestPasswordReset(req, res) {
+  if (!guard(res)) return;
+
+  const ok = () =>
+    res.json({
+      ok: true,
+      message: 'If that email has an account, a reset link is on its way.',
+    });
+
+  try {
+    const email = normalizeEmail(req.body?.email);
+    if (!email || !looksLikeEmail(email)) return ok();
+
+    const user = await getUserByEmail(email);
+    if (!user) {
+      console.log('[auth] reset requested for an address with no account');
+      return ok();
+    }
+
+    const token = crypto.randomBytes(32).toString('base64url');
+    const expiresAt = new Date(Date.now() + RESET_TTL_MINUTES * 60_000);
+    await createPasswordReset(user.id, hashToken(token), expiresAt);
+
+    const resetUrl = `${RESET_BASE_URL}/?reset=${encodeURIComponent(token)}`;
+    await sendPasswordReset({
+      to: user.email,
+      name: user.name,
+      resetUrl,
+      expiresMinutes: RESET_TTL_MINUTES,
+    });
+
+    console.log(`[auth] reset link issued for account #${user.id}`);
+    return ok();
+  } catch (err) {
+    // Even a crash returns the same shape, for the same reason.
+    console.error('[auth] reset request failed:', err.message || err);
+    return ok();
+  }
+}
+
+// Redeem a reset link.
+export async function resetPassword(req, res) {
+  if (!guard(res)) return;
+
+  try {
+    const { token, password } = req.body || {};
+    if (!token) return res.status(400).json({ error: 'That reset link is not valid.' });
+
+    if (!password || String(password).length < 8) {
+      return res.status(400).json({ error: 'Use a password of at least 8 characters.' });
+    }
+    if (String(password).length > 200) {
+      return res.status(400).json({ error: 'That password is too long.' });
+    }
+
+    const ticket = await findPasswordReset(hashToken(token));
+    if (!ticket) {
+      return res.status(400).json({
+        error: 'That reset link has expired or already been used. Request a new one.',
+      });
+    }
+
+    const passwordHash = await bcrypt.hash(String(password), 12);
+    const user = await consumePasswordReset(ticket.id, ticket.user_id, passwordHash);
+    if (!user) {
+      return res.status(400).json({ error: 'That reset link has already been used.' });
+    }
+
+    console.log(`[auth] password reset completed for account #${user.id}`);
+    // Signed straight in on the new token_version; every older session is now
+    // dead, including whoever prompted the reset.
+    res.json({ token: sign(user), user: publicUser(user) });
+  } catch (err) {
+    console.error('[auth] reset failed:', err.message || err);
+    res.status(500).json({ error: 'Could not reset that password. Try again.' });
+  }
+}
+
 async function userFromRequest(req) {
   if (!authConfigured()) return null;
 
@@ -150,8 +248,18 @@ async function userFromRequest(req) {
   if (!token) return null;
 
   try {
-    const { uid } = jwt.verify(token, JWT_SECRET);
-    return await getUserById(uid);
+    const { uid, tv } = jwt.verify(token, JWT_SECRET);
+    const user = await getUserById(uid);
+    if (!user) return null;
+    // A token minted before the last password change is dead. Tokens issued
+    // before this field existed carry no tv and are treated as version 0,
+    // which matches the column default - so nobody is logged out by the
+    // upgrade itself.
+    if (Number(tv || 0) !== Number(user.token_version || 0)) {
+      console.log(`[auth] stale token rejected for account #${user.id}`);
+      return null;
+    }
+    return user;
   } catch {
     return null;
   }
