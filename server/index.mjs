@@ -11,6 +11,7 @@ import { BUSINESS_TOOLS, BUSINESS_TOOL_HANDLERS } from './business.mjs';
 import { FREE_TOOLS, FREE_TOOL_HANDLERS } from './free-tools.mjs';
 import { FIELD_TOOLS, FIELD_TOOL_HANDLERS } from './field-tools.mjs';
 import { installGuards } from './guard.mjs';
+import { mailerConfigured } from './mailer.mjs';
 import { MIKE_INSTRUCTIONS } from './persona.mjs';
 import {
   migrate,
@@ -38,6 +39,8 @@ import {
   register,
   login,
   me,
+  requestPasswordReset,
+  resetPassword,
   authRequired,
   optionalAuth,
   isOwner,
@@ -150,6 +153,8 @@ installGuards(app);
 app.post('/api/auth/register', register);
 app.post('/api/auth/login', login);
 app.get('/api/auth/me', authRequired, me);
+app.post('/api/auth/forgot-password', requestPasswordReset);
+app.post('/api/auth/reset-password', resetPassword);
 
 // ===== Helpers =====
 const requireKey = (key, name) => {
@@ -419,6 +424,7 @@ app.get('/api/health', (req, res) => {
       globalSessions: VOICE_SESSIONS_GLOBAL,
     },
     accountsConfigured: authConfigured(),
+    mailConfigured: mailerConfigured(),
     billingConfigured: billingConfigured(),
     model: OPENAI_MODEL,
     timestamp: new Date().toISOString(),
