@@ -49,7 +49,26 @@ async function resolveVoiceId() {
 
 async function ensureEngine() {
   requireKey(process.env.ELEVENLABS_API_KEY, 'elevenlabs');
-  if (cachedEngineId) return cachedEngineId;
+
+  if (cachedEngineId) {
+    // Keep an explicitly configured engine, but make sure its upstream WebSocket
+    // endpoint follows the current public app URL. ElevenLabs requires the
+    // Speech Engine ws_url to be publicly reachable and current.
+    try {
+      await fetch(`https://api.elevenlabs.io/v1/speech-engine/${encodeURIComponent(cachedEngineId)}`, {
+        method: 'PATCH',
+        headers: {
+          'xi-api-key': process.env.ELEVENLABS_API_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ speech_engine: { ws_url: ENGINE_WS_URL } }),
+      });
+      console.log(`[speech-engine] synced upstream URL for ${cachedEngineId}: ${ENGINE_WS_URL}`);
+    } catch (error) {
+      console.warn('[speech-engine] could not sync configured engine URL:', error?.message || error);
+    }
+    return cachedEngineId;
+  }
 
   const headers = {
     'xi-api-key': process.env.ELEVENLABS_API_KEY,
@@ -62,7 +81,16 @@ async function ensureEngine() {
     const existing = (data.speech_engines || []).find((item) => item.name === ENGINE_NAME);
     if (existing?.speech_engine_id) {
       cachedEngineId = existing.speech_engine_id;
-      console.log(`[speech-engine] using existing engine ${cachedEngineId}`);
+      const updateResponse = await fetch(`https://api.elevenlabs.io/v1/speech-engine/${encodeURIComponent(cachedEngineId)}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ speech_engine: { ws_url: ENGINE_WS_URL } }),
+      });
+      if (!updateResponse.ok) {
+        const raw = await updateResponse.text();
+        throw new Error(`speech_engine_update_${updateResponse.status}: ${raw.slice(0, 400)}`);
+      }
+      console.log(`[speech-engine] using existing engine ${cachedEngineId} with upstream ${ENGINE_WS_URL}`);
       return cachedEngineId;
     }
   }
@@ -96,7 +124,7 @@ async function ensureEngine() {
   if (!createResponse.ok) throw new Error(`speech_engine_create_${createResponse.status}: ${raw.slice(0, 400)}`);
   const data = JSON.parse(raw);
   cachedEngineId = data.speech_engine_id;
-  console.log(`[speech-engine] created ${cachedEngineId}`);
+  console.log(`[speech-engine] created ${cachedEngineId} with upstream ${ENGINE_WS_URL}`);
   return cachedEngineId;
 }
 
@@ -145,7 +173,8 @@ export async function initializeSpeechEngine(httpServer) {
       }
     },
     onClose: (session) => console.log(`[speech-engine] closed ${session?.conversationId || ''}`),
-    onError: (error) => console.error('[speech-engine] error:', error?.message || error),
+    onDisconnect: (session) => console.warn(`[speech-engine] disconnected ${session?.conversationId || ''}`),
+    onError: (error, session) => console.error('[speech-engine] error:', error?.message || error, session?.conversationId || ''),
   });
 
   console.log(`[speech-engine] attached at ${ENGINE_WS_URL}`);
