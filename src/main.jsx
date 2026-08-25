@@ -14,13 +14,37 @@ function App() {
   const [messages, setMessages] = useState([{ role: 'mike', text: "What's up? I'm Mike. Tell me what you're trying to figure out. We'll figure it out." }]);
   const [input, setInput] = useState(''); const [busy, setBusy] = useState(false); const [speaking, setSpeaking] = useState(false); const [listening, setListening] = useState(false); const [conversationMode, setConversationMode] = useState(false); const [error, setError] = useState(''); const [user, setUser] = useState(null); const [authOpen, setAuthOpen] = useState(false); const [authMode, setAuthMode] = useState('login'); const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' }); const [authBusy, setAuthBusy] = useState(false); const [authError, setAuthError] = useState(''); const [authNotice, setAuthNotice] = useState(''); const [resetToken, setResetToken] = useState(''); const [accountsOn, setAccountsOn] = useState(false);
   const conversationRef = useRef(null); const conversationModeRef = useRef(false); const audioElRef = useRef(null); const audioUrlRef = useRef(null); const speakJobRef = useRef(0); const statusRef = useRef('ready');
+  // Voice-minute budget: the server reserves a full session's worth of
+  // minutes the instant a token is minted, and only releases the unused
+  // part once this sessionKey is reported back on hangup. Without that
+  // report every tap - even a two-second one - burns the full reservation
+  // and never gives it back.
+  const voiceSessionRef = useRef(null);
   const setConversation = (enabled) => { conversationModeRef.current = enabled; setConversationMode(enabled); };
   const setStatus = (status) => { statusRef.current = status; setListening(status === 'listening'); setSpeaking(status === 'talking'); };
   const clearAudioUrl = () => { if (audioUrlRef.current) { try { URL.revokeObjectURL(audioUrlRef.current); } catch {} audioUrlRef.current = null; } };
   const unlockAudio = () => { try { const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return; const ctx = new Ctx(); if (ctx.state !== 'running') ctx.resume().catch(() => {}); setTimeout(() => ctx.close().catch(() => {}), 500); } catch {} };
   const stopSpeaking = () => { speakJobRef.current += 1; const el = audioElRef.current; if (el) { try { el.pause(); } catch {} } clearAudioUrl(); if (statusRef.current === 'talking') setStatus('ready'); };
   const logClientError = async (phase, err) => { console.error(`[voice] ${phase}:`, err); try { await fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phase, name: err?.name || '', message: err?.message || String(err || ''), extra: err?.stack || '' }) }); } catch {} };
-  const stopRealtimeConversation = async () => { const active = conversationRef.current; conversationRef.current = null; if (active) { try { await active.endSession(); } catch (err) { console.warn('[voice] endSession:', err); } } setConversation(false); setStatus('ready'); };
+  // Report the real duration so the server releases the unused part of the
+  // reservation. Safe to call more than once - it clears the ref immediately
+  // so a second call is a no-op, and the server refuses a second report for
+  // the same key regardless. keepalive lets this survive a closed tab.
+  const settleVoiceSession = () => {
+    const session = voiceSessionRef.current;
+    voiceSessionRef.current = null;
+    if (!session?.key) return;
+    const seconds = Math.min(Math.round((Date.now() - session.startedAt) / 1000), session.maxSeconds);
+    try {
+      fetch('/api/speech/session-end', {
+        method: 'POST',
+        keepalive: true,
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ sessionKey: session.key, seconds }),
+      }).catch(() => {});
+    } catch {}
+  };
+  const stopRealtimeConversation = async () => { const active = conversationRef.current; conversationRef.current = null; if (active) { try { await active.endSession(); } catch (err) { console.warn('[voice] endSession:', err); } } settleVoiceSession(); setConversation(false); setStatus('ready'); };
   const startRealtimeConversation = async () => {
     if (!readToken()) { setAuthMode('login'); setAuthError('Sign in to talk with Mike. Your account includes the free voice trial.'); setAuthOpen(true); setConversation(false); return; }
     unlockAudio(); setError(''); setStatus('listening');
@@ -30,12 +54,17 @@ function App() {
       stream.getTracks().forEach((track) => track.stop());
       const tokenData = await fetchJson('/api/speech/token', { headers: authHeaders() }, 30000);
       if (!tokenData.token) throw new Error('Mike did not return a voice conversation token.');
+      voiceSessionRef.current = {
+        key: tokenData.sessionKey || null,
+        maxSeconds: Number(tokenData.maxSessionSeconds) || 600,
+        startedAt: Date.now(),
+      };
       let session;
       session = await Conversation.startSession({
         conversationToken: tokenData.token,
         connectionType: 'webrtc',
         onConnect: () => { conversationRef.current = session; setConversation(true); setStatus('listening'); setError(''); },
-        onDisconnect: () => { if (conversationRef.current === session) conversationRef.current = null; setConversation(false); setStatus('ready'); },
+        onDisconnect: () => { if (conversationRef.current === session) conversationRef.current = null; settleVoiceSession(); setConversation(false); setStatus('ready'); },
         onError: (err) => { logClientError('realtime-error', err); setStatus('ready'); setError(err?.message || 'Mike lost the voice connection. Tap Talk to Mike and try again.'); },
         onStatusChange: (status) => { if (status === 'connecting') setStatus('listening'); else if (status === 'connected' && !speaking) setStatus('listening'); else if (status === 'disconnected') setStatus('ready'); },
         onModeChange: ({ mode }) => { if (mode === 'speaking') setStatus('talking'); else if (mode === 'listening') setStatus('listening'); },
@@ -43,6 +72,10 @@ function App() {
       });
       conversationRef.current = session; setConversation(true); setStatus('listening');
     } catch (err) {
+      // A token may have been minted for a call that never actually
+      // connected (mic denied, network drop) - settle it at its real
+      // (near-zero) duration rather than leaving the full reservation charged.
+      settleVoiceSession();
       await logClientError('realtime-start', err); setConversation(false); setStatus('ready');
       if (err?.status === 401 || String(err?.message || '').includes('sign_in_required')) { setAuthMode('login'); setAuthError('Sign in to talk with Mike.'); setAuthOpen(true); }
       else if (err?.status === 402 || String(err?.message || '').includes('upgrade_required')) setError('Your free voice session has been used. Start the Mike AI free trial to keep talking.');
@@ -104,6 +137,14 @@ function App() {
     setAuthOpen(true);
   }, []);
 
+  useEffect(() => {
+    const onUnload = () => settleVoiceSession();
+    window.addEventListener('beforeunload', onUnload);
+    // beforeunload is unreliable on mobile Safari for a backgrounded tab
+    // that gets discarded; pagehide covers that case.
+    window.addEventListener('pagehide', onUnload);
+    return () => { window.removeEventListener('beforeunload', onUnload); window.removeEventListener('pagehide', onUnload); };
+  }, []);
   useEffect(() => () => { stopRealtimeConversation(); stopSpeaking(); }, []);
   const statusText = listening ? 'MIKE IS LISTENING' : speaking ? 'MIKE IS TALKING' : busy ? 'MIKE IS THINKING' : 'MIKE IS HERE';
   const voiceControlLabel = conversationMode ? 'END CONVERSATION' : 'TAP TO TALK';
