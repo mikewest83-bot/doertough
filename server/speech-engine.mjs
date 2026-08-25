@@ -217,7 +217,26 @@ export async function initializeSpeechEngine(httpServer) {
   if (!elevenlabs || !process.env.OPENAI_API_KEY) { console.warn('[speech-engine] disabled: missing ELEVENLABS_API_KEY or OPENAI_API_KEY'); return null; }
   const engineId = await ensureEngine();
   const engine = await elevenlabs.speechEngine.get(engineId);
-  await engine.attach(httpServer, WS_PATH, { debug: true, onInit: (conversationId) => console.log(`[speech-engine] session ${conversationId}`), onTranscript: async (transcript, signal, session) => { try { await respondToTranscript(transcript, signal, session); } catch (error) { if (error?.name !== 'AbortError') console.error('[speech-engine] response failed:', error?.message || error); } }, onClose: (session) => console.log(`[speech-engine] closed ${session?.conversationId || ''}`), onDisconnect: (session) => console.warn(`[speech-engine] disconnected ${session?.conversationId || ''}`), onError: (error, session) => console.error('[speech-engine] error:', error?.message || error, session?.conversationId || '') });
+  await engine.attach(httpServer, WS_PATH, {
+    debug: true,
+    onInit: (conversationId) => console.log(`[speech-engine] session ${conversationId}`),
+    onTranscript: async (transcript, signal, session) => {
+      try {
+        await respondToTranscript(transcript, signal, session);
+      } catch (error) {
+        if (error?.name === 'AbortError') return;
+        console.error('[speech-engine] response failed:', error?.message || error);
+        try {
+          await session.sendResponse('I hit a snag for a second. Give me that one more time.');
+        } catch (sendError) {
+          console.error('[speech-engine] fallback response failed:', sendError?.message || sendError);
+        }
+      }
+    },
+    onClose: (session) => console.log(`[speech-engine] closed ${session?.conversationId || ''}`),
+    onDisconnect: (session) => console.warn(`[speech-engine] disconnected ${session?.conversationId || ''}`),
+    onError: (error, session) => console.error('[speech-engine] error:', error?.message || error, session?.conversationId || '')
+  });
   console.log(`[speech-engine] attached at ${ENGINE_WS_URL}`);
   return engineId;
 }
