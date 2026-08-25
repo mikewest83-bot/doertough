@@ -31,7 +31,7 @@
   background-image:linear-gradient(to bottom,#fff 0 4px,transparent 4px 8px,#f26b21 8px 12px,transparent 12px)!important;
   background-repeat:no-repeat!important;
   background-size:64% 12px!important;
-  background-position:50% 70%!important;
+  background-position:50% 76%!important;
   border:1px solid #6b727b!important;
   box-shadow:inset 0 0 0 2px #0b0e12,0 0 0 2px #f26b2166!important;
   overflow:hidden!important;
@@ -120,7 +120,7 @@
   .voice-orb{width:270px!important;height:270px!important;flex-basis:270px!important;margin-top:2px!important}
   .voice-orb:before{inset:-24px!important;border:2px solid #27a9ff!important;box-shadow:0 0 16px #27a9ff33!important}
   .voice-orb:after{inset:-42px!important;border:2px solid #f26b2166!important;box-shadow:none!important}
-  .orb-core{width:66%!important;height:66%!important;background-color:#070a0e!important;background-position:50% 70%!important}
+  .orb-core{width:66%!important;height:66%!important;background-color:#070a0e!important;background-position:50% 76%!important}
   .voice-orb .orb-core > span,.voice-orb .orb-core > em{font-size:64px!important;top:18%!important}
   .orb-core:after{font-size:18px!important;bottom:10%!important}
   .voice-state{margin-top:15px!important;font-size:12px!important;gap:12px!important}
@@ -137,5 +137,9 @@
   .voice-orb{width:250px!important;height:250px!important;flex-basis:250px!important}
   .voice-orb .orb-core > span,.voice-orb .orb-core > em{font-size:58px!important;top:18%!important}
   .orb-core:after{font-size:16px!important}
-  .orb-core{background-size:64% 11px!important;background-position:50% 70%!important}
+  .orb-core{background-size:64% 11px!important;background-position:50% 75%!important}
 }
+
+/* FINAL LOCKUP TUNE — keep the two bars clearly below DT, never through the letters. */
+.orb-core{background-position:50% 76%!important;background-size:64% 10px!important}
+@media(max-width:390px){.orb-core{background-position:50% 75%!important;background-size:64% 9px!important}}
