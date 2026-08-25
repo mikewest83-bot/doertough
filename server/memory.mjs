@@ -4,6 +4,7 @@
 // separate from Mike's personality instructions so personality can evolve
 // without rewriting what Mike has learned about a user.
 import { query, dbEnabled } from './db.mjs';
+import { getOperatingSnapshot, operatingSystemPrompt } from './operating-system.mjs';
 
 let ready = false;
 
@@ -94,10 +95,33 @@ export async function listMemories(userId, { category, limit = 100 } = {}) {
   return rows;
 }
 
+async function addOperatingContext(userId, memories) {
+  try {
+    const snapshot = await getOperatingSnapshot(userId);
+    if (!snapshot) return memories;
+    const hasContext = [snapshot.focus, snapshot.actions, snapshot.decisions, snapshot.patterns]
+      .some((items) => Array.isArray(items) && items.length > 0);
+    if (!hasContext) return memories;
+
+    return [
+      ...memories,
+      {
+        category: 'operating_system',
+        memory: operatingSystemPrompt(snapshot).replace(/^\n\nMIKE PERSONAL OPERATING SYSTEM — CURRENT CONTEXT\n/, ''),
+        importance: 5,
+        source: 'mike-os',
+      },
+    ];
+  } catch (err) {
+    console.error('[memory] operating-system context failed:', err.message || err);
+    return memories;
+  }
+}
+
 export async function getRelevantMemories(userId, queryText, limit = 12) {
   if (!userId || !(await ensureMemorySchema())) return [];
   const words = clean(queryText, 800).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3).slice(0, 12);
-  if (!words.length) return listMemories(userId, { limit });
+  if (!words.length) return addOperatingContext(userId, await listMemories(userId, { limit }));
 
   // Lightweight lexical retrieval keeps v1 dependency-free. We can replace
   // this with embeddings later without changing the memory API.
@@ -119,7 +143,7 @@ export async function getRelevantMemories(userId, queryText, limit = 12) {
       [rows.map((r) => r.id)]
     ).catch(() => {});
   }
-  return rows;
+  return addOperatingContext(userId, rows);
 }
 
 export async function deleteMemory(userId, id) {
