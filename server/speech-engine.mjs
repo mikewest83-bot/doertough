@@ -47,27 +47,39 @@ async function resolveVoiceId() {
   return voices[0].voice.voice_id;
 }
 
+async function syncAndVerifyEngine(engineId) {
+  const headers = {
+    'xi-api-key': process.env.ELEVENLABS_API_KEY,
+    'Content-Type': 'application/json',
+  };
+  const url = `https://api.elevenlabs.io/v1/speech-engine/${encodeURIComponent(engineId)}`;
+
+  const updateResponse = await fetch(url, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ speech_engine: { ws_url: ENGINE_WS_URL } }),
+  });
+
+  if (!updateResponse.ok) {
+    const raw = await updateResponse.text();
+    throw new Error(`speech_engine_update_${updateResponse.status}: ${raw.slice(0, 400)}`);
+  }
+
+  const updated = await updateResponse.json().catch(() => null);
+  const actualUrl = updated?.speech_engine?.ws_url || null;
+  if (actualUrl !== ENGINE_WS_URL) {
+    throw new Error(`speech_engine_ws_url_mismatch: expected=${ENGINE_WS_URL} actual=${actualUrl || 'missing'}`);
+  }
+
+  console.log(`[speech-engine] verified upstream URL for ${engineId}: ${actualUrl}`);
+  return engineId;
+}
+
 async function ensureEngine() {
   requireKey(process.env.ELEVENLABS_API_KEY, 'elevenlabs');
 
   if (cachedEngineId) {
-    // Keep an explicitly configured engine, but make sure its upstream WebSocket
-    // endpoint follows the current public app URL. ElevenLabs requires the
-    // Speech Engine ws_url to be publicly reachable and current.
-    try {
-      await fetch(`https://api.elevenlabs.io/v1/speech-engine/${encodeURIComponent(cachedEngineId)}`, {
-        method: 'PATCH',
-        headers: {
-          'xi-api-key': process.env.ELEVENLABS_API_KEY,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ speech_engine: { ws_url: ENGINE_WS_URL } }),
-      });
-      console.log(`[speech-engine] synced upstream URL for ${cachedEngineId}: ${ENGINE_WS_URL}`);
-    } catch (error) {
-      console.warn('[speech-engine] could not sync configured engine URL:', error?.message || error);
-    }
-    return cachedEngineId;
+    return syncAndVerifyEngine(cachedEngineId);
   }
 
   const headers = {
@@ -81,17 +93,7 @@ async function ensureEngine() {
     const existing = (data.speech_engines || []).find((item) => item.name === ENGINE_NAME);
     if (existing?.speech_engine_id) {
       cachedEngineId = existing.speech_engine_id;
-      const updateResponse = await fetch(`https://api.elevenlabs.io/v1/speech-engine/${encodeURIComponent(cachedEngineId)}`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({ speech_engine: { ws_url: ENGINE_WS_URL } }),
-      });
-      if (!updateResponse.ok) {
-        const raw = await updateResponse.text();
-        throw new Error(`speech_engine_update_${updateResponse.status}: ${raw.slice(0, 400)}`);
-      }
-      console.log(`[speech-engine] using existing engine ${cachedEngineId} with upstream ${ENGINE_WS_URL}`);
-      return cachedEngineId;
+      return syncAndVerifyEngine(cachedEngineId);
     }
   }
 
