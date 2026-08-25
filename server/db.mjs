@@ -161,13 +161,20 @@ export async function touchUser(id) {
 
 // ===== Subscription =====
 
+// The owner account is allowed to test the complete paid experience without
+// having to purchase its own subscription. This is server-side only and is
+// controlled by OWNER_EMAIL, which is also used by auth.mjs for owner access.
+const OWNER_EMAIL = String(process.env.OWNER_EMAIL || '').trim().toLowerCase();
+
 // The single source of truth for "is this account paid". A trial counts as
 // paid - that is the whole point of the trial - but it still has to be a
-// trial Stripe told us about.
+// trial Stripe told us about. The owner is the sole intentional exception
+// for product testing.
 const ENTITLED_STATUSES = new Set(['active', 'trialing']);
 
 export function hasPro(user) {
   if (!user) return false;
+  if (OWNER_EMAIL && normalizeEmail(user.email) === OWNER_EMAIL) return true;
   if (user.plan !== 'pro') return false;
   if (!ENTITLED_STATUSES.has(String(user.subscription_status || ''))) return false;
   if (user.current_period_end && new Date(user.current_period_end) < new Date()) return false;
@@ -225,70 +232,81 @@ export async function setSubscriptionState(userId, {
 // ===== Voice metering =====
 
 export async function recordVoiceSession(userId, engineId) {
-  await query('INSERT INTO voice_sessions (user_id, engine_id) VALUES ($1, $2)', [
-    userId,
-    engineId || null,
-  ]);
+  const { rows } = await query(
+    `INSERT INTO voice_sessions (user_id, engine_id)
+     VALUES ($1, $2)
+     RETURNING *`,
+    [userId, engineId || null]
+  );
+  return rows[0];
 }
 
-// Sessions this user has started in the last 30 days.
+// The voice budget resets on a rolling 30-day window.
 export async function countVoiceSessions(userId) {
   const { rows } = await query(
-    `SELECT COUNT(*)::int AS n
+    `SELECT COUNT(*)::int AS count
        FROM voice_sessions
-      WHERE user_id = $1 AND started_at > now() - interval '30 days'`,
+      WHERE user_id = $1
+        AND started_at >= now() - interval '30 days'`,
     [userId]
   );
-  return rows[0]?.n || 0;
+  return rows[0]?.count || 0;
 }
 
-// Sessions across every account in the last 30 days. This is the backstop
-// against the workspace's ElevenLabs minutes being drained in a day.
+// Workspace-wide pool. This protects the ElevenLabs account from a busy day
+// draining the month's allowance for everyone.
 export async function countVoiceSessionsGlobal() {
   const { rows } = await query(
-    `SELECT COUNT(*)::int AS n
+    `SELECT COUNT(*)::int AS count
        FROM voice_sessions
-      WHERE started_at > now() - interval '30 days'`
+      WHERE started_at >= now() - interval '30 days'`
   );
-  return rows[0]?.n || 0;
+  return rows[0]?.count || 0;
 }
 
 // ===== Conversations =====
 
 export async function createConversation(userId) {
   const { rows } = await query(
-    'INSERT INTO conversations (user_id) VALUES ($1) RETURNING id',
+    `INSERT INTO conversations (user_id) VALUES ($1) RETURNING *`,
     [userId]
   );
-  return rows[0].id;
-}
-
-export async function conversationBelongsTo(conversationId, userId) {
-  const { rows } = await query(
-    'SELECT 1 FROM conversations WHERE id = $1 AND user_id = $2',
-    [conversationId, userId]
-  );
-  return rows.length > 0;
+  return rows[0];
 }
 
 export async function addMessage(conversationId, role, content) {
-  await query(
-    'INSERT INTO messages (conversation_id, role, content) VALUES ($1, $2, $3)',
-    [conversationId, role, String(content).slice(0, 8000)]
+  const { rows } = await query(
+    `INSERT INTO messages (conversation_id, role, content)
+     VALUES ($1, $2, $3)
+     RETURNING *`,
+    [conversationId, role, String(content || '')]
   );
+  return rows[0];
 }
 
-// Most recent turns, oldest first, for feeding back into the model.
-export async function recentMessages(conversationId, limit = 10) {
+export async function listConversations(userId) {
   const { rows } = await query(
-    `SELECT role, content FROM (
-       SELECT role, content, created_at
-         FROM messages
-        WHERE conversation_id = $1
-        ORDER BY created_at DESC
-        LIMIT $2
-     ) recent ORDER BY created_at ASC`,
-    [conversationId, limit]
+    `SELECT c.id, c.created_at,
+            (SELECT m.content FROM messages m
+              WHERE m.conversation_id = c.id
+              ORDER BY m.created_at DESC LIMIT 1) AS last_message
+       FROM conversations c
+      WHERE c.user_id = $1
+      ORDER BY c.created_at DESC
+      LIMIT 50`,
+    [userId]
+  );
+  return rows;
+}
+
+export async function listMessages(userId, conversationId) {
+  const { rows } = await query(
+    `SELECT m.id, m.role, m.content, m.created_at
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+      WHERE c.id = $1 AND c.user_id = $2
+      ORDER BY m.created_at ASC`,
+    [conversationId, userId]
   );
   return rows;
 }
