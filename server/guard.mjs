@@ -2,7 +2,7 @@
 //
 // Abuse guards for the routes that cost money or invite guessing:
 //   /api/ask            OpenAI
-//   /api/tts            ElevenLabs characters
+//   /api/tts            ElevenLabs characters (legacy backend endpoint)
 //   /api/speech/token   ElevenLabs agent MINUTES - the expensive one
 //   /api/avatar         fal
 //   /api/liveavatar/*   LiveAvatar session tokens
@@ -111,6 +111,16 @@ const matches = (path, list) =>
   list.some((p) => path === p || path.startsWith(`${p}/`));
 
 export function installGuards(app) {
+  // Low-risk browser hardening. These headers don't impose a CSP or change
+  // resource loading, so they won't interfere with Mike's current frontend.
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), geolocation=(), payment=()');
+    next();
+  });
+
   // Railway terminates TLS upstream, so the real client IP is in
   // X-Forwarded-For. Without this every request looks like one IP.
   app.set('trust proxy', 1);
