@@ -1,0 +1,1 @@
+Provider calls should use a 10-second timeout and cancel any committed voice reservation when token acquisition fails.
