@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "start": "node server/index.mjs"
+    "start": "node server/index.mjs",
+    "migrate": "node-pg-migrate up",
+    "migrate:down": "node-pg-migrate down",
+    "test": "mocha --exit --recursive"
   },
   "dependencies": {
     "@elevenlabs/client": "^1.21.0",
@@ -27,5 +30,10 @@
   "overrides": {
     "livekit-client": "2.16.1"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "node-pg-migrate": "^6.6.0",
+    "mocha": "^10.2.0",
+    "chai": "^4.3.7",
+    "nc": "^1.0.0"
+  }
 }
