@@ -9,25 +9,26 @@
 // Env:
 //   DATABASE_URL   Railway sets this when you attach a Postgres service
 //   PGSSL          'false' to force SSL off; default is auto-detected
+//   PGSSL_CA       optional PEM CA certificate for external Postgres TLS
+//   PGSSL_REJECT_UNAUTHORIZED='false' only when a provider explicitly requires it
 
 import pg from 'pg';
 
 const { Pool } = pg;
-
 const CONNECTION_STRING = process.env.DATABASE_URL || '';
-
 export const dbEnabled = !!CONNECTION_STRING;
 
-// Railway's internal hostname speaks plaintext inside the private network.
-// The public proxy host needs TLS, and its cert isn't in the container's
-// trust store, hence rejectUnauthorized: false.
 function sslSetting() {
   if (String(process.env.PGSSL || '') === 'false') return false;
   if (!CONNECTION_STRING) return false;
   if (CONNECTION_STRING.includes('.railway.internal')) return false;
   if (CONNECTION_STRING.includes('localhost')) return false;
   if (CONNECTION_STRING.includes('127.0.0.1')) return false;
-  return { rejectUnauthorized: false };
+
+  const ca = process.env.PGSSL_CA || undefined;
+  const explicitReject = String(process.env.PGSSL_REJECT_UNAUTHORIZED || '').toLowerCase();
+  const rejectUnauthorized = explicitReject === 'false' ? false : true;
+  return ca ? { rejectUnauthorized, ca } : { rejectUnauthorized };
 }
 
 export const pool = dbEnabled
@@ -41,7 +42,6 @@ export const pool = dbEnabled
   : null;
 
 if (pool) {
-  // An idle client erroring out must not take the process down.
   pool.on('error', (err) => {
     console.error('[db] idle client error:', err.message || err);
   });
@@ -64,8 +64,6 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS users_email_idx ON users (email);
 
--- Subscription state. Everything here is written by the Stripe webhook and
--- read by hasPro(); nothing the browser sends can set it.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS plan                   TEXT NOT NULL DEFAULT 'free';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_status    TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id     TEXT;
@@ -75,14 +73,8 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_end              TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS users_stripe_customer_idx ON users (stripe_customer_id);
 
--- Bumped whenever a password changes. The number is baked into every JWT, so
--- raising it invalidates tokens issued before the change - a stolen or shared
--- session cannot outlive a password reset.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INT NOT NULL DEFAULT 0;
 
--- Password reset tickets. Only the SHA-256 of the token is stored, so a leak
--- of this table does not hand anyone a working reset link. Single use, and
--- short lived.
 CREATE TABLE IF NOT EXISTS password_resets (
   id         BIGSERIAL PRIMARY KEY,
   user_id    BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
@@ -95,8 +87,6 @@ CREATE TABLE IF NOT EXISTS password_resets (
 CREATE UNIQUE INDEX IF NOT EXISTS password_resets_hash_idx ON password_resets (token_hash);
 CREATE INDEX IF NOT EXISTS password_resets_user_idx ON password_resets (user_id);
 
--- One row per realtime voice session handed out. This is what stops a single
--- visitor consuming the workspace's monthly ElevenLabs minutes.
 CREATE TABLE IF NOT EXISTS voice_sessions (
   id          BIGSERIAL PRIMARY KEY,
   user_id     BIGINT REFERENCES users (id) ON DELETE CASCADE,
@@ -104,15 +94,6 @@ CREATE TABLE IF NOT EXISTS voice_sessions (
   started_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Minute accounting. ElevenLabs bills by the minute, not by the session, so
--- a session count alone can't bound the cost: a 20-second chat and a
--- 10-minute one used to cost the same against the budget.
---
--- reserved_seconds is charged UP FRONT at the worst case (the engine's own
--- max_duration_seconds). actual_seconds replaces it when the client reports
--- the real duration on hangup. A session that is never reported -- crash,
--- closed tab, hostile client -- keeps its full reservation, so the budget
--- fails CLOSED rather than leaking free minutes.
 ALTER TABLE voice_sessions ADD COLUMN IF NOT EXISTS reserved_seconds INT NOT NULL DEFAULT 600;
 ALTER TABLE voice_sessions ADD COLUMN IF NOT EXISTS actual_seconds   INT;
 ALTER TABLE voice_sessions ADD COLUMN IF NOT EXISTS session_key      TEXT;
@@ -123,8 +104,6 @@ CREATE INDEX IF NOT EXISTS voice_sessions_time_idx ON voice_sessions (started_at
 CREATE UNIQUE INDEX IF NOT EXISTS voice_sessions_key_idx ON voice_sessions (session_key)
   WHERE session_key IS NOT NULL;
 
--- Saved conversations, so history is built server-side instead of being
--- posted up by the browser on every turn.
 CREATE TABLE IF NOT EXISTS conversations (
   id         BIGSERIAL PRIMARY KEY,
   user_id    BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
@@ -142,14 +121,11 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages (conversation_id, created_at);
 `;
 
-// Runs on every boot. Every statement is IF NOT EXISTS, so it is safe to
-// run repeatedly and safe to run on a database that already has data.
 export async function migrate() {
   if (!dbEnabled) {
     console.warn('[db] DATABASE_URL not set - accounts are disabled');
     return false;
   }
-
   try {
     await query(SCHEMA);
     console.log('[db] connected, schema ready');
@@ -160,14 +136,10 @@ export async function migrate() {
   }
 }
 
-// ===== Users =====
-
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 
 export async function getUserByEmail(email) {
-  const { rows } = await query('SELECT * FROM users WHERE email = $1', [
-    normalizeEmail(email),
-  ]);
+  const { rows } = await query('SELECT * FROM users WHERE email = $1', [normalizeEmail(email)]);
   return rows[0] || null;
 }
 
@@ -186,8 +158,6 @@ export async function createUser({ email, name, passwordHash }) {
   return rows[0];
 }
 
-// Issue a reset ticket. Any older unused ticket for this account is burned
-// first, so requesting a second link silently kills the first.
 export async function createPasswordReset(userId, tokenHash, expiresAt) {
   await query(
     `UPDATE password_resets SET used_at = now()
@@ -214,8 +184,6 @@ export async function findPasswordReset(tokenHash) {
   return rows[0] || null;
 }
 
-// Consume the ticket and set the new password in one shot. token_version is
-// bumped in the same statement, which signs out every existing session.
 export async function consumePasswordReset(resetId, userId, passwordHash) {
   const { rows } = await query(
     `UPDATE password_resets SET used_at = now()
@@ -224,7 +192,6 @@ export async function consumePasswordReset(resetId, userId, passwordHash) {
     [resetId]
   );
   if (!rows[0]) return null;
-
   const updated = await query(
     `UPDATE users
         SET password_hash = $2,
@@ -240,22 +207,11 @@ export async function touchUser(id) {
   try {
     await query('UPDATE users SET last_seen_at = now() WHERE id = $1', [id]);
   } catch (err) {
-    // Never let a bookkeeping write break a request.
     console.error('[db] touchUser failed:', err.message || err);
   }
 }
 
-// ===== Subscription =====
-
-// The owner account is allowed to test the complete paid experience without
-// having to purchase its own subscription. This is server-side only and is
-// controlled by OWNER_EMAIL, which is also used by auth.mjs for owner access.
 const OWNER_EMAIL = String(process.env.OWNER_EMAIL || '').trim().toLowerCase();
-
-// The single source of truth for "is this account paid". A trial counts as
-// paid - that is the whole point of the trial - but it still has to be a
-// trial Stripe told us about. The owner is the sole intentional exception
-// for product testing.
 const ENTITLED_STATUSES = new Set(['active', 'trialing']);
 
 export function hasPro(user) {
@@ -269,9 +225,7 @@ export function hasPro(user) {
 
 export async function getUserByStripeCustomer(customerId) {
   if (!customerId) return null;
-  const { rows } = await query('SELECT * FROM users WHERE stripe_customer_id = $1', [
-    String(customerId),
-  ]);
+  const { rows } = await query('SELECT * FROM users WHERE stripe_customer_id = $1', [String(customerId)]);
   return rows[0] || null;
 }
 
@@ -287,13 +241,7 @@ export async function attachStripeCustomer(userId, customerId, subscriptionId) {
   return rows[0] || null;
 }
 
-export async function setSubscriptionState(userId, {
-  plan,
-  status,
-  subscriptionId,
-  currentPeriodEnd,
-  trialEnd,
-}) {
+export async function setSubscriptionState(userId, { plan, status, subscriptionId, currentPeriodEnd, trialEnd }) {
   const { rows } = await query(
     `UPDATE users
         SET plan = $2,
@@ -315,8 +263,6 @@ export async function setSubscriptionState(userId, {
   return rows[0] || null;
 }
 
-// ===== Voice metering =====
-
 export async function recordVoiceSession(userId, engineId, { sessionKey, reservedSeconds } = {}) {
   const { rows } = await query(
     `INSERT INTO voice_sessions (user_id, engine_id, session_key, reserved_seconds)
@@ -327,10 +273,6 @@ export async function recordVoiceSession(userId, engineId, { sessionKey, reserve
   return rows[0];
 }
 
-// Reconcile a finished session down to what it actually used. Single-use: the
-// WHERE clause refuses a second report for the same key, so a replayed call
-// can't keep shrinking the bill. The caller is responsible for clamping
-// `seconds` to the per-session maximum before this is reached.
 export async function closeVoiceSession(sessionKey, userId, seconds) {
   if (!sessionKey) return null;
   const { rows } = await query(
@@ -346,7 +288,6 @@ export async function closeVoiceSession(sessionKey, userId, seconds) {
   return rows[0] || null;
 }
 
-// The voice budget resets on a rolling 30-day window.
 export async function countVoiceSessions(userId) {
   const { rows } = await query(
     `SELECT COUNT(*)::int AS count
@@ -358,8 +299,6 @@ export async function countVoiceSessions(userId) {
   return rows[0]?.count || 0;
 }
 
-// Workspace-wide pool. This protects the ElevenLabs account from a busy day
-// draining the month's allowance for everyone.
 export async function countVoiceSessionsGlobal() {
   const { rows } = await query(
     `SELECT COUNT(*)::int AS count
@@ -369,8 +308,6 @@ export async function countVoiceSessionsGlobal() {
   return rows[0]?.count || 0;
 }
 
-// Minutes actually owed, on the same rolling 30-day window. An open session
-// counts at its full reservation until it reports in.
 export async function countVoiceSeconds(userId) {
   const { rows } = await query(
     `SELECT COALESCE(SUM(COALESCE(actual_seconds, reserved_seconds)), 0)::int AS seconds
@@ -391,13 +328,8 @@ export async function countVoiceSecondsGlobal() {
   return rows[0]?.seconds || 0;
 }
 
-// ===== Conversations =====
-
 export async function createConversation(userId) {
-  const { rows } = await query(
-    `INSERT INTO conversations (user_id) VALUES ($1) RETURNING *`,
-    [userId]
-  );
+  const { rows } = await query(`INSERT INTO conversations (user_id) VALUES ($1) RETURNING *`, [userId]);
   return rows[0];
 }
 
