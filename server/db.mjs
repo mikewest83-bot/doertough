@@ -8,7 +8,9 @@
 //
 // Env:
 //   DATABASE_URL   Railway sets this when you attach a Postgres service
-//   PGSSL          'false' to force SSL off; default is auto-detected
+//   PGSSL          'false' to force SSL off; 'no-verify' to use TLS but skip cert verification
+//                  (use the explicit 'no-verify' token only when you fully understand the risks)
+//
 
 import pg from 'pg';
 
@@ -20,14 +22,30 @@ export const dbEnabled = !!CONNECTION_STRING;
 
 // Railway's internal hostname speaks plaintext inside the private network.
 // The public proxy host needs TLS, and its cert isn't in the container's
-// trust store, hence rejectUnauthorized: false.
+// trust store, hence we special-case railway.internal as non-TLS. For all
+// other hosts we default to verifying certs (rejectUnauthorized: true).
+// To explicitly opt out of cert verification (not recommended for prod),
+// set PGSSL=no-verify. To disable TLS entirely (local/dev), set PGSSL=false.
 function sslSetting() {
-  if (String(process.env.PGSSL || '') === 'false') return false;
+  const pgssl = String(process.env.PGSSL || '').toLowerCase();
+
+  if (pgssl === 'false') return false;
   if (!CONNECTION_STRING) return false;
+
+  // Private Railway internal hostname uses plaintext inside their VPC.
   if (CONNECTION_STRING.includes('.railway.internal')) return false;
+
+  // Local development
   if (CONNECTION_STRING.includes('localhost')) return false;
   if (CONNECTION_STRING.includes('127.0.0.1')) return false;
-  return { rejectUnauthorized: false };
+
+  // Allow explicit opt-out from cert verification only when explicitly requested:
+  if (pgssl === 'no-verify') {
+    return { rejectUnauthorized: false };
+  }
+
+  // Default: require valid certificates
+  return { rejectUnauthorized: true };
 }
 
 export const pool = dbEnabled
@@ -45,6 +63,19 @@ if (pool) {
   pool.on('error', (err) => {
     console.error('[db] idle client error:', err.message || err);
   });
+
+  // Graceful shutdown so the pool can close client connections cleanly.
+  const shutdown = async () => {
+    try {
+      await pool.end();
+      console.log('[db] pool closed');
+    } catch (err) {
+      // swallow errors during shutdown
+    }
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+  process.on('exit', shutdown);
 }
 
 export async function query(text, params = []) {
@@ -216,24 +247,54 @@ export async function findPasswordReset(tokenHash) {
 
 // Consume the ticket and set the new password in one shot. token_version is
 // bumped in the same statement, which signs out every existing session.
+//
+// This is now done transactionally and verifies the reset row belongs to the
+// provided userId. That prevents using a valid reset id for someone else.
 export async function consumePasswordReset(resetId, userId, passwordHash) {
-  const { rows } = await query(
-    `UPDATE password_resets SET used_at = now()
-      WHERE id = $1 AND used_at IS NULL
-      RETURNING id`,
-    [resetId]
-  );
-  if (!rows[0]) return null;
+  if (!pool) throw new Error('database_not_configured');
 
-  const updated = await query(
-    `UPDATE users
-        SET password_hash = $2,
-            token_version = token_version + 1
-      WHERE id = $1
-      RETURNING *`,
-    [userId, passwordHash]
-  );
-  return updated.rows[0] || null;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Mark the specific reset used, but only if it belongs to the user and is unused.
+    const { rows: resetRows } = await client.query(
+      `UPDATE password_resets
+         SET used_at = now()
+       WHERE id = $1
+         AND user_id = $2
+         AND used_at IS NULL
+       RETURNING id`,
+      [resetId, userId]
+    );
+
+    if (!resetRows[0]) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+
+    // Update the user's password and bump token_version atomically.
+    const { rows: updatedRows } = await client.query(
+      `UPDATE users
+          SET password_hash = $2,
+              token_version = token_version + 1
+        WHERE id = $1
+        RETURNING *`,
+      [userId, passwordHash]
+    );
+
+    await client.query('COMMIT');
+    return updatedRows[0] || null;
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (e) {
+      // ignore rollback errors
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function touchUser(id) {
@@ -331,17 +392,31 @@ export async function recordVoiceSession(userId, engineId, { sessionKey, reserve
 // WHERE clause refuses a second report for the same key, so a replayed call
 // can't keep shrinking the bill. The caller is responsible for clamping
 // `seconds` to the per-session maximum before this is reached.
+// Settling a reservation. The client reports how long the call actually
+// ran, which lets a short call release the minutes it did not use.
+//
+// The reported number is a FLOOR-RAISER ONLY, never a discount: the billed
+// duration is the greater of what the client claims and what the server's
+// own clock says has elapsed since the reservation was created, then capped
+// at the reservation itself.
 export async function closeVoiceSession(sessionKey, userId, seconds) {
   if (!sessionKey) return null;
+  const reported = Math.max(0, Math.round(Number(seconds) || 0));
   const { rows } = await query(
     `UPDATE voice_sessions
-        SET actual_seconds = $3,
+        SET actual_seconds = LEAST(
+              reserved_seconds,
+              GREATEST(
+                $3::int,
+                CEIL(EXTRACT(EPOCH FROM (now() - started_at)))::int
+              )
+            ),
             ended_at = now()
       WHERE session_key = $1
         AND user_id = $2
         AND actual_seconds IS NULL
       RETURNING *`,
-    [String(sessionKey), userId, Math.max(0, Math.round(Number(seconds) || 0))]
+    [String(sessionKey), userId, reported]
   );
   return rows[0] || null;
 }
@@ -355,7 +430,7 @@ export async function countVoiceSessions(userId) {
         AND started_at >= now() - interval '30 days'`,
     [userId]
   );
-  return rows[0]?.count || 0;
+  return parseInt(rows[0]?.count || '0', 10);
 }
 
 // Workspace-wide pool. This protects the ElevenLabs account from a busy day
@@ -366,7 +441,7 @@ export async function countVoiceSessionsGlobal() {
        FROM voice_sessions
       WHERE started_at >= now() - interval '30 days'`
   );
-  return rows[0]?.count || 0;
+  return parseInt(rows[0]?.count || '0', 10);
 }
 
 // Minutes actually owed, on the same rolling 30-day window. An open session
@@ -379,7 +454,7 @@ export async function countVoiceSeconds(userId) {
         AND started_at >= now() - interval '30 days'`,
     [userId]
   );
-  return rows[0]?.seconds || 0;
+  return parseInt(rows[0]?.seconds || '0', 10);
 }
 
 export async function countVoiceSecondsGlobal() {
@@ -388,7 +463,7 @@ export async function countVoiceSecondsGlobal() {
        FROM voice_sessions
       WHERE started_at >= now() - interval '30 days'`
   );
-  return rows[0]?.seconds || 0;
+  return parseInt(rows[0]?.seconds || '0', 10);
 }
 
 // ===== Conversations =====
