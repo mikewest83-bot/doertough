@@ -43,34 +43,27 @@ const AUTH_PER_HOUR = Number(process.env.MIKE_AUTH_PER_HOUR || 20);
 const AUTH_PER_MINUTE = Number(process.env.MIKE_AUTH_PER_MINUTE || 5);
 const ACCESS_CODE = process.env.MIKE_ACCESS_CODE || '';
 
-// Tight server-side request limits. The global express.json limit remains a
-// last-resort ceiling, but paid routes should reject much smaller payloads.
 const ASK_MESSAGE_MAX = Number(process.env.MIKE_ASK_MESSAGE_MAX || 4000);
 const ASK_HISTORY_MAX = Number(process.env.MIKE_ASK_HISTORY_MAX || 12000);
 const ASK_HISTORY_ITEM_MAX = Number(process.env.MIKE_ASK_HISTORY_ITEM_MAX || 3000);
 const TTS_TEXT_MAX = Number(process.env.MIKE_TTS_TEXT_MAX || 4000);
 const AVATAR_AUDIO_B64_MAX = Number(process.env.MIKE_AVATAR_AUDIO_B64_MAX || 5_000_000);
 
-// key -> { hour: { count, resetAt }, minute: { count, resetAt } }
 const buckets = new Map();
-
-// One active token reservation per account per process. This is intentionally
-// a fast concurrency guard, not the durable billing boundary. PostgreSQL still
-// owns the real reservation accounting and must become the source of truth for
-// multi-instance deployments.
 const voiceLocks = new Map();
 
 async function withVoiceLock(key, fn) {
   const previous = voiceLocks.get(key) || Promise.resolve();
   let release;
   const current = new Promise((resolve) => { release = resolve; });
-  voiceLocks.set(key, previous.then(() => current));
+  const chain = previous.then(() => current);
+  voiceLocks.set(key, chain);
   await previous;
   try {
     return await fn();
   } finally {
     release();
-    if (voiceLocks.get(key) === current) voiceLocks.delete(key);
+    if (voiceLocks.get(key) === chain) voiceLocks.delete(key);
   }
 }
 
@@ -158,7 +151,6 @@ export function installGuards(app) {
     const isProtected = matches(req.path, PROTECTED);
     if (!isAuthRoute && !isProtected) return next();
 
-    // Paid AI/voice endpoints are never anonymous. Origin is not auth.
     if (isProtected && !req.user) {
       return res.status(401).json({ error: 'sign_in_required', message: 'Sign in to use this Mike capability.' });
     }
@@ -220,7 +212,7 @@ export function installGuards(app) {
 
   console.log(
     `[guard] active — ${PER_MINUTE}/min, ${PER_HOUR}/hr per caller; ` +
-      `auth ${AUTH_PER_MINUTE}/min, ${AUTH_PER_HOUR}/min per IP; ` +
+      `auth ${AUTH_PER_MINUTE}/min, ${AUTH_PER_HOUR}/hr per IP; ` +
       `${ALLOWED_ORIGINS.size} allowed origins; paid routes require auth`
   );
 }
