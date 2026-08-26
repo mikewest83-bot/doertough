@@ -31,7 +31,7 @@
     "livekit-client": "2.16.1"
   },
   "devDependencies": {
-    "node-pg-migrate": "^6.6.0",
+    "node-pg-migrate": "8.0.4",
     "mocha": "^10.2.0",
     "chai": "^4.3.7",
     "nc": "^1.0.0"
