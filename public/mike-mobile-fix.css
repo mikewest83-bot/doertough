@@ -83,3 +83,7 @@
 /* FINAL LOCKUP TUNE — keep the two bars clearly below DT, never through the letters. */
 .orb-core{background-position:50% 76%!important;background-size:64% 10px!important}
 @media(max-width:390px){.orb-core{background-position:50% 75%!important;background-size:64% 9px!important}}
+
+/* PERFORMANCE SAFETY: no continuous animation on the hero. Visual state is conveyed by static styling only. */
+.voice-orb,.voice-orb:before,.voice-orb:after,.wave i,.state-dot{animation:none!important}
+.voice-orb{transition:none!important}
