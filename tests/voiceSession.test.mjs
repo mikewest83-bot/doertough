@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { recordVoiceSession, closeVoiceSession, countVoiceSeconds, countVoiceSessions, countVoiceSessionsGlobal, countVoiceSecondsGlobal, query } from '../server/db.mjs';
+import { createUser, recordVoiceSession, closeVoiceSession, countVoiceSeconds, countVoiceSessions, countVoiceSessionsGlobal, countVoiceSecondsGlobal, query } from '../server/db.mjs';
 import { withTransaction } from './support/tx-fixture.mjs';
 
 describe('voice session accounting', function () {
@@ -9,15 +9,18 @@ describe('voice session accounting', function () {
 
   it('records and closes a session (transactional where practical)', async function () {
     await withTransaction(async () => {
-      const s = await recordVoiceSession(null, 'engine-test', { sessionKey: `key-${Date.now()}`, reservedSeconds: 60 });
+      const user = await createUser({ email: `voice-test+${Date.now()}@example.com`, name: 'Voice Test', passwordHash: 'test-hash' });
+      const s = await recordVoiceSession(user.id, 'engine-test', { sessionKey: `key-${Date.now()}`, reservedSeconds: 60 });
       expect(s).to.have.property('id');
+      expect(s.user_id).to.equal(user.id);
 
-      const closed = await closeVoiceSession(s.session_key, s.user_id, 1);
-      expect(closed === null || closed.id).to.satisfy(Boolean);
+      const closed = await closeVoiceSession(s.session_key, user.id, 1);
+      expect(closed).to.have.property('id');
+      expect(closed.user_id).to.equal(user.id);
 
-      const seconds = await countVoiceSeconds(s.user_id);
+      const seconds = await countVoiceSeconds(user.id);
       expect(Number.isInteger(seconds)).to.be.true;
-      const sessions = await countVoiceSessions(s.user_id);
+      const sessions = await countVoiceSessions(user.id);
       expect(Number.isInteger(sessions)).to.be.true;
     });
   });
@@ -25,29 +28,30 @@ describe('voice session accounting', function () {
   it('concurrent closeVoiceSession only allows one success', async function () {
     if (!process.env.DATABASE_URL) this.skip();
 
-    // Create a real reservation outside a transaction so concurrency uses separate connections.
-    const s = await recordVoiceSession(null, 'engine-test', { sessionKey: `concurrent-key-${Date.now()}`, reservedSeconds: 3600 });
+    const user = await createUser({ email: `voice-concurrent+${Date.now()}@example.com`, name: 'Voice Concurrent', passwordHash: 'test-hash' });
+    const s = await recordVoiceSession(user.id, 'engine-test', { sessionKey: `concurrent-key-${Date.now()}`, reservedSeconds: 3600 });
 
-    const [r1, r2] = await Promise.all([
-      closeVoiceSession(s.session_key, s.user_id, 10),
-      closeVoiceSession(s.session_key, s.user_id, 20),
-    ]);
+    try {
+      const [r1, r2] = await Promise.all([
+        closeVoiceSession(s.session_key, user.id, 10),
+        closeVoiceSession(s.session_key, user.id, 20),
+      ]);
 
-    const successes = [r1, r2].filter(Boolean);
-    expect(successes.length).to.equal(1);
+      const successes = [r1, r2].filter(Boolean);
+      expect(successes.length).to.equal(1);
 
-    // Ensure actual_seconds was set and is an integer when available
-    const closed = successes[0];
-    expect(closed).to.have.property('actual_seconds');
-    expect(Number.isInteger(closed.actual_seconds)).to.be.true;
+      const closed = successes[0];
+      expect(closed).to.have.property('actual_seconds');
+      expect(Number.isInteger(closed.actual_seconds)).to.be.true;
+      expect(closed.user_id).to.equal(user.id);
+    } finally {
+      await query('DELETE FROM users WHERE id = $1', [user.id]);
+    }
   });
 
   it('concurrent reservations create separate rows (does not prove budget gating)', async function () {
     if (!process.env.DATABASE_URL) this.skip();
 
-    // The application-level budget gate is outside these helpers. This test documents
-    // current behavior: two concurrent recordVoiceSession calls both succeed and create rows.
-    // A future dedicated reservation API should be used to atomically check and reserve budget.
     const keys = [`resv-${Date.now()}-1`, `resv-${Date.now()}-2`];
     const results = await Promise.all([
       recordVoiceSession(null, 'engine-test', { sessionKey: keys[0], reservedSeconds: 600 }),
@@ -58,13 +62,11 @@ describe('voice session accounting', function () {
     expect(results[0]).to.have.property('id');
     expect(results[1]).to.have.property('id');
 
-    // Global counters reflect both insertions
     const globalSessions = await countVoiceSessionsGlobal();
     const globalSeconds = await countVoiceSecondsGlobal();
     expect(Number.isInteger(globalSessions)).to.be.true;
     expect(Number.isInteger(globalSeconds)).to.be.true;
 
-    // Cleanup the two rows to avoid leaving test data when running locally; CI DB is ephemeral.
     await query('DELETE FROM voice_sessions WHERE session_key = ANY($1)', [keys]);
   });
 });
