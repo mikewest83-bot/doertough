@@ -29,3 +29,6 @@ form{display:flex;gap:8px;position:sticky;bottom:10px;z-index:25;padding:8px;bac
 .trust-row li{position:relative;color:#8ea0ad;font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding-left:15px;line-height:2}
 .trust-row li:before{content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);width:6px;height:6px;border-radius:50%;background:#27a9ff;box-shadow:0 0 8px #27a9ff80}
 @media(max-width:760px){.trust-row{gap:0 14px;margin:14px 0 2px}.trust-row li{font-size:12px;padding-left:13px}}
+
+.auth-legal{margin:10px 0 0;font-size:12px;line-height:1.4;opacity:.6;text-align:center}
+.auth-legal a{color:inherit;text-decoration:underline}
