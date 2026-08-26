@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Conversation } from '@elevenlabs/client';
-import { Mic, Send, Volume2, ArrowRight, Lightbulb, Square, User, LogOut, X } from 'lucide-react';
+import { Mic, Send, Volume2, ArrowRight, Lightbulb, Square, User, LogOut, X, Check } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
 
@@ -12,7 +12,7 @@ const fetchJson = async (url, options = {}, timeout = 60000) => { const controll
 
 function App() {
   const [messages, setMessages] = useState([{ role: 'mike', text: "What's up? I'm Mike. Tell me what you're trying to figure out. We'll figure it out." }]);
-  const [input, setInput] = useState(''); const [busy, setBusy] = useState(false); const [speaking, setSpeaking] = useState(false); const [listening, setListening] = useState(false); const [conversationMode, setConversationMode] = useState(false); const [error, setError] = useState(''); const [user, setUser] = useState(null); const [authOpen, setAuthOpen] = useState(false); const [authMode, setAuthMode] = useState('login'); const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' }); const [authBusy, setAuthBusy] = useState(false); const [authError, setAuthError] = useState(''); const [authNotice, setAuthNotice] = useState(''); const [resetToken, setResetToken] = useState(''); const [accountsOn, setAccountsOn] = useState(false);
+  const [input, setInput] = useState(''); const [busy, setBusy] = useState(false); const [speaking, setSpeaking] = useState(false); const [listening, setListening] = useState(false); const [conversationMode, setConversationMode] = useState(false); const [error, setError] = useState(''); const [user, setUser] = useState(null); const [authOpen, setAuthOpen] = useState(false); const [authMode, setAuthMode] = useState('login'); const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' }); const [authBusy, setAuthBusy] = useState(false); const [authError, setAuthError] = useState(''); const [authNotice, setAuthNotice] = useState(''); const [resetToken, setResetToken] = useState(''); const [accountsOn, setAccountsOn] = useState(false); const [billingOn, setBillingOn] = useState(false); const [proOpen, setProOpen] = useState(false); const [proBusy, setProBusy] = useState(false); const [proError, setProError] = useState('');
   const conversationRef = useRef(null); const conversationModeRef = useRef(false); const audioElRef = useRef(null); const audioUrlRef = useRef(null); const speakJobRef = useRef(0); const statusRef = useRef('ready');
   // Voice-minute budget: the server reserves a full session's worth of
   // minutes the instant a token is minted, and only releases the unused
@@ -123,7 +123,49 @@ function App() {
     }
   };
   const signOut = async () => { await stopRealtimeConversation(); writeToken(''); setUser(null); setMessages([{ role: 'mike', text: "Signed out. I'm still here if you want to talk." }]); };
-  useEffect(() => { let cancelled = false; (async () => { try { const health = await fetchJson('/api/health', {}, 10000); if (!cancelled) setAccountsOn(!!health.accountsConfigured); } catch {} if (!readToken()) return; try { const data = await fetchJson('/api/auth/me', { headers: authHeaders() }, 10000); if (!cancelled) setUser(data.user); } catch { writeToken(''); } })(); return () => { cancelled = true; }; }, []);
+  useEffect(() => { let cancelled = false; (async () => { try { const health = await fetchJson('/api/health', {}, 10000); if (!cancelled) { setAccountsOn(!!health.accountsConfigured); setBillingOn(!!health.billingConfigured); } } catch {} if (!readToken()) return; try { const data = await fetchJson('/api/auth/me', { headers: authHeaders() }, 10000); if (!cancelled) setUser(data.user); } catch { writeToken(''); } })(); return () => { cancelled = true; }; }, []);
+  // Checkout, in React rather than an injected script. The server decides
+  // what should happen: an account that already subscribes gets a billing
+  // portal URL back under the same `url` key, so there is one code path
+  // here for both "subscribe" and "manage".
+  const startCheckout = async () => {
+    if (proBusy) return;
+    if (!user) { setProOpen(false); setAuthError(''); setAuthMode('register'); setAuthOpen(true); return; }
+    setProBusy(true); setProError('');
+    try {
+      const data = await fetchJson('/api/billing/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() } }, 30000);
+      if (!data.url) throw new Error('Checkout is unavailable right now.');
+      window.location.href = data.url;
+    } catch (err) {
+      setProError(err.message === 'checkout_unavailable' ? 'Checkout is unavailable right now. Try again in a minute.' : (err.message || 'Could not start checkout.'));
+      setProBusy(false);
+    }
+  };
+
+  // Coming back from Stripe. Strip the query string either way so a refresh
+  // does not look like a fresh purchase, then re-read the account so Pro
+  // status reflects the webhook that Stripe has (probably) just delivered.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const state = params.get('checkout');
+    if (!state) return;
+    window.history.replaceState({}, '', window.location.pathname);
+    if (state !== 'success' || !readToken()) return;
+    let tries = 0;
+    const poll = async () => {
+      tries += 1;
+      try {
+        const data = await fetchJson('/api/auth/me', { headers: authHeaders() }, 10000);
+        setUser(data.user);
+        // The webhook can land a moment after the redirect, so give it a
+        // few tries before giving up rather than showing a paid customer
+        // a free account.
+        if (!data.user?.isPro && tries < 4) setTimeout(poll, 1500);
+      } catch {}
+    };
+    poll();
+  }, []);
+
   // A password-reset email lands here. Pull the token out of the URL, open
   // the modal straight into reset mode, and strip the parameter so the token
   // is not left sitting in the address bar or in browser history.
@@ -151,7 +193,13 @@ function App() {
   return (
     <main>
       <audio ref={audioElRef} playsInline preload="auto" />
-      <header><div className="brand"><b className="brand-dt"><span>D</span><em>T</em></b><div><strong>MIKE AI</strong><small>DOER TOUGH</small></div></div><div className="header-right"><span className="status">● {statusText}</span>{accountsOn && (user ? (<button className="auth-btn" onClick={signOut} title={user.email}><LogOut size={15} /> {user.name.split(' ')[0]}</button>) : (<button className="auth-btn" onClick={() => { setAuthError(''); setAuthOpen(true); }}><User size={15} /> Sign in</button>))}</div></header>
+      {billingOn && !user?.isPro && (
+        <button type="button" className="offer-banner" onClick={() => { setProError(''); setProOpen(true); }}>
+          <strong>3 days free.</strong> Cancel anytime — 1% of every subscription goes to permanent carbon removal.
+          <span className="offer-banner-cta">See Mike AI Pro <ArrowRight size={14} /></span>
+        </button>
+      )}
+      <header><div className="brand"><b className="brand-dt"><span>D</span><em>T</em></b><div><strong>MIKE AI</strong><small>DOER TOUGH</small></div></div><div className="header-right"><span className="status">● {statusText}</span>{billingOn && !user?.isPro && (<button className="pro-btn" onClick={() => { setProError(''); setProOpen(true); }}>MIKE AI PRO<small>3 DAYS FREE</small></button>)}{billingOn && user?.isPro && (<span className="pro-badge"><Check size={13} /> PRO</span>)}{accountsOn && (user ? (<button className="auth-btn" onClick={signOut} title={user.email}><LogOut size={15} /> {user.name.split(' ')[0]}</button>) : (<button className="auth-btn" onClick={() => { setAuthError(''); setAuthOpen(true); }}><User size={15} /> Sign in</button>))}</div></header>
       {authOpen && (() => {
         const TITLES = { login: 'Welcome back', register: 'Make an account', forgot: 'Reset your password', reset: 'Choose a new password' };
         const SUBS = {
@@ -168,10 +216,40 @@ function App() {
         <div className="auth-overlay" role="dialog" aria-modal="true" onClick={(e) => { if (e.target === e.currentTarget) setAuthOpen(false); }}><div className="auth-card"><button className="auth-close" onClick={() => setAuthOpen(false)} aria-label="Close"><X size={18} /></button><h2>{TITLES[authMode]}</h2><p className="auth-sub">{SUBS[authMode]}</p><form onSubmit={submitAuth} className="auth-form">{showName && (<input placeholder="Your name" value={authForm.name} autoComplete="name" onChange={(e) => setAuthForm({ ...authForm, name: e.target.value })} />)}{showEmail && (<input type="email" placeholder="Email" value={authForm.email} autoComplete="email" onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })} />)}{showPassword && (<input type="password" placeholder={authMode === 'login' ? 'Password' : 'Password (8+ characters)'} value={authForm.password} autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} />)}{authError && <div className="auth-error">{authError}</div>}{authNotice && <div className="auth-sub" style={{ margin: 0 }}>{authNotice}</div>}<button type="submit" disabled={authBusy}>{authBusy ? 'Working...' : ACTIONS[authMode]}</button></form>{authMode === 'login' && (<button className="auth-switch" onClick={() => switchAuthMode('forgot')}>Forgot your password?</button>)}<button className="auth-switch" onClick={() => switchAuthMode(authMode === 'register' ? 'login' : authMode === 'login' ? 'register' : 'login')}>{authMode === 'login' ? "No account yet? Make one." : authMode === 'register' ? 'Already have an account? Sign in.' : 'Back to sign in'}</button></div></div>
         );
       })()}
-      <section className="voice-hero"><div className="copy"><label>YOUR EVERYDAY DOER</label><h1>Talk to Mike.<br /><span>Get a straight answer.</span></h1><p>Voice or text, any hour. Price a job, plan your week, talk through a call you have to make, work out what a used truck is really worth. Mike answers like somebody who has done the work — not like a manual.</p><ul className="trust-row"><li>3 days free</li><li>Cancel anytime</li><li>1% to carbon removal</li></ul><button className="radar" onClick={() => ask('What am I missing?')} disabled={busy}><Lightbulb size={17} /> What am I missing?</button></div><div className={'voice-box ' + (listening ? 'is-listening' : speaking ? 'is-speaking' : '')} onClick={toggleConversation} role="button" tabIndex={0} aria-label={conversationMode ? 'Stop talking with Mike' : 'Start talking with Mike'} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleConversation(); }}><div className="voice-orb" aria-hidden="true"><span className="orb-core"><span>D</span><em>T</em></span></div><div className="voice-state"><span className="state-dot" /><strong>{statusText}</strong></div><div className="wave" aria-hidden="true">{Array.from({ length: 17 }, (_, i) => <i key={i} style={{ '--delay': `${i * 55}ms`, '--height': `${18 + ((i * 17) % 44)}px` }} />)}</div><p className="voice-hint">{conversationMode ? (listening ? 'Go ahead. Mike is listening.' : speaking ? 'Mike is talking.' : 'Conversation mode is on.') : 'Tap the mic below when you are ready.'}</p><button className={'voice-puck ' + (conversationMode ? 'active' : '')} onClick={(e) => { e.stopPropagation(); toggleConversation(); }} disabled={busy && !conversationMode} aria-label={voiceControlLabel}><span className="voice-puck-icon"><Mic size={23} strokeWidth={2.3} /></span><span className="voice-puck-copy"><strong>{voiceControlLabel}</strong><small>{conversationMode ? 'Mike is connected' : 'Press and start talking'}</small></span><ArrowRight className="voice-puck-arrow" size={18} /></button></div></section>
+      {proOpen && (
+        <div className="pro-overlay" role="dialog" aria-modal="true" onClick={(e) => { if (e.target === e.currentTarget) setProOpen(false); }}>
+          <div className="pro-card">
+            <button className="pro-close" onClick={() => setProOpen(false)} aria-label="Close"><X size={18} /></button>
+            <label>MIKE AI PRO</label>
+            <h2>Talk to Mike, all month.</h2>
+            <p className="pro-price">$24.99 <small>/ month</small></p>
+            <ul className="pro-features">
+              <li><Check size={15} /> <span><strong>Voice and text.</strong> Talk hands-free on the job, or type when you can't.</span></li>
+              <li><Check size={15} /> <span><strong>Every tool.</strong> Trade math, job quotes, deal analysis, weather, markets.</span></li>
+              <li><Check size={15} /> <span><strong>3 days free.</strong> Cancel any time from your account — no phone call, no email.</span></li>
+              <li><Check size={15} /> <span><strong>1% to carbon removal.</strong> Every subscription, through Stripe Climate.</span></li>
+            </ul>
+            {proError && <div className="pro-error">{proError}</div>}
+            <button className="pro-cta" onClick={startCheckout} disabled={proBusy}>
+              {proBusy ? 'Opening checkout…' : user ? 'Start 3 days free' : 'Create an account to start'}
+            </button>
+            <p className="pro-note">
+              Secure checkout by Stripe. You are not charged during the 3-day trial; after that it renews at $24.99/month unless canceled.
+              <br /><a href="/terms.html" target="_blank" rel="noopener noreferrer">Terms</a> · <a href="/privacy.html" target="_blank" rel="noopener noreferrer">Privacy</a> · <a href="/refunds.html" target="_blank" rel="noopener noreferrer">Refunds</a>
+            </p>
+          </div>
+        </div>
+      )}
+      <section className="voice-hero"><div className="copy"><label>YOUR EVERYDAY DOER</label><h1>Talk to Mike.<br /><span>Get a straight answer.</span></h1><p>Voice or text, any hour. Price a job, plan your week, talk through a call you have to make, work out what a used truck is really worth. Mike answers like somebody who has done the work — not like a manual.</p><ul className="trust-row"><li>3 days free</li><li>Cancel anytime</li><li>1% to carbon removal</li></ul><div className="try-row"><span className="try-label">Try him right now</span><div className="try-chips">{[
+          'How much concrete for a 20x24 slab at 4 inches?',
+          'Quote a 3-day framing job at $65 an hour.',
+          'What am I missing?',
+        ].map((prompt) => (
+          <button key={prompt} type="button" className="try-chip" onClick={() => ask(prompt)} disabled={busy}>{prompt}</button>
+        ))}</div></div></div><div className={'voice-box ' + (listening ? 'is-listening' : speaking ? 'is-speaking' : '')} onClick={toggleConversation} role="button" tabIndex={0} aria-label={conversationMode ? 'Stop talking with Mike' : 'Start talking with Mike'} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleConversation(); }}><div className="voice-orb" aria-hidden="true"><span className="orb-core"><span>D</span><em>T</em></span></div><div className="voice-state"><span className="state-dot" /><strong>{statusText}</strong></div><div className="wave" aria-hidden="true">{Array.from({ length: 17 }, (_, i) => <i key={i} style={{ '--delay': `${i * 55}ms`, '--height': `${18 + ((i * 17) % 44)}px` }} />)}</div><p className="voice-hint">{conversationMode ? (listening ? 'Go ahead. Mike is listening.' : speaking ? 'Mike is talking.' : 'Conversation mode is on.') : 'Tap the mic below when you are ready.'}</p><button className={'voice-puck ' + (conversationMode ? 'active' : '')} onClick={(e) => { e.stopPropagation(); toggleConversation(); }} disabled={busy && !conversationMode} aria-label={voiceControlLabel}><span className="voice-puck-icon"><Mic size={23} strokeWidth={2.3} /></span><span className="voice-puck-copy"><strong>{voiceControlLabel}</strong><small>{conversationMode ? 'Mike is connected' : 'Press and start talking'}</small></span><ArrowRight className="voice-puck-arrow" size={18} /></button></div></section>
       <section className="chat" aria-live="polite">{messages.map((m, i) => <div key={i} className={'bubble ' + m.role}>{m.text}</div>)}{busy && <div className="bubble mike">Give me a second. I'm thinking…</div>}</section>
       {error && <div className="error" role="alert">{error}</div>}
-      <form onSubmit={(e) => { e.preventDefault(); ask(input); }}><input id="input" value={input} onChange={(e) => setInput(e.target.value)} placeholder="What's on your mind?" autoComplete="off" /><button disabled={!input.trim() || busy} aria-label="Send"><Send size={18} /></button><button type="button" className="read" aria-label={speaking ? 'Stop Mike' : 'Read latest response'} onClick={() => { if (speaking) stopSpeaking(); else { const last = messages.at(-1); if (last?.role === 'mike') speak(last.text); } }}>{speaking ? <Square size={17} /> : <Volume2 size={18} />}</button></form>
+      <form onSubmit={(e) => { e.preventDefault(); ask(input); }}><input id="input" value={input} onChange={(e) => setInput(e.target.value)} placeholder="What's on your mind?" autoComplete="off" /><button disabled={!input.trim() || busy} aria-label="Send"><Send size={18} /></button><button type="button" className="read" disabled={!speaking && messages.at(-1)?.role !== 'mike'} aria-label={speaking ? 'Stop Mike' : 'Read latest response'} onClick={() => { if (speaking) stopSpeaking(); else { const last = messages.at(-1); if (last?.role === 'mike') speak(last.text); } }}>{speaking ? <Square size={17} /> : <Volume2 size={18} />}</button></form>
       <p className="fine">Mike is a Doer Tough AI assistant. Current facts and changing information should be verified before important decisions.</p>
     </main>
   );
