@@ -3,7 +3,8 @@ import { MIKE_INSTRUCTIONS } from './persona.mjs';
 import { REALTIME_TOOLS } from './realtime-tools.mjs';
 
 const REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1';
-const REALTIME_VOICE = process.env.OPENAI_REALTIME_VOICE || 'marin';
+const CUSTOM_VOICE_ID = String(process.env.OPENAI_REALTIME_CUSTOM_VOICE_ID || '').trim();
+const REALTIME_VOICE = CUSTOM_VOICE_ID ? { id: CUSTOM_VOICE_ID } : (process.env.OPENAI_REALTIME_VOICE || 'marin');
 const ENGINE_NAME = 'Mike AI OpenAI Realtime';
 
 const requireKey = (key, name) => {
@@ -19,7 +20,8 @@ export async function initializeSpeechEngine() {
     console.warn('[realtime] disabled: OPENAI_API_KEY is not configured');
     return null;
   }
-  console.log(`[realtime] OpenAI Realtime ready: model=${REALTIME_MODEL}, voice=${REALTIME_VOICE}, tools=${REALTIME_TOOLS.length}`);
+  const voiceLabel = CUSTOM_VOICE_ID ? `custom:${CUSTOM_VOICE_ID}` : String(REALTIME_VOICE);
+  console.log(`[realtime] OpenAI Realtime ready: model=${REALTIME_MODEL}, voice=${voiceLabel}, tools=${REALTIME_TOOLS.length}`);
   return ENGINE_NAME;
 }
 
@@ -70,7 +72,8 @@ export async function getSpeechEngineToken() {
   const data = JSON.parse(raw);
   if (!data.value) throw new Error('openai_realtime_client_secret_missing');
 
-  console.log(`[realtime] ephemeral client secret created for ${REALTIME_MODEL}/${REALTIME_VOICE} with ${REALTIME_TOOLS.length} public tools`);
+  const voiceLabel = CUSTOM_VOICE_ID ? `custom:${CUSTOM_VOICE_ID}` : String(REALTIME_VOICE);
+  console.log(`[realtime] ephemeral client secret created for ${REALTIME_MODEL}/${voiceLabel} with ${REALTIME_TOOLS.length} public tools`);
   return {
     token: data.value,
     agentId: REALTIME_MODEL,
