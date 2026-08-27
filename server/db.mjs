@@ -422,46 +422,57 @@ export async function closeVoiceSession(sessionKey, userId, seconds) {
 }
 
 // The voice budget resets on a rolling 30-day window.
-export async function countVoiceSessions(userId) {
+// Only count sessions that are either:
+// - Closed (ended_at IS NOT NULL), or
+// - Older than the session max duration (timed out/abandoned)
+export async function countVoiceSessions(userId, maxSessionSeconds = 600) {
   const { rows } = await query(
     `SELECT COUNT(*)::int AS count
        FROM voice_sessions
       WHERE user_id = $1
-        AND started_at >= now() - interval '30 days'`,
-    [userId]
+        AND started_at >= now() - interval '30 days'
+        AND (ended_at IS NOT NULL OR started_at <= now() - interval '1 second' * $2)`,
+    [userId, maxSessionSeconds]
   );
   return parseInt(rows[0]?.count || '0', 10);
 }
 
 // Workspace-wide pool. This protects the ElevenLabs account from a busy day
 // draining the month's allowance for everyone.
-export async function countVoiceSessionsGlobal() {
+// Only count sessions that are either closed or timed out.
+export async function countVoiceSessionsGlobal(maxSessionSeconds = 600) {
   const { rows } = await query(
     `SELECT COUNT(*)::int AS count
        FROM voice_sessions
-      WHERE started_at >= now() - interval '30 days'`
+      WHERE started_at >= now() - interval '30 days'
+        AND (ended_at IS NOT NULL OR started_at <= now() - interval '1 second' * $1)`,
+    [maxSessionSeconds]
   );
   return parseInt(rows[0]?.count || '0', 10);
 }
 
 // Minutes actually owed, on the same rolling 30-day window. An open session
-// counts at its full reservation until it reports in.
-export async function countVoiceSeconds(userId) {
+// counts at its full reservation until it reports in OR times out.
+// Only count sessions that are either closed or timed out.
+export async function countVoiceSeconds(userId, maxSessionSeconds = 600) {
   const { rows } = await query(
     `SELECT COALESCE(SUM(COALESCE(actual_seconds, reserved_seconds)), 0)::int AS seconds
        FROM voice_sessions
       WHERE user_id = $1
-        AND started_at >= now() - interval '30 days'`,
-    [userId]
+        AND started_at >= now() - interval '30 days'
+        AND (ended_at IS NOT NULL OR started_at <= now() - interval '1 second' * $2)`,
+    [userId, maxSessionSeconds]
   );
   return parseInt(rows[0]?.seconds || '0', 10);
 }
 
-export async function countVoiceSecondsGlobal() {
+export async function countVoiceSecondsGlobal(maxSessionSeconds = 600) {
   const { rows } = await query(
     `SELECT COALESCE(SUM(COALESCE(actual_seconds, reserved_seconds)), 0)::int AS seconds
        FROM voice_sessions
-      WHERE started_at >= now() - interval '30 days'`
+      WHERE started_at >= now() - interval '30 days'
+        AND (ended_at IS NOT NULL OR started_at <= now() - interval '1 second' * $1)`,
+    [maxSessionSeconds]
   );
   return parseInt(rows[0]?.seconds || '0', 10);
 }

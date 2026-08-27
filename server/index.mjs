@@ -152,18 +152,18 @@ app.get('/api/speech/token', async (req, res) => {
         : 'Start your free trial to talk with Mike.',
     });
 
-    const usedSessions = await countVoiceSessions(req.user.id);
+    const usedSessions = await countVoiceSessions(req.user.id, MAX_SESSION_SECONDS);
     if (usedSessions >= sessionLimit) return outOfBudget();
 
     const secondsAllowance = minuteLimit * 60;
-    const secondsUsed = await countVoiceSeconds(req.user.id);
-    if (secondsUsed + MAX_SESSION_SECONDS > secondsAllowance) return outOfBudget();
+    const secondsUsed = await countVoiceSeconds(req.user.id, MAX_SESSION_SECONDS);
+    if (secondsUsed >= secondsAllowance) return outOfBudget();
 
-    const globalUsedSessions = await countVoiceSessionsGlobal();
-    const globalUsedSeconds = await countVoiceSecondsGlobal();
+    const globalUsedSessions = await countVoiceSessionsGlobal(MAX_SESSION_SECONDS);
+    const globalUsedSeconds = await countVoiceSecondsGlobal(MAX_SESSION_SECONDS);
     if (
       globalUsedSessions >= GLOBAL_SESSION_LIMIT ||
-      globalUsedSeconds + MAX_SESSION_SECONDS > GLOBAL_MINUTE_LIMIT * 60
+      globalUsedSeconds >= GLOBAL_MINUTE_LIMIT * 60
     ) {
       console.error(`[speech-engine] global ceiling hit - ${globalUsedSessions} sessions, ${Math.round(globalUsedSeconds / 60)} minutes`);
       return res.status(503).json({
@@ -319,7 +319,7 @@ app.post('/api/ask', async (req, res) => {
           if (!owner && OWNER_ONLY_TOOLS.has(call.name)) {
             output = { error: 'not_available', note: "That is Mike's own private business data." };
           } else {
-            output = handler ? await handler(args) : { error: `Unknown tool \"${call.name}\".` };
+            output = handler ? await handler(args) : { error: `Unknown tool "${call.name}".` };
           }
         } catch (toolError) {
           console.error(`[ask] tool ${call.name} failed:`, toolError.message || toolError);
