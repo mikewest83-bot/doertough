@@ -24,12 +24,6 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPE
 let cachedEngineId = process.env.ELEVENLABS_SPEECH_ENGINE_ID || null;
 let cachedVoiceId = null;
 
-async function getVoiceById(voiceId) {
-  requireKey(process.env.ELEVENLABS_API_KEY, 'elevenlabs');
-  const response = await fetch(`https://api.elevenlabs.io/v2/voices?voice_ids=${encodeURIComponent(voiceId)}&page_size=1`, { headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY } });
-  if (!response.ok) throw new Error(`elevenlabs_voice_lookup_${response.status}`);
-  return (await response.json()).voices?.[0] || null;
-}
 async function createMikeGeneratedVoice() {
   requireKey(process.env.ELEVENLABS_API_KEY, 'elevenlabs');
   const designResponse = await fetch('https://api.elevenlabs.io/v1/text-to-voice/design', { method: 'POST', headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ model_id: 'eleven_multilingual_ttv_v2', voice_description: MIKE_VOICE_DESCRIPTION, text: MIKE_VOICE_TEXT, auto_generate_text: false, quality: 0.9, guidance_scale: 8 }) });
@@ -58,10 +52,8 @@ async function resolveVoiceId() {
   if (cachedVoiceId) return cachedVoiceId;
   const configured = process.env.ELEVENLABS_VOICE_ID?.trim();
   if (configured) {
-    const voice = await getVoiceById(configured);
-    if (!voice) throw new Error(`elevenlabs_configured_voice_not_found:${configured}`);
     cachedVoiceId = configured;
-    console.log(`[speech-engine] configured voice accepted: ${configured} (${voice.name || 'unnamed'}, category=${voice.category || 'unknown'}, type=${voice.voice_type || 'unknown'})`);
+    console.log(`[speech-engine] using configured voice directly: ${configured}`);
     return cachedVoiceId;
   }
   cachedVoiceId = await chooseGeneratedVoice();
