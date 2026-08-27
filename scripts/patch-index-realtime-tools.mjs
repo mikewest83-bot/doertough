@@ -21,7 +21,37 @@ if (!source.includes("app.post('/api/realtime/tool'")) {
   const index = source.indexOf(marker);
   if (index < 0) throw new Error('Realtime tool patch billing anchor not found');
 
-  const route = `// ===== Realtime public tool dispatch =====\n// Voice tool calls are authenticated and executed server-side; the browser never\n// receives private handlers or API credentials.\napp.post('/api/realtime/tool', authRequired, async (req, res) => {\n  try {\n    const name = String(req.body?.name || '').trim();\n    if (!isRealtimeToolAllowed(name)) return res.status(403).json({ error: 'tool_not_allowed' });\n\n    let args = req.body?.arguments;\n    if (typeof args === 'string') {\n      try { args = JSON.parse(args); } catch { return res.status(400).json({ error: 'tool_arguments_invalid' }); }\n    }\n    if (!args || typeof args !== 'object' || Array.isArray(args)) {\n      return res.status(400).json({ error: 'tool_arguments_invalid' });\n    }\n\n    const handler = getRealtimeToolHandler(name);\n    if (!handler) return res.status(403).json({ error: 'tool_not_allowed' });\n\n    const output = await handler(args);\n    const serialized = JSON.stringify(output ?? null);\n    res.json({ output: serialized.length > 12000 ? `${serialized.slice(0, 11950)}\\n[output truncated]` : serialized });\n  } catch (error) {\n    console.error('[realtime-tool] failed:', error.message || error);\n    res.status(500).json({ error: error.message || 'tool_failed' });\n  }\n});\n\n`;
+  const route = [
+    '// ===== Realtime public tool dispatch =====',
+    '// Voice tool calls are authenticated and executed server-side; the browser never',
+    '// receives private handlers or API credentials.',
+    "app.post('/api/realtime/tool', authRequired, async (req, res) => {",
+    '  try {',
+    "    const name = String(req.body?.name || '').trim();",
+    "    if (!isRealtimeToolAllowed(name)) return res.status(403).json({ error: 'tool_not_allowed' });",
+    '',
+    '    let args = req.body?.arguments;',
+    "    if (typeof args === 'string') {",
+    "      try { args = JSON.parse(args); } catch { return res.status(400).json({ error: 'tool_arguments_invalid' }); }",
+    '    }',
+    "    if (!args || typeof args !== 'object' || Array.isArray(args)) return res.status(400).json({ error: 'tool_arguments_invalid' });",
+    '',
+    '    const handler = getRealtimeToolHandler(name);',
+    "    if (!handler) return res.status(403).json({ error: 'tool_not_allowed' });",
+    '',
+    '    const output = await handler(args);',
+    '    const serialized = JSON.stringify(output ?? null);',
+    "    const safeOutput = serialized.length > 12000 ? serialized.slice(0, 11950) + '\\n[output truncated]' : serialized;",
+    '    res.json({ output: safeOutput });',
+    '  } catch (error) {',
+    "    console.error('[realtime-tool] failed:', error.message || error);",
+    "    res.status(500).json({ error: error.message || 'tool_failed' });",
+    '  }',
+    '});',
+    '',
+    '',
+  ].join('\n');
+
   source = source.slice(0, index) + route + source.slice(index);
 }
 
