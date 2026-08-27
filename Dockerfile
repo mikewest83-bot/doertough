@@ -6,6 +6,7 @@ COPY package.json ./
 RUN npm install --no-audit --no-fund
 
 COPY . ./
+RUN node scripts/patch-realtime-sdp.mjs
 RUN npm run build
 
 ENV NODE_ENV=production
