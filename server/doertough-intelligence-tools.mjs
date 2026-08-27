@@ -22,6 +22,9 @@ export async function analyzePurchaseWithDealTough(input) {
   return analyzeWithDealTough(normalizeDealInput(input));
 }
 
+// Reserved for the future least-privilege Money service boundary. It is not
+// registered as a Mike tool until Money exposes a stable endpoint and Mike
+// can establish explicit per-user authorization without Plaid access.
 export async function analyzeMoneyCapability({ capability, input, authorization } = {}) {
   return analyzeWithDoerToughMoney(capability, input || {}, authorization);
 }
@@ -44,26 +47,11 @@ export const DOERTOUGH_INTELLIGENCE_TOOLS = [
       required: ["category", "askingPrice"],
       additionalProperties: false
     }
-  },
-  {
-    type: "function",
-    name: "use_doertough_money_intelligence",
-    description: "Use an explicitly authorized capability exposed by Doer Tough Money. This is a protected service-to-service capability, not direct bank/Plaid access. Use only when the user has explicitly connected/authorized Doer Tough Money and the capability is available.",
-    parameters: {
-      type: "object",
-      properties: {
-        capability: { type: "string", description: "Least-privilege Money capability name." },
-        input: { type: "object", description: "Only the minimum input required for the selected capability." }
-      },
-      required: ["capability"],
-      additionalProperties: false
-    }
   }
 ];
 
 export const DOERTOUGH_INTELLIGENCE_HANDLERS = {
   analyze_purchase_with_dealtough: analyzePurchaseWithDealTough,
-  use_doertough_money_intelligence: analyzeMoneyCapability,
 };
 
 export { intelligenceStatus };
