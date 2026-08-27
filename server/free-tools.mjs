@@ -16,11 +16,74 @@ export async function analyzeDeal({ category, title, askingPrice, condition, loc
   const cat = String(category || '').toLowerCase().trim();
   if (!DEAL_CATEGORIES.includes(cat)) return { error: `category must be one of: ${DEAL_CATEGORIES.join(', ')}.` };
   if (!title) return { error: 'title_required' };
-  const price = Number(askingPrice);
-  if (!Number.isFinite(price) || price <= 0) return { error: 'askingPrice must be a positive number.' };
-  const comparables = (Array.isArray(comparablePrices) ? comparablePrices : []).map(Number).filter((p) => Number.isFinite(p) && p > 0).map((p) => ({ price: p, source: 'user_supplied' }));
+
+  const hasAskingPrice = askingPrice !== undefined && askingPrice !== null && askingPrice !== '';
+  const price = hasAskingPrice ? Number(askingPrice) : null;
+  if (hasAskingPrice && (!Number.isFinite(price) || price <= 0)) return { error: 'askingPrice must be a positive number when supplied.' };
+
+  const comparables = (Array.isArray(comparablePrices) ? comparablePrices : [])
+    .map(Number)
+    .filter((p) => Number.isFinite(p) && p > 0)
+    .map((p) => ({ price: p, source: 'user_supplied' }));
   const cond = DEAL_CONDITIONS.includes(String(condition || '').toLowerCase()) ? String(condition).toLowerCase() : 'unknown';
-  const body = { category: cat, title: String(title), askingPrice: price, condition: cond, comparables, ...(location ? { location: String(location) } : {}), ...(description ? { description: String(description) } : {}), ...(Number.isFinite(Number(daysListed)) ? { daysListed: Number(daysListed) } : {}) };
+
+  // If the user did not provide comparable prices, use DealTough's live
+  // market-value pipeline so Mike does not manufacture a valuation. DealTough
+  // performs the eBay comparable lookup, relevance filtering, outlier removal,
+  // sold/active weighting, and fair-market-value calculation.
+  if (!comparables.length) {
+    try {
+      const res = await fetch(`${DEALTOUGH_URL}/api/v1/market-value`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: cat,
+          title: String(title),
+          ...(price !== null ? { askingPrice: price } : {}),
+          condition: cond,
+          ...(location ? { location: String(location) } : {}),
+          ...(description ? { description: String(description) } : {}),
+        }),
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+      const raw = await res.text();
+      if (!res.ok) return { error: `DealTough market value unavailable: ${raw.slice(0, 200)}` };
+      const market = JSON.parse(raw);
+      return {
+        mode: 'live_market_value',
+        title: market.title,
+        category: market.category,
+        askingPrice: market.askingPrice,
+        fairMarketValue: market.fairMarketValue,
+        valuationBasis: market.valuationBasis,
+        confidencePercent: market.confidencePercent,
+        comparablesUsed: market.comparablesUsed,
+        soldComparables: market.soldComparables,
+        activeComparables: market.activeComparables,
+        assumptions: market.assumptions,
+        engineVersion: market.engineVersion,
+        note: market.valuationBasis === 'unknown'
+          ? 'DealTough could not establish a fair market value from usable comparable listings. Say that plainly and do not invent a number.'
+          : 'Live market value supplied by DealTough from its comparable-listing pipeline.',
+      };
+    } catch (err) {
+      console.error('[free-tools] DealTough market value failed:', err.message || err);
+      return { error: 'DealTough market value is not answering right now.' };
+    }
+  }
+
+  if (price === null) return { error: 'askingPrice is required for a full deal score when using user-supplied comparable prices.' };
+
+  const body = {
+    category: cat,
+    title: String(title),
+    askingPrice: price,
+    condition: cond,
+    comparables,
+    ...(location ? { location: String(location) } : {}),
+    ...(description ? { description: String(description) } : {}),
+    ...(Number.isFinite(Number(daysListed)) ? { daysListed: Number(daysListed) } : {}),
+  };
   try {
     const res = await fetch(`${DEALTOUGH_URL}/api/v1/deals/analyze`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(TIMEOUT_MS) });
     const raw = await res.text();
@@ -78,7 +141,7 @@ export async function lookUpWord({ word } = {}) {
 }
 
 export const FREE_TOOLS = [
-  { type: 'function', name: 'analyze_deal', description: "Score a used-item deal with Mike's own DealTough engine. Returns a 0-100 score, verdict, fair market value, an opening offer / target / walk-away ladder, risks, seller questions and a negotiation message. Only pass comparable prices the user actually gave you - never invent them.", parameters: { type: 'object', properties: { category: { type: 'string', description: 'One of: vehicle, electronics, tools, furniture, outdoor_equipment.' }, title: { type: 'string', description: 'What the item is, e.g. "2015 Ford F-150 XLT".' }, askingPrice: { type: 'number', description: "The seller's asking price in dollars." }, condition: { type: 'string', description: 'One of: new, like_new, good, fair, poor, unknown.' }, location: { type: 'string', description: 'Where the item is, if known.' }, description: { type: 'string', description: 'The listing text, if the user provided it.' }, daysListed: { type: 'number', description: 'How long it has been listed, if known.' }, comparablePrices: { type: 'array', items: { type: 'number' }, description: 'Prices of comparable listings the USER supplied. Leave empty if they gave none - the engine will honestly report Insufficient Data.' } }, required: ['category', 'title', 'askingPrice'], additionalProperties: false } },
+  { type: 'function', name: 'analyze_deal', description: "Analyze a used-item deal with Mike's DealTough engine. If the user does not supply comparable prices, automatically use DealTough's live market-value pipeline and real comparable listings rather than guessing. Returns fair market value when available, and for a full deal with an asking price plus user-supplied comps it also returns the Deal Score, price ladder, risks and negotiation message.", parameters: { type: 'object', properties: { category: { type: 'string', description: 'One of: vehicle, electronics, tools, furniture, outdoor_equipment.' }, title: { type: 'string', description: 'What the item is, e.g. "2015 Ford F-150 XLT".' }, askingPrice: { type: 'number', description: "The seller's asking price in dollars, if known. Omit it when asking only what the item is worth." }, condition: { type: 'string', description: 'One of: new, like_new, good, fair, poor, unknown.' }, location: { type: 'string', description: 'Where the item is, if known.' }, description: { type: 'string', description: 'The listing text or important details, if the user provided them.' }, daysListed: { type: 'number', description: 'How long it has been listed, if known.' }, comparablePrices: { type: 'array', items: { type: 'number' }, description: 'Prices of comparable listings the USER supplied. Leave empty if none were supplied so DealTough can use its live market-value pipeline.' } }, required: ['category', 'title'], additionalProperties: false } },
   { type: 'function', name: 'get_crypto_price', description: 'Get the current US dollar price of a cryptocurrency, with the 24-hour move where available.', parameters: { type: 'object', properties: { symbol: { type: 'string', description: 'Ticker, e.g. BTC, ETH, SOL. Defaults to BTC.' } }, required: [], additionalProperties: false } },
   { type: 'function', name: 'get_current_time', description: "Get the current date and time. Use this before any answer that depends on today's date - scheduling, day planning, or how long ago something was. Do not guess the date.", parameters: { type: 'object', properties: { timezone: { type: 'string', description: 'IANA timezone name, e.g. America/Chicago. Defaults to the server timezone.' } }, required: [], additionalProperties: false } },
   { type: 'function', name: 'look_up_topic', description: 'Look up factual background on a person, place, company, term, or thing from a reference source. Use it instead of guessing at a fact you are unsure about. Not for breaking news - use the news tool for that.', parameters: { type: 'object', properties: { topic: { type: 'string', description: 'What to look up.' } }, required: ['topic'], additionalProperties: false } },
