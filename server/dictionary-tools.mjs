@@ -3,6 +3,8 @@
 // audio pronunciation, meanings, examples, synonyms and antonyms.
 // See: https://dictionaryapi.dev/
 
+import { DOERTOUGH_INTELLIGENCE_TOOLS, DOERTOUGH_INTELLIGENCE_HANDLERS } from './doertough-intelligence-tools.mjs';
+
 const TIMEOUT_MS = 7000;
 const cache = new Map();
 const MAX_CACHE = 500;
@@ -78,4 +80,14 @@ export const DICTIONARY_TOOLS = [
   },
 ];
 
-export const DICTIONARY_TOOL_HANDLERS = { look_up_word: lookUpWord };
+export const DICTIONARY_TOOL_HANDLERS = {
+  look_up_word: lookUpWord,
+  ...DOERTOUGH_INTELLIGENCE_HANDLERS,
+};
+
+// live.mjs already imports/spreads this module's tool collection, so adding
+// the capability tools here wires them into Mike without changing the UI.
+export const ALL_DICTIONARY_AND_DOERTOUGH_TOOLS = [
+  ...DICTIONARY_TOOLS,
+  ...DOERTOUGH_INTELLIGENCE_TOOLS,
+];
