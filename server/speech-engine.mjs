@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { MIKE_INSTRUCTIONS } from './persona.mjs';
+import { REALTIME_TOOLS } from './realtime-tools.mjs';
 
 const REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1';
 const REALTIME_VOICE = process.env.OPENAI_REALTIME_VOICE || 'marin';
@@ -11,14 +12,14 @@ const requireKey = (key, name) => {
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
-const REALTIME_INSTRUCTIONS = `${MIKE_INSTRUCTIONS}\n\nVOICE CONVERSATION MODE:\nKeep spoken responses natural, concise, confident, and easy to say aloud. Speak a little faster than average, but stay clear. Use a warm, masculine American conversational delivery with subtle Southern character. Sound like a real person talking one-on-one, not a radio announcer or assistant. Do not use markdown-heavy formatting in speech. Do not mention the underlying model, API, or voice provider.`;
+const REALTIME_INSTRUCTIONS = `${MIKE_INSTRUCTIONS}\n\nVOICE CONVERSATION MODE:\nKeep spoken responses natural, concise, confident, and easy to say aloud. Speak a little faster than average, but stay clear. Use a warm, masculine American conversational delivery with subtle Southern character. Sound like a real person talking one-on-one, not a radio announcer or assistant. Do not use markdown-heavy formatting in speech. Do not mention the underlying model, API, or voice provider.\n\nVOICE TOOL RULES:\nYou have access to the same public tool capabilities as Mike's text experience. Use an available tool when it is the appropriate source of truth instead of guessing. Never claim a tool result you did not receive. Never expose private owner-only business or trading data. If a tool fails, say you could not confirm the information rather than inventing it.`;
 
 export async function initializeSpeechEngine() {
   if (!openai) {
     console.warn('[realtime] disabled: OPENAI_API_KEY is not configured');
     return null;
   }
-  console.log(`[realtime] OpenAI Realtime ready: model=${REALTIME_MODEL}, voice=${REALTIME_VOICE}`);
+  console.log(`[realtime] OpenAI Realtime ready: model=${REALTIME_MODEL}, voice=${REALTIME_VOICE}, tools=${REALTIME_TOOLS.length}`);
   return ENGINE_NAME;
 }
 
@@ -37,6 +38,8 @@ export async function getSpeechEngineToken() {
         type: 'realtime',
         model: REALTIME_MODEL,
         instructions: REALTIME_INSTRUCTIONS,
+        tools: REALTIME_TOOLS,
+        tool_choice: 'auto',
         audio: {
           input: {
             noise_reduction: { type: 'near_field' },
@@ -67,7 +70,7 @@ export async function getSpeechEngineToken() {
   const data = JSON.parse(raw);
   if (!data.value) throw new Error('openai_realtime_client_secret_missing');
 
-  console.log(`[realtime] ephemeral client secret created for ${REALTIME_MODEL}/${REALTIME_VOICE}`);
+  console.log(`[realtime] ephemeral client secret created for ${REALTIME_MODEL}/${REALTIME_VOICE} with ${REALTIME_TOOLS.length} public tools`);
   return {
     token: data.value,
     agentId: REALTIME_MODEL,
