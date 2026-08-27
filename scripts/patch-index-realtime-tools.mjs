@@ -55,5 +55,31 @@ if (!source.includes("app.post('/api/realtime/tool'")) {
   source = source.slice(0, index) + route + source.slice(index);
 }
 
+// The owner/test account must never be blocked by the production customer
+// voice allowance. This prevents our own repeated QA sessions from consuming
+// the launch tester's quota while preserving the paid/free limits for every
+// other account. isOwner() is already server-side and authenticated.
+if (!source.includes('// OWNER VOICE QA BYPASS')) {
+  const anchor = "    const minuteLimit = paidAccess ? PAID_MINUTE_LIMIT : FREE_MINUTE_LIMIT;";
+  if (!source.includes(anchor)) throw new Error('Voice budget patch anchor not found');
+  source = source.replace(
+    anchor,
+    `${anchor}\n    // OWNER VOICE QA BYPASS\n    const ownerVoiceQa = isOwner(req.user);`
+  );
+
+  source = source.replace(
+    "    if (usedSessions >= sessionLimit) return outOfBudget();",
+    "    if (!ownerVoiceQa && usedSessions >= sessionLimit) return outOfBudget();"
+  );
+  source = source.replace(
+    "    if (secondsUsed >= secondsAllowance) return outOfBudget();",
+    "    if (!ownerVoiceQa && secondsUsed >= secondsAllowance) return outOfBudget();"
+  );
+  source = source.replace(
+    "    if (\n      globalUsedSessions >= GLOBAL_SESSION_LIMIT ||\n      globalUsedSeconds >= GLOBAL_MINUTE_LIMIT * 60\n    ) {",
+    "    if (!ownerVoiceQa && (\n      globalUsedSessions >= GLOBAL_SESSION_LIMIT ||\n      globalUsedSeconds >= GLOBAL_MINUTE_LIMIT * 60\n    )) {"
+  );
+}
+
 fs.writeFileSync(target, source);
-console.log('[build] Realtime public tool dispatch ready');
+console.log('[build] Realtime public tool dispatch ready; owner voice QA bypass enabled');
