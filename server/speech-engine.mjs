@@ -22,7 +22,7 @@ const requireKey = (key, name) => { if (!key) throw new Error(`${name}_not_confi
 const elevenlabs = process.env.ELEVENLABS_API_KEY ? new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY }) : null;
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 let cachedEngineId = process.env.ELEVENLABS_SPEECH_ENGINE_ID || null;
-let cachedCompatibleVoiceId = null;
+let cachedVoiceId = null;
 
 async function getVoiceById(voiceId) {
   requireKey(process.env.ELEVENLABS_API_KEY, 'elevenlabs');
@@ -54,35 +54,36 @@ async function chooseGeneratedVoice() {
   const southern = voices.filter((voice) => { const labels = voice.labels || {}; const text = `${voice.name || ''} ${voice.description || ''} ${JSON.stringify(labels)}`.toLowerCase(); return /southern|country|georgia|carolina|tennessee|texas/.test(text) && /male|man/.test(text); });
   if (southern[0]?.voice_id) return southern[0].voice_id; return createMikeGeneratedVoice();
 }
-async function resolveCompatibleVoiceId() {
-  if (cachedCompatibleVoiceId) return cachedCompatibleVoiceId;
-  const configured = process.env.ELEVENLABS_VOICE_ID;
+async function resolveVoiceId() {
+  if (cachedVoiceId) return cachedVoiceId;
+  const configured = process.env.ELEVENLABS_VOICE_ID?.trim();
   if (configured) {
-    const voice = await getVoiceById(configured); const category = String(voice?.category || '').toLowerCase(); const type = String(voice?.voice_type || '').toLowerCase();
-    if (voice && !['cloned', 'personal'].includes(category) && type !== 'personal') {
-      const labels = voice.labels || {}; const description = `${voice.name || ''} ${voice.description || ''} ${JSON.stringify(labels)}`.toLowerCase();
-      if (/southern|country|georgia|carolina|tennessee|texas/.test(description)) { cachedCompatibleVoiceId = configured; console.log(`[speech-engine] configured Southern voice is compatible: ${configured}`); return cachedCompatibleVoiceId; }
-      console.warn(`[speech-engine] configured voice ${configured} is compatible but not explicitly Southern; using Mike Southern voice instead.`);
-    } else console.warn(`[speech-engine] configured voice ${configured} is not compatible with custom LLM Speech Engine. Switching to a generated voice.`);
+    const voice = await getVoiceById(configured);
+    if (!voice) throw new Error(`elevenlabs_configured_voice_not_found:${configured}`);
+    cachedVoiceId = configured;
+    console.log(`[speech-engine] configured voice accepted: ${configured} (${voice.name || 'unnamed'}, category=${voice.category || 'unknown'}, type=${voice.voice_type || 'unknown'})`);
+    return cachedVoiceId;
   }
-  cachedCompatibleVoiceId = await chooseGeneratedVoice(); console.log(`[speech-engine] selected Southern-compatible generated voice ${cachedCompatibleVoiceId}`); return cachedCompatibleVoiceId;
+  cachedVoiceId = await chooseGeneratedVoice();
+  console.warn(`[speech-engine] ELEVENLABS_VOICE_ID is not configured; using generated fallback ${cachedVoiceId}`);
+  return cachedVoiceId;
 }
 async function syncAndVerifyEngine(engineId) {
-  const headers = { 'xi-api-key': process.env.ELEVENLABS_API_KEY, 'Content-Type': 'application/json' }; const url = `https://api.elevenlabs.io/v1/speech-engine/${encodeURIComponent(engineId)}`; const voiceId = await resolveCompatibleVoiceId();
+  const headers = { 'xi-api-key': process.env.ELEVENLABS_API_KEY, 'Content-Type': 'application/json' }; const url = `https://api.elevenlabs.io/v1/speech-engine/${encodeURIComponent(engineId)}`; const voiceId = await resolveVoiceId();
   const updateResponse = await fetch(url, { method: 'PATCH', headers, body: JSON.stringify({ speech_engine: { ws_url: ENGINE_WS_URL }, tts: { ...MIKE_TTS, voice_id: voiceId }, turn: MIKE_TURN }) });
   if (!updateResponse.ok) { const raw = await updateResponse.text(); throw new Error(`speech_engine_update_${updateResponse.status}: ${raw.slice(0, 500)}`); }
   const updated = await updateResponse.json().catch(() => null); const actualUrl = updated?.speech_engine?.ws_url || null; const actualVoiceId = updated?.tts?.voice_id || null;
   if (actualUrl !== ENGINE_WS_URL) throw new Error(`speech_engine_ws_url_mismatch: expected=${ENGINE_WS_URL} actual=${actualUrl || 'missing'}`);
   if (actualVoiceId !== voiceId) throw new Error(`speech_engine_voice_mismatch: expected=${voiceId} actual=${actualVoiceId || 'missing'}`);
-  console.log(`[speech-engine] verified upstream URL for ${engineId}: ${actualUrl}`); console.log(`[speech-engine] verified Southern-compatible TTS voice for ${engineId}: ${actualVoiceId}`); return engineId;
+  console.log(`[speech-engine] verified upstream URL for ${engineId}: ${actualUrl}`); console.log(`[speech-engine] verified configured TTS voice for ${engineId}: ${actualVoiceId}`); return engineId;
 }
 async function ensureEngine() {
   requireKey(process.env.ELEVENLABS_API_KEY, 'elevenlabs'); if (cachedEngineId) return syncAndVerifyEngine(cachedEngineId);
   const headers = { 'xi-api-key': process.env.ELEVENLABS_API_KEY, 'Content-Type': 'application/json' }; const searchUrl = `https://api.elevenlabs.io/v1/speech-engine?page_size=100&search=${encodeURIComponent(ENGINE_NAME)}`;
   const listResponse = await fetch(searchUrl, { headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY } });
   if (listResponse.ok) { const data = await listResponse.json(); const existing = (data.speech_engines || []).find((item) => item.name === ENGINE_NAME); if (existing?.speech_engine_id) { cachedEngineId = existing.speech_engine_id; return syncAndVerifyEngine(cachedEngineId); } }
-  const voiceId = await resolveCompatibleVoiceId();
-  const createResponse = await fetch('https://api.elevenlabs.io/v1/speech-engine', { method: 'POST', headers, body: JSON.stringify({ name: ENGINE_NAME, speech_engine: { ws_url: ENGINE_WS_URL }, asr: { quality: 'high', provider: 'elevenlabs', user_input_audio_format: 'pcm_16000' }, tts: MIKE_TTS, turn: MIKE_TURN, vad: { background_voice_detection: false }, conversation: { max_duration_seconds: 600, client_events: ['audio', 'interruption', 'agent_response', 'user_transcript'] }, language: 'en', tags: ['mike-ai', 'doer-tough', 'production'], overrides: { first_message: false } }) });
+  const voiceId = await resolveVoiceId();
+  const createResponse = await fetch('https://api.elevenlabs.io/v1/speech-engine', { method: 'POST', headers, body: JSON.stringify({ name: ENGINE_NAME, speech_engine: { ws_url: ENGINE_WS_URL }, asr: { quality: 'high', provider: 'elevenlabs', user_input_audio_format: 'pcm_16000' }, tts: { ...MIKE_TTS, voice_id: voiceId }, turn: MIKE_TURN, vad: { background_voice_detection: false }, conversation: { max_duration_seconds: 600, client_events: ['audio', 'interruption', 'agent_response', 'user_transcript'] }, language: 'en', tags: ['mike-ai', 'doer-tough', 'production'], overrides: { first_message: false } }) });
   const raw = await createResponse.text(); if (!createResponse.ok) throw new Error(`speech_engine_create_${createResponse.status}: ${raw.slice(0, 500)}`); const data = JSON.parse(raw); cachedEngineId = data.speech_engine_id; console.log(`[speech-engine] created ${cachedEngineId} with upstream ${ENGINE_WS_URL}`); return cachedEngineId;
 }
 function transcriptToInput(transcript) { return transcript.map((item) => ({ role: item.role === 'agent' ? 'assistant' : 'user', content: item.content })); }
