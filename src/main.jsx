@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Conversation } from '@elevenlabs/client';
 import { Mic, Send, ArrowRight, User, LogOut, X } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
@@ -9,6 +8,17 @@ const readToken = () => { try { return localStorage.getItem(TOKEN_KEY) || ''; } 
 const writeToken = (token) => { try { if (token) localStorage.setItem(TOKEN_KEY, token); else localStorage.removeItem(TOKEN_KEY); } catch {} };
 const authHeaders = () => { const token = readToken(); return token ? { Authorization: `Bearer ${token}` } : {}; };
 const fetchJson = async (url, options = {}, timeout = 60000) => { const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeout); try { const res = await fetch(url, { ...options, signal: controller.signal }); const data = await res.json().catch(() => ({})); if (!res.ok) { const err = new Error(data.error || `request_failed_${res.status}`); err.status = res.status; throw err; } return data; } finally { clearTimeout(timer); } };
+
+function waitForIceComplete(pc, timeout = 8000) {
+  if (pc.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => { if (settled) return; settled = true; pc.removeEventListener('icegatheringstatechange', check); clearTimeout(timer); resolve(); };
+    const check = () => { if (pc.iceGatheringState === 'complete') finish(); };
+    const timer = setTimeout(finish, timeout);
+    pc.addEventListener('icegatheringstatechange', check);
+  });
+}
 
 function App() {
   const [messages, setMessages] = useState([{ role: 'mike', text: "What's up? I'm Mike. Tell me what you're trying to figure out. We'll figure it out." }]);
@@ -38,7 +48,20 @@ function App() {
   const setStatus = (status) => { statusRef.current = status; setListening(status === 'listening'); setSpeaking(status === 'talking'); };
   const logClientError = async (phase, err) => { console.error(`[voice] ${phase}:`, err); try { await fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phase, name: err?.name || '', message: err?.message || String(err || ''), extra: err?.stack || '' }) }); } catch {} };
   const settleVoiceSession = () => { const session = voiceSessionRef.current; voiceSessionRef.current = null; if (!session?.key) return; const seconds = Math.min(Math.round((Date.now() - session.startedAt) / 1000), session.maxSeconds); try { fetch('/api/speech/session-end', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ sessionKey: session.key, seconds }) }).catch(() => {}); } catch {} };
-  const stopRealtimeConversation = async () => { const active = conversationRef.current; conversationRef.current = null; if (active) { try { await active.endSession(); } catch (err) { console.warn('[voice] endSession:', err); } } settleVoiceSession(); setConversation(false); setStatus('ready'); };
+
+  const stopRealtimeConversation = async () => {
+    const active = conversationRef.current;
+    conversationRef.current = null;
+    if (active) {
+      try { active.dataChannel?.close(); } catch {}
+      try { active.localStream?.getTracks().forEach((track) => track.stop()); } catch {}
+      try { active.audio?.pause(); active.audio.srcObject = null; } catch {}
+      try { active.pc?.close(); } catch {}
+    }
+    settleVoiceSession();
+    setConversation(false);
+    setStatus('ready');
+  };
 
   const startRealtimeConversation = async () => {
     if (voiceTransitionRef.current) return;
@@ -53,29 +76,85 @@ function App() {
       }
       setError('');
       setStatus('listening');
-      if (!navigator.mediaDevices?.getUserMedia) throw new Error('This browser does not provide microphone access.');
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      stream.getTracks().forEach((track) => track.stop());
+      if (!window.RTCPeerConnection || !navigator.mediaDevices?.getUserMedia) throw new Error('This browser does not provide realtime microphone access.');
+
       const tokenData = await fetchJson('/api/speech/token', { headers: authHeaders() }, 30000);
-      if (!tokenData.token) throw new Error('Mike did not return a voice conversation token.');
+      if (!tokenData.token) throw new Error('Mike did not return a realtime voice token.');
       voiceSessionRef.current = { key: tokenData.sessionKey || null, maxSeconds: Number(tokenData.maxSessionSeconds) || 600, startedAt: Date.now() };
-      let session;
-      session = await Conversation.startSession({
-        conversationToken: tokenData.token,
-        connectionType: 'webrtc',
-        onConnect: () => { conversationRef.current = session; setConversation(true); setStatus('listening'); setError(''); },
-        onDisconnect: () => { if (conversationRef.current === session) conversationRef.current = null; settleVoiceSession(); setConversation(false); setStatus('ready'); },
-        onError: (err) => { logClientError('realtime-error', err); setStatus('ready'); setError(err?.message || 'Mike lost the voice connection. Tap Talk to Mike and try again.'); },
-        onStatusChange: (status) => { if (status === 'connecting') setStatus('listening'); else if (status === 'connected') setStatus('listening'); else if (status === 'disconnected') setStatus('ready'); },
-        onModeChange: ({ mode }) => { if (mode === 'speaking') setStatus('talking'); else if (mode === 'listening') setStatus('listening'); },
-        onMessage: (message) => { const text = message?.message || message?.text || message?.content || ''; if (!text || typeof text !== 'string') return; const role = message?.source === 'user' || message?.role === 'user' ? 'user' : 'mike'; setMessages((prev) => [...prev, { role, text }]); },
+
+      const pc = new RTCPeerConnection();
+      const audio = new Audio();
+      audio.autoplay = true;
+      audio.playsInline = true;
+      pc.ontrack = (event) => {
+        const stream = event.streams?.[0];
+        if (stream) audio.srcObject = stream;
+        audio.play().catch(() => {});
+      };
+
+      const localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+
+      const dataChannel = pc.createDataChannel('oai-events');
+      dataChannel.onopen = () => { setConversation(true); setStatus('listening'); setError(''); };
+      dataChannel.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.type === 'input_audio_buffer.speech_started') setStatus('listening');
+          else if (message.type === 'response.created') setStatus('talking');
+          else if (message.type === 'response.audio.delta') setStatus('talking');
+          else if (message.type === 'response.audio.done' || message.type === 'response.done') setStatus('listening');
+          else if (message.type === 'conversation.item.input_audio_transcription.completed') {
+            const text = String(message.transcript || '').trim();
+            if (text) setMessages((prev) => [...prev, { role: 'user', text }]);
+          } else if (message.type === 'response.audio_transcript.done') {
+            const text = String(message.transcript || '').trim();
+            if (text) setMessages((prev) => [...prev, { role: 'mike', text }]);
+          } else if (message.type === 'error') {
+            const detail = message.error?.message || 'Realtime voice connection error.';
+            console.error('[voice] realtime server error:', message);
+            setError(detail);
+          }
+        } catch (err) {
+          console.warn('[voice] ignored realtime event:', err);
+        }
+      };
+      dataChannel.onerror = (event) => { console.error('[voice] data channel error:', event); };
+      dataChannel.onclose = () => { if (conversationRef.current?.dataChannel === dataChannel) setStatus('ready'); };
+
+      pc.onconnectionstatechange = () => {
+        const state = pc.connectionState;
+        if (state === 'connected') { setConversation(true); setStatus('listening'); setError(''); }
+        else if (state === 'failed') { setError('Mike lost the realtime voice connection. Tap Talk to Mike and try again.'); setConversation(false); setStatus('ready'); }
+        else if (state === 'disconnected' || state === 'closed') { setConversation(false); setStatus('ready'); }
+      };
+
+      const offer = await pc.createOffer({ offerToReceiveAudio: true });
+      await pc.setLocalDescription(offer);
+      await waitForIceComplete(pc);
+
+      const form = new FormData();
+      form.append('sdp', new Blob([pc.localDescription.sdp], { type: 'application/sdp' }));
+      const answerResponse = await fetch('https://api.openai.com/v1/realtime/calls', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tokenData.token}` },
+        body: form,
       });
-      conversationRef.current = session;
+      const answer = await answerResponse.text();
+      if (!answerResponse.ok) throw new Error(`OpenAI realtime call failed (${answerResponse.status}): ${answer.slice(0, 500)}`);
+      await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+
+      conversationRef.current = { pc, dataChannel, localStream, audio };
       setConversation(true);
       setStatus('listening');
     } catch (err) {
-      settleVoiceSession();
       await logClientError('realtime-start', err);
+      const active = conversationRef.current;
+      conversationRef.current = null;
+      try { active?.dataChannel?.close(); } catch {}
+      try { active?.localStream?.getTracks().forEach((track) => track.stop()); } catch {}
+      try { active?.pc?.close(); } catch {}
+      settleVoiceSession();
       setConversation(false);
       setStatus('ready');
       if (err?.status === 401 || String(err?.message || '').includes('sign_in_required')) {
@@ -87,7 +166,7 @@ function App() {
       } else if (err?.status === 503) {
         setError('Mike voice is temporarily at capacity. Try again in a moment.');
       } else {
-        setError(err?.message || 'Mike could not start the voice connection. Check microphone access and try again.');
+        setError(err?.message || 'Mike could not start the realtime voice connection. Check microphone access and try again.');
       }
     } finally {
       voiceTransitionRef.current = false;
