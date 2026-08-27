@@ -4,7 +4,8 @@ import { REALTIME_TOOLS } from './realtime-tools.mjs';
 
 const REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1';
 const CUSTOM_VOICE_ID = String(process.env.OPENAI_REALTIME_CUSTOM_VOICE_ID || '').trim();
-const REALTIME_VOICE = CUSTOM_VOICE_ID ? { id: CUSTOM_VOICE_ID } : (process.env.OPENAI_REALTIME_VOICE || 'cedar');
+// Controlled voice test: use Cedar unless a future OpenAI custom voice ID is configured.
+const REALTIME_VOICE = CUSTOM_VOICE_ID ? { id: CUSTOM_VOICE_ID } : 'cedar';
 const ENGINE_NAME = 'Mike AI OpenAI Realtime';
 
 const requireKey = (key, name) => {
