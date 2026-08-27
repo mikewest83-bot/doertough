@@ -15,6 +15,29 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPE
 
 const REALTIME_INSTRUCTIONS = `${MIKE_INSTRUCTIONS}\n\nVOICE CONVERSATION MODE:\nKeep spoken responses natural, concise, confident, and easy to say aloud. Speak a little faster than average, but stay clear. Use a warm, masculine American conversational delivery with subtle Southern character. Sound like a real person talking one-on-one, not a radio announcer or assistant. Do not use markdown-heavy formatting in speech. Do not mention the underlying model, API, or voice provider.\n\nVOICE TOOL RULES:\nYou have access to the same public tool capabilities as Mike's text experience. Use an available tool when it is the appropriate source of truth instead of guessing. Never claim a tool result you did not receive. Never expose private owner-only business or trading data. If a tool fails, say you could not confirm the information rather than inventing it.`;
 
+async function probeCustomVoiceCapability() {
+  if (!openai) return;
+  try {
+    const response = await fetch('https://api.openai.com/v1/audio/voice_consents', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+    });
+    const body = await response.text();
+    if (response.ok) {
+      let count = 'unknown';
+      try {
+        const parsed = JSON.parse(body);
+        count = Array.isArray(parsed?.data) ? parsed.data.length : count;
+      } catch {}
+      console.log(`[custom-voice] OpenAI voice-consent API accessible: ${count} consent record(s) visible`);
+      return;
+    }
+    console.warn(`[custom-voice] OpenAI voice-consent API returned ${response.status}: ${body.slice(0, 500)}`);
+  } catch (error) {
+    console.warn('[custom-voice] OpenAI capability probe failed:', error.message || error);
+  }
+}
+
 export async function initializeSpeechEngine() {
   if (!openai) {
     console.warn('[realtime] disabled: OPENAI_API_KEY is not configured');
@@ -22,6 +45,7 @@ export async function initializeSpeechEngine() {
   }
   const voiceLabel = CUSTOM_VOICE_ID ? `custom:${CUSTOM_VOICE_ID}` : String(REALTIME_VOICE);
   console.log(`[realtime] OpenAI Realtime ready: model=${REALTIME_MODEL}, voice=${voiceLabel}, tools=${REALTIME_TOOLS.length}`);
+  await probeCustomVoiceCapability();
   return ENGINE_NAME;
 }
 
