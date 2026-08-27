@@ -10,4 +10,4 @@ RUN npm run build
 
 ENV NODE_ENV=production
 
-CMD ["npm", "start"]
+CMD ["node", "server/bootstrap-voice.mjs"]
