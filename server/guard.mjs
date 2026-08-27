@@ -1,8 +1,7 @@
 // server/guard.mjs
 // Abuse guards for money-sensitive and authentication routes.
-// Voice token requests use their own generous burst budget because the realtime
-// client may retry during WebRTC startup; the durable voice-minute budget stays
-// in Postgres.
+// Realtime voice has its own durable usage controls in Postgres; the token
+// endpoint is intentionally not subject to the generic request-rate limiter.
 
 const PROTECTED = [
   '/api/ask',
@@ -37,8 +36,6 @@ const ALLOWED_ORIGINS = new Set([...DEFAULT_ORIGINS, ...EXTRA_ORIGINS]);
 const REQUIRE_ORIGIN = String(process.env.MIKE_REQUIRE_ORIGIN || '') === 'true';
 const PER_HOUR = Number(process.env.MIKE_RATE_PER_HOUR || 40);
 const PER_MINUTE = Number(process.env.MIKE_RATE_PER_MINUTE || 8);
-const VOICE_PER_HOUR = Number(process.env.MIKE_VOICE_RATE_PER_HOUR || 120);
-const VOICE_PER_MINUTE = Number(process.env.MIKE_VOICE_RATE_PER_MINUTE || 30);
 const AUTH_PER_HOUR = Number(process.env.MIKE_AUTH_PER_HOUR || 20);
 const AUTH_PER_MINUTE = Number(process.env.MIKE_AUTH_PER_MINUTE || 5);
 const ACCESS_CODE = process.env.MIKE_ACCESS_CODE || '';
@@ -119,15 +116,19 @@ export function installGuards(app) {
       return res.status(403).json({ error: 'origin_required' });
     }
 
+    // Realtime token issuance is already protected by authentication,
+    // origin checks, and the durable Postgres voice allowance. Do not apply
+    // the generic HTTP request limiter here; browser/WebRTC startup may make
+    // multiple token requests while negotiating a session.
+    if (isVoiceToken) return next();
+
     const ip = req.ip || req.socket?.remoteAddress || 'unknown';
     const identity = req.user?.id ? `user:${req.user.id}` : `ip:${ip}`;
-    const key = isAuthRoute ? `auth:${ip}` : isVoiceToken ? `voice:${identity}` : identity;
+    const key = isAuthRoute ? `auth:${ip}` : identity;
 
     const result = isAuthRoute
       ? hit(key, AUTH_PER_MINUTE, AUTH_PER_HOUR)
-      : isVoiceToken
-        ? hit(key, VOICE_PER_MINUTE, VOICE_PER_HOUR)
-        : hit(key, PER_MINUTE, PER_HOUR);
+      : hit(key, PER_MINUTE, PER_HOUR);
 
     if (!result.ok) {
       console.warn(`[guard] rate limited ${key} (${result.window}) -> ${req.path}`);
@@ -136,9 +137,7 @@ export function installGuards(app) {
         error: 'rate_limited',
         message: isAuthRoute
           ? 'Too many attempts. Wait a minute and try again.'
-          : isVoiceToken
-            ? "Mike's voice connection is retrying too quickly. Try again in a moment."
-            : "Mike's catching his breath. Try again in a minute.",
+          : "Mike's catching his breath. Try again in a minute.",
         retryAfterSeconds: result.retryAfter,
       });
     }
@@ -149,7 +148,7 @@ export function installGuards(app) {
 
   console.log(
     `[guard] active — ${PER_MINUTE}/min, ${PER_HOUR}/hr general; ` +
-      `voice ${VOICE_PER_MINUTE}/min, ${VOICE_PER_HOUR}/hr; ` +
+      `voice token limiter bypassed; ` +
       `auth ${AUTH_PER_MINUTE}/min, ${AUTH_PER_HOUR}/hr per IP; ` +
       `${ALLOWED_ORIGINS.size} allowed origins; access code ${ACCESS_CODE ? 'ON' : 'off'}`
   );
