@@ -1,6 +1,7 @@
 /* node-pg-migrate migration: initial schema
    Up: create all tables and indexes (mirrors SCHEMA in server/db.mjs).
-   Down: drop tables in reverse order.
+   Down: drop tables in reverse order to avoid FK errors.
+   Filename intentionally uses a timestamp so node-pg-migrate can order it correctly.
 */
 
 export const shorthands = undefined;
@@ -25,7 +26,6 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS current_period_end     TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_end              TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS users_stripe_customer_idx ON users (stripe_customer_id);
-
 ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INT NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS password_resets (
