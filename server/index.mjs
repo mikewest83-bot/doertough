@@ -12,6 +12,7 @@ import { installGuards } from './guard.mjs';
 import { mailerConfigured } from './mailer.mjs';
 import { MIKE_INSTRUCTIONS } from './persona.mjs';
 import { getRelevantMemories, listMemories, saveMemory, deleteMemory, memoryPrompt, CATEGORIES } from './memory.mjs';
+import { normalizeVisionImage, visionContent } from './vision.mjs';
 import {
   migrate,
   recordVoiceSession,
@@ -283,20 +284,22 @@ app.post('/api/ask', async (req, res) => {
     if (!openai) throw new Error('openai_client_missing');
 
     const message = String(req.body?.message || '').trim();
-    if (!message) return res.status(400).json({ error: 'message_required' });
+    const image = req.body?.image ? normalizeVisionImage(req.body.image) : null;
+    if (!message && !image) return res.status(400).json({ error: 'message_required' });
 
     const history = Array.isArray(req.body?.history) ? req.body.history.slice(-10) : [];
+    const visionPrompt = message || 'Take a look at this image and tell me what you see and what I should consider.';
     let input = [
       ...history.map((item) => ({
         role: item.role === 'mike' ? 'assistant' : 'user',
         content: [{ type: item.role === 'mike' ? 'output_text' : 'input_text', text: String(item.text || '') }],
       })),
-      { role: 'user', content: [{ type: 'input_text', text: message }] },
+      { role: 'user', content: visionContent(visionPrompt, image) },
     ];
 
     const owner = isOwner(req.user);
     const tools = owner ? LIVE_TOOLS : PUBLIC_TOOLS;
-    const relevantMemories = req.user ? await getRelevantMemories(req.user.id, message, 12) : [];
+    const relevantMemories = req.user ? await getRelevantMemories(req.user.id, message || visionPrompt, 12) : [];
     const instructions = (owner ? MIKE_INSTRUCTIONS : MIKE_INSTRUCTIONS + NON_OWNER_NOTE) + memoryPrompt(relevantMemories);
     let text = "I'm here. Give me another shot.";
 
@@ -319,7 +322,7 @@ app.post('/api/ask', async (req, res) => {
           if (!owner && OWNER_ONLY_TOOLS.has(call.name)) {
             output = { error: 'not_available', note: "That is Mike's own private business data." };
           } else {
-            output = handler ? await handler(args) : { error: `Unknown tool "${call.name}".` };
+            output = handler ? await handler(args) : { error: `Unknown tool \"${call.name}\".` };
           }
         } catch (toolError) {
           console.error(`[ask] tool ${call.name} failed:`, toolError.message || toolError);
