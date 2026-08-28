@@ -1,9 +1,10 @@
 /* node-pg-migrate migration: initial schema
    Up: create all tables and indexes (mirrors SCHEMA in server/db.mjs).
-   Down: drop tables in reverse order.
+   Down: drop tables in reverse order to avoid FK errors.
+   Filename intentionally uses a timestamp so node-pg-migrate can order it correctly.
 */
 
-exports.shorthands = undefined;
+export const shorthands = undefined;
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS users (
@@ -25,7 +26,6 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS current_period_end     TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_end              TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS users_stripe_customer_idx ON users (stripe_customer_id);
-
 ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INT NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS password_resets (
@@ -74,12 +74,11 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages (conversation_id, created_at);
 `;
 
-exports.up = (pgm) => {
+export const up = (pgm) => {
   pgm.sql(SCHEMA_SQL);
 };
 
-exports.down = (pgm) => {
-  // Drop tables in reverse order to avoid FK errors
+export const down = (pgm) => {
   pgm.dropTable('messages', { ifExists: true, cascade: true });
   pgm.dropTable('conversations', { ifExists: true, cascade: true });
   pgm.dropTable('voice_sessions', { ifExists: true, cascade: true });
