@@ -16,11 +16,16 @@ if (!source.includes(importMoney)) {
   source = source.replace(anchor, `${anchor}\n${importMoney}`);
 }
 
-const importRbac = "import { ensureRbacSchema } from './rbac.mjs';";
+const importRbac = "import { ensureRbacSchema, getRbacOverview } from './rbac.mjs';";
 if (!source.includes(importRbac)) {
+  const oldImport = "import { ensureRbacSchema } from './rbac.mjs';";
   const anchor = "import { installGuards } from './guard.mjs';";
-  if (!source.includes(anchor)) throw new Error('Roadmap patch guard import anchor not found');
-  source = source.replace(anchor, `${anchor}\n${importRbac}`);
+  if (source.includes(oldImport)) {
+    source = source.replace(oldImport, importRbac);
+  } else {
+    if (!source.includes(anchor)) throw new Error('Roadmap patch guard import anchor not found');
+    source = source.replace(anchor, `${anchor}\n${importRbac}`);
+  }
 }
 
 if (!source.includes('...MONEY_TOOLS')) {
@@ -56,11 +61,6 @@ if (!source.includes('/api/owner/overview')) {
     '',
   ].join('\n');
   source = source.slice(0, index) + route + source.slice(index);
-}
-
-if (!source.includes('getRbacOverview')) {
-  const importLine = "import { ensureRbacSchema, getRbacOverview } from './rbac.mjs';";
-  source = source.replace(importRbac, importLine);
 }
 
 const oldMigrate = "migrate().catch((error) => console.error('[db] migrate threw:', error.message || error));";
