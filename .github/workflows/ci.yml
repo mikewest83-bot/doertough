@@ -15,10 +15,12 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
           cache: npm
       - name: Install dependencies
         run: npm install --no-audit --no-fund
+      - name: Apply production SDP patch
+        run: node scripts/patch-realtime-sdp.mjs
       - name: Build
         run: npm run build
       - name: Verify build is idempotent
