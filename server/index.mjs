@@ -29,6 +29,7 @@ import {
   hasActiveSubscription,
 } from './billing.mjs';
 import { initializeSpeechEngine, getSpeechEngineToken } from './speech-engine.mjs';
+import { normalizeVisionImage, visionContent } from './vision.mjs';
 import {
   verifyStripeSignature,
   stripeWebhookConfigured,
@@ -258,6 +259,7 @@ app.get('/api/health', (req, res) => {
     service: 'mike-ai',
     openaiConfigured: !!process.env.OPENAI_API_KEY,
     voiceConfigured: !!process.env.OPENAI_API_KEY,
+    visionConfigured: !!process.env.OPENAI_API_KEY,
     liveToolsConfigured: true,
     toolCount: LIVE_TOOLS.length,
     voiceBudget: {
@@ -276,28 +278,33 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// ===== Chat =====
+// ===== Chat + Mike Vision =====
 app.post('/api/ask', async (req, res) => {
   try {
     requireKey(process.env.OPENAI_API_KEY, 'openai');
     if (!openai) throw new Error('openai_client_missing');
 
     const message = String(req.body?.message || '').trim();
-    if (!message) return res.status(400).json({ error: 'message_required' });
+    const image = normalizeVisionImage(req.body?.image);
+    if (!message && !image) return res.status(400).json({ error: 'message_or_image_required' });
 
+    const visionMessage = message || 'Take a look at this and tell me what you see. Be useful about what can and cannot be determined from the image.';
     const history = Array.isArray(req.body?.history) ? req.body.history.slice(-10) : [];
     let input = [
       ...history.map((item) => ({
         role: item.role === 'mike' ? 'assistant' : 'user',
         content: [{ type: item.role === 'mike' ? 'output_text' : 'input_text', text: String(item.text || '') }],
       })),
-      { role: 'user', content: [{ type: 'input_text', text: message }] },
+      { role: 'user', content: visionContent(visionMessage, image) },
     ];
 
     const owner = isOwner(req.user);
     const tools = owner ? LIVE_TOOLS : PUBLIC_TOOLS;
-    const relevantMemories = req.user ? await getRelevantMemories(req.user.id, message, 12) : [];
-    const instructions = (owner ? MIKE_INSTRUCTIONS : MIKE_INSTRUCTIONS + NON_OWNER_NOTE) + memoryPrompt(relevantMemories);
+    const relevantMemories = req.user ? await getRelevantMemories(req.user.id, visionMessage, 12) : [];
+    const visionNote = image
+      ? '\n\nVISION MODE\nYou can see an image supplied by the user. Treat visible details as observations, not proof. Be explicit when the image cannot establish a fact. Do not invent labels, prices, damage, measurements, authenticity, or condition that cannot be reasonably supported by what you can see. When a current price, market value, specification, or other changing fact is needed, use the appropriate available tool instead of guessing. Keep the same conversational Mike personality and continue the same conversation.\n'
+      : '';
+    const instructions = (owner ? MIKE_INSTRUCTIONS : MIKE_INSTRUCTIONS + NON_OWNER_NOTE) + visionNote + memoryPrompt(relevantMemories);
     let text = "I'm here. Give me another shot.";
 
     for (let round = 0; round < 4; round += 1) {
@@ -319,7 +326,7 @@ app.post('/api/ask', async (req, res) => {
           if (!owner && OWNER_ONLY_TOOLS.has(call.name)) {
             output = { error: 'not_available', note: "That is Mike's own private business data." };
           } else {
-            output = handler ? await handler(args) : { error: `Unknown tool "${call.name}".` };
+            output = handler ? await handler(args) : { error: `Unknown tool \"${call.name}\".` };
           }
         } catch (toolError) {
           console.error(`[ask] tool ${call.name} failed:`, toolError.message || toolError);
