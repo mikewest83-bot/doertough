@@ -43,10 +43,10 @@ const OWNER_EMAIL = String(process.env.OWNER_EMAIL || '').trim().toLowerCase();
 
 export async function ensureRbacSchema() {
   if (!dbEnabled) return false;
+  await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user'");
+  await query('CREATE INDEX IF NOT EXISTS users_role_idx ON users (role)');
+  await query("UPDATE users SET role = 'owner' WHERE $1 <> '' AND lower(email) = $1", [OWNER_EMAIL]);
   await query(`
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';
-    CREATE INDEX IF NOT EXISTS users_role_idx ON users (role);
-    UPDATE users SET role = 'owner' WHERE $1 <> '' AND lower(email) = $1;
     CREATE TABLE IF NOT EXISTS audit_log (
       id BIGSERIAL PRIMARY KEY,
       actor_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
@@ -55,10 +55,10 @@ export async function ensureRbacSchema() {
       target_id TEXT,
       metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-    CREATE INDEX IF NOT EXISTS audit_log_actor_time_idx ON audit_log (actor_user_id, created_at);
-    CREATE INDEX IF NOT EXISTS audit_log_action_time_idx ON audit_log (action, created_at);
-  `, [OWNER_EMAIL]);
+    )
+  `);
+  await query('CREATE INDEX IF NOT EXISTS audit_log_actor_time_idx ON audit_log (actor_user_id, created_at)');
+  await query('CREATE INDEX IF NOT EXISTS audit_log_action_time_idx ON audit_log (action, created_at)');
   return true;
 }
 
