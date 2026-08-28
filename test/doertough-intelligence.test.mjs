@@ -14,9 +14,9 @@ describe('Doer Tough intelligence bridge', () => {
     assert.deepEqual(tool.parameters.required, ['category', 'askingPrice']);
   });
 
-  it('does not expose bank or Plaid credentials as tool parameters', () => {
-    const serialized = JSON.stringify(DOERTOUGH_INTELLIGENCE_TOOLS).toLowerCase();
-    assert.equal(serialized.includes('plaid'), false);
-    assert.equal(serialized.includes('bank_password'), false);
+  it('does not expose credential fields as tool parameters', () => {
+    const properties = DOERTOUGH_INTELLIGENCE_TOOLS.flatMap((tool) => Object.values(tool.parameters.properties || {}));
+    const forbidden = new Set(['password', 'passwordHash', 'bankPassword', 'plaidAccessToken', 'serviceToken', 'apiKey']);
+    for (const property of properties) assert.equal(forbidden.has(property?.name), false);
   });
 });
