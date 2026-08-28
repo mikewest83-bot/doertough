@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import './vision-capture.css';
 
 const ACCEPT = 'image/jpeg,image/png,image/webp';
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -13,10 +14,11 @@ function readAsDataUrl(file) {
   });
 }
 
-export default function VisionCapture({ onImage, disabled = false }) {
+export default function VisionCapture({ onImage, onChange, disabled = false }) {
   const inputRef = useRef(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const deliver = onImage || onChange;
 
   useEffect(() => () => { if (inputRef.current) inputRef.current.value = ''; }, []);
 
@@ -40,7 +42,7 @@ export default function VisionCapture({ onImage, disabled = false }) {
     setBusy(true);
     try {
       const dataUrl = await readAsDataUrl(file);
-      onImage?.({ dataUrl, mediaType: file.type, name: file.name, size: file.size });
+      deliver?.({ dataUrl, mediaType: file.type, name: file.name, size: file.size });
     } catch (err) {
       setError(err?.message || 'Could not read that image.');
     } finally {
