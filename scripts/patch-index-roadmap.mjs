@@ -34,9 +34,8 @@ const importRbac = "import { ensureRbacSchema, getRbacOverview } from './rbac.mj
 if (!source.includes(importRbac)) {
   const oldImport = "import { ensureRbacSchema } from './rbac.mjs';";
   const anchor = "import { installGuards } from './guard.mjs';";
-  if (source.includes(oldImport)) {
-    source = source.replace(oldImport, importRbac);
-  } else {
+  if (source.includes(oldImport)) source = source.replace(oldImport, importRbac);
+  else {
     if (!source.includes(anchor)) throw new Error('Roadmap patch guard import anchor not found');
     source = source.replace(anchor, `${anchor}\n${importRbac}`);
   }
@@ -75,15 +74,11 @@ if (!source.includes('/api/owner/overview')) {
     "    console.error('[owner] overview failed:', error.message || error);",
     "    res.status(500).json({ error: 'owner_overview_unavailable' });",
     '  }',
-    '});',
-    '',
-    '',
+    '});', '', '',
   ].join('\n');
   source = source.slice(0, index) + route + source.slice(index);
 }
 
-// Account-scoped reminder API. The reminder module enforces ownership in SQL,
-// so a caller can never read/cancel another user's reminders by changing an id.
 if (!source.includes("app.get('/api/reminders'")) {
   const marker = '// ===== Billing =====';
   const index = source.indexOf(marker);
@@ -96,70 +91,54 @@ if (!source.includes("app.get('/api/reminders'")) {
     '  } catch (error) {',
     "    console.error('[reminders] list route failed:', error.message || error);",
     "    res.status(500).json({ error: 'reminders_unavailable' });",
-    '  }',
-    '});',
-    '',
-    "app.post('/api/reminders', authRequired, async (req, res) => {",
-    '  try {',
+    '  }', '});', '',
+    "app.post('/api/reminders', authRequired, async (req, res) => {", '  try {',
     '    const result = await setReminderTool(req.user.id, req.body || {});',
-    '    if (result?.error) return res.status(400).json(result);',
-    '    res.json(result);',
-    '  } catch (error) {',
-    "    console.error('[reminders] create route failed:', error.message || error);",
-    "    res.status(500).json({ error: 'reminder_create_failed' });",
-    '  }',
-    '});',
-    '',
-    "app.delete('/api/reminders/:id', authRequired, async (req, res) => {",
-    '  try {',
+    '    if (result?.error) return res.status(400).json(result);', '    res.json(result);',
+    '  } catch (error) {', "    console.error('[reminders] create route failed:', error.message || error);",
+    "    res.status(500).json({ error: 'reminder_create_failed' });", '  }', '});', '',
+    "app.delete('/api/reminders/:id', authRequired, async (req, res) => {", '  try {',
     '    res.json(await cancelReminderTool(req.user.id, { id: Number(req.params.id) }));',
-    '  } catch (error) {',
-    "    console.error('[reminders] cancel route failed:', error.message || error);",
-    "    res.status(500).json({ error: 'reminder_cancel_failed' });",
-    '  }',
-    '});',
-    '',
-    '',
+    '  } catch (error) {', "    console.error('[reminders] cancel route failed:', error.message || error);",
+    "    res.status(500).json({ error: 'reminder_cancel_failed' });", '  }', '});', '', '',
   ].join('\n');
   source = source.slice(0, index) + route + source.slice(index);
 }
 
-// Text chat gets account-aware reminder handlers. Anonymous users still have
-// the public tools, but reminder creation/listing/canceling requires auth.
 if (!source.includes('const REMINDER_TOOL_HANDLERS = req.user')) {
   const anchor = '    let text = "I\'m here. Give me another shot.";';
   if (!source.includes(anchor)) throw new Error('Roadmap reminder handler anchor not found');
-  const insert = [
+  source = source.replace(anchor, [
     anchor,
     '    const REMINDER_TOOL_HANDLERS = req.user ? {',
     '      set_reminder: (args) => setReminderTool(req.user.id, args),',
     '      list_reminders: (args) => listRemindersTool(req.user.id, args),',
     '      cancel_reminder: (args) => cancelReminderTool(req.user.id, args),',
     '    } : {};',
-  ].join('\n');
-  source = source.replace(anchor, insert);
+  ].join('\n'));
 }
 
 if (!source.includes('REMINDER_TOOL_HANDLERS[call.name]')) {
-  source = source.replace(
-    '        const handler = LIVE_TOOL_HANDLERS[call.name];',
-    '        const handler = REMINDER_TOOL_HANDLERS[call.name] || LIVE_TOOL_HANDLERS[call.name];'
-  );
+  source = source.replace('        const handler = LIVE_TOOL_HANDLERS[call.name];', '        const handler = REMINDER_TOOL_HANDLERS[call.name] || LIVE_TOOL_HANDLERS[call.name];');
 }
 
 const oldMigrate = "migrate().catch((error) => console.error('[db] migrate threw:', error.message || error));";
 const newMigrate = "migrate().then(async () => { await ensureRbacSchema(); await ensureReminderSchema(); }).catch((error) => console.error('[db] migrate threw:', error.message || error));";
-if (source.includes(oldMigrate) && !source.includes('ensureReminderSchema()')) {
-  source = source.replace(oldMigrate, newMigrate);
-}
+if (source.includes(oldMigrate) && !source.includes('ensureReminderSchema()')) source = source.replace(oldMigrate, newMigrate);
 
-// Keep the first customer-facing CTA simple: it launches the same text path as
-// any other prompt, while making the new differentiator visible on the home page.
 const oldTryChips = "['How much concrete for a 20x24 slab at 4 inches?','Quote a 3-day framing job at $65 an hour.','What am I missing?']";
 const newTryChips = "['💰 Save me money','How much concrete for a 20x24 slab at 4 inches?','Quote a 3-day framing job at $65 an hour.','What am I missing?']";
-if (source.includes(oldTryChips) && !source.includes(newTryChips)) {
-  source = source.replace(oldTryChips, newTryChips);
-}
+if (source.includes(oldTryChips) && !source.includes(newTryChips)) source = source.replace(oldTryChips, newTryChips);
+
+// Keep the actual React customer experience aligned with the roadmap instead of
+// relying only on generated server markup. This patch is idempotent and runs as
+// part of the existing production build before Vite compiles the app.
+const appTarget = path.join(root, 'src', 'main.jsx');
+let app = fs.readFileSync(appTarget, 'utf8');
+const oldChips = "{['How much concrete for a 20x24 slab at 4 inches?','Quote a 3-day framing job at $65 an hour.','What am I missing?'].map((prompt) =>";
+const newChips = "{['💰 Save me money','How much concrete for a 20x24 slab at 4 inches?','Quote a 3-day framing job at $65 an hour.','What am I missing?'].map((prompt) =>";
+if (app.includes(oldChips) && !app.includes(newChips)) app = app.replace(oldChips, newChips);
+fs.writeFileSync(appTarget, app);
 
 fs.writeFileSync(target, source);
 console.log('[build] Mike roadmap tool pack, Doer Tough intelligence, RBAC, reminders, and Save Me Money CTA ready');
