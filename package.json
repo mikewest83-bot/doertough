@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/patch-index-realtime-tools.mjs && vite build",
+    "build": "node scripts/patch-index-roadmap.mjs && node scripts/patch-index-realtime-tools.mjs && vite build",
     "start": "node server/index.mjs",
     "migrate": "node-pg-migrate up",
     "migrate:down": "node-pg-migrate down",
