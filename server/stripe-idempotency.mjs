@@ -1,26 +1,21 @@
 import { query } from './db.mjs';
 
-// Claim an event atomically. A duplicate delivery is ignored. If an earlier
-// attempt crashed before completion, releaseStripeEvent allows Stripe's retry
-// to process it again.
+// Claim an event atomically. Duplicate deliveries are ignored. A processing
+// claim older than ten minutes can be reclaimed, covering a crashed worker.
 export async function claimStripeEvent(eventId) {
   if (!eventId) return true;
 
   const { rowCount } = await query(
     `INSERT INTO stripe_webhook_events (event_id, status)
      VALUES ($1, 'processing')
-     ON CONFLICT (event_id) DO NOTHING`,
+     ON CONFLICT (event_id) DO UPDATE
+       SET status = 'processing', received_at = now(), processed_at = NULL
+       WHERE stripe_webhook_events.status = 'processing'
+         AND stripe_webhook_events.received_at < now() - interval '10 minutes'`,
     [eventId]
   );
 
-  if (rowCount === 1) return true;
-
-  const { rows } = await query(
-    `SELECT status FROM stripe_webhook_events WHERE event_id = $1`,
-    [eventId]
-  );
-
-  return rows[0]?.status !== 'processed' && rows[0]?.status !== 'processing';
+  return rowCount === 1;
 }
 
 export async function markStripeEventProcessed(eventId) {
@@ -28,7 +23,7 @@ export async function markStripeEventProcessed(eventId) {
   await query(
     `UPDATE stripe_webhook_events
         SET status = 'processed', processed_at = now()
-      WHERE event_id = $1`,
+      WHERE event_id = $1 AND status = 'processing'`,
     [eventId]
   );
 }
