@@ -8,9 +8,13 @@
 
 const DEALTOUGH_API_URL = process.env.DEALTOUGH_API_URL?.replace(/\/$/, "");
 const DOERTOUGH_MONEY_API_URL = process.env.DOERTOUGH_MONEY_API_URL?.replace(/\/$/, "");
+const DOERTOUGH_MONEY_SERVICE_TOKEN = process.env.DOERTOUGH_MONEY_SERVICE_TOKEN;
 
 export function intelligenceStatus() {
-  return { dealTough: Boolean(DEALTOUGH_API_URL), doerToughMoney: Boolean(DOERTOUGH_MONEY_API_URL) };
+  return {
+    dealTough: Boolean(DEALTOUGH_API_URL),
+    doerToughMoney: Boolean(DOERTOUGH_MONEY_API_URL && DOERTOUGH_MONEY_SERVICE_TOKEN),
+  };
 }
 
 function requireConfigured(baseUrl, name) {
@@ -36,15 +40,14 @@ export async function analyzeWithDealTough(dealInput) {
 }
 
 /**
- * Adapter for the future capability-level DoerToughMoney service boundary.
- * It is intentionally fail-closed until Money exposes a stable, least-privilege
- * endpoint. Mike must never receive raw Plaid credentials or direct DB access.
+ * Call the isolated DoerToughMoney intelligence gateway. The gateway exposes
+ * only capability-level calculations; it has no Plaid or database access.
  */
-export async function analyzeWithDoerToughMoney(capability, input, authToken) {
+export async function analyzeWithDoerToughMoney(capability, input) {
   requireConfigured(DOERTOUGH_MONEY_API_URL, "DOERTOUGH_MONEY_API_URL");
+  if (!DOERTOUGH_MONEY_SERVICE_TOKEN) throw new Error("money_service_token_not_configured");
   if (!capability || typeof capability !== "string") throw new Error("money_capability_required");
-  if (!authToken) throw new Error("money_authorization_required");
-  return postJson(`${DOERTOUGH_MONEY_API_URL}/api/v1/mike/${encodeURIComponent(capability)}`, input, {
-    Authorization: `Bearer ${authToken}`,
+  return postJson(`${DOERTOUGH_MONEY_API_URL}/api/v1/mike/intelligence`, { capability, input: input || {} }, {
+    Authorization: `Bearer ${DOERTOUGH_MONEY_SERVICE_TOKEN}`,
   });
 }
