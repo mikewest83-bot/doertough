@@ -15,6 +15,7 @@ import {
   consumePasswordReset,
 } from './db.mjs';
 import { sendPasswordReset } from './mailer.mjs';
+import { publicRole } from './rbac.mjs';
 
 const JWT_SECRET = process.env.JWT_SECRET || '';
 const TOKEN_TTL = '30d';
@@ -35,10 +36,12 @@ const looksLikeEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
 
 // Only expose account information Mike's browser actually needs.
+// Role is derived server-side; the browser never gets to choose it.
 export const publicUser = (u) => ({
   id: String(u.id),
   name: u.name,
   email: u.email,
+  role: publicRole(u, isOwner),
   isOwner: isOwner(u),
 });
 
