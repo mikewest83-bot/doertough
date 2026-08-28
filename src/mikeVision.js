@@ -1,10 +1,10 @@
-const MAX_BYTES = 6 * 1024 * 1024;
+const MAX_BYTES = 5 * 1024 * 1024;
 const ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 export function validateVisionFile(file) {
   if (!file) return { ok: false, error: 'No image selected.' };
   if (!ALLOWED_TYPES.has(file.type)) return { ok: false, error: 'Please choose a JPG, PNG, or WebP image.' };
-  if (file.size > MAX_BYTES) return { ok: false, error: 'That image is too large. Please choose an image under 6 MB.' };
+  if (file.size > MAX_BYTES) return { ok: false, error: 'That image is too large. Please choose an image under 5 MB.' };
   return { ok: true };
 }
 
