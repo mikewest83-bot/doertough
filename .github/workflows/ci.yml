@@ -2,7 +2,7 @@ name: Mike AI CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, mike-ai-clean-integration]
   pull_request:
     branches: [main]
 
@@ -15,10 +15,24 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
       - name: Install dependencies
-        run: npm install
+        run: npm install --no-audit --no-fund
+      - name: Apply production SDP patch
+        run: node scripts/patch-realtime-sdp.mjs
       - name: Build
         run: npm run build
+      - name: Verify build is idempotent
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --binary > /tmp/mike-ai-build-1.diff
+          npm run build
+          git diff --binary > /tmp/mike-ai-build-2.diff
+          if ! cmp -s /tmp/mike-ai-build-1.diff /tmp/mike-ai-build-2.diff; then
+            echo "Build is not idempotent: the second build changed tracked files differently from the first build."
+            diff -u /tmp/mike-ai-build-1.diff /tmp/mike-ai-build-2.diff || true
+            exit 1
+          fi
       - name: Test
         run: npm test

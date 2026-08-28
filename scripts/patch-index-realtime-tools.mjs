@@ -24,7 +24,7 @@ if (!source.includes("app.post('/api/realtime/tool'")) {
   const route = [
     '// ===== Realtime public tool dispatch =====',
     '// Voice tool calls are authenticated and executed server-side; the browser never',
-    '// receives private handlers or API credentials.',
+    '// receives private handlers or provider credentials.',
     "app.post('/api/realtime/tool', authRequired, async (req, res) => {",
     '  try {',
     "    const name = String(req.body?.name || '').trim();",
@@ -55,6 +55,22 @@ if (!source.includes("app.post('/api/realtime/tool'")) {
   source = source.slice(0, index) + route + source.slice(index);
 }
 
+// Database migrations run only in the Railway pre-deploy gate. Remove both
+// known startup forms so this patch is safe against the legacy and current
+// server bootstrap variants.
+source = source.replace(
+  "  migrate,\n",
+  ''
+);
+source = source.replace(
+  /\nmigrate\(\)\.then\(async \(\) => \{ await ensureRbacSchema\(\); await ensureReminderSchema\(\); \}\)\.catch\(\(error\) => console\.error\('\[db\] migrate threw:', error\.message \|\| error\)\);\n?/g,
+  '\n'
+);
+source = source.replace(
+  /\nmigrate\(\)\.catch\(\(error\) => console\.error\('\[db\] migrate threw:', error\.message \|\| error\)\);\n?/g,
+  '\n'
+);
+
 // The owner/test account must never be blocked by the production customer
 // voice allowance. This prevents our own repeated QA sessions from consuming
 // the launch tester's quota while preserving the paid/free limits for every
@@ -82,4 +98,4 @@ if (!source.includes('// OWNER VOICE QA BYPASS')) {
 }
 
 fs.writeFileSync(target, source);
-console.log('[build] Realtime public tool dispatch ready; owner voice QA bypass enabled');
+console.log('[build] Realtime public tool dispatch ready; owner voice QA bypass enabled; startup migrations disabled');

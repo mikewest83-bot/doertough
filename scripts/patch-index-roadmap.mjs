@@ -122,9 +122,17 @@ if (!source.includes('REMINDER_TOOL_HANDLERS[call.name]')) {
   source = source.replace('        const handler = LIVE_TOOL_HANDLERS[call.name];', '        const handler = REMINDER_TOOL_HANDLERS[call.name] || LIVE_TOOL_HANDLERS[call.name];');
 }
 
-const oldMigrate = "migrate().catch((error) => console.error('[db] migrate threw:', error.message || error));";
-const newMigrate = "migrate().then(async () => { await ensureRbacSchema(); await ensureReminderSchema(); }).catch((error) => console.error('[db] migrate threw:', error.message || error));";
-if (source.includes(oldMigrate) && !source.includes('ensureReminderSchema()')) source = source.replace(oldMigrate, newMigrate);
+// Runtime database migration is intentionally disabled here. The migration/schema
+// work must run as an explicit pre-deploy step; this build patch must never leave
+// an orphaned migrate() invocation in the generated runtime server.
+const runtimeMigrationPatterns = [
+  "migrate().catch((error) => console.error('[db] migrate threw:', error.message || error));",
+  "migrate().then(async () => { await ensureRbacSchema(); await ensureReminderSchema(); }).catch((error) => console.error('[db] migrate threw:', error.message || error));",
+];
+for (const migrationPattern of runtimeMigrationPatterns) {
+  source = source.replace(`\n${migrationPattern}`, '');
+  source = source.replace(migrationPattern, '');
+}
 
 const oldTryChips = "['How much concrete for a 20x24 slab at 4 inches?','Quote a 3-day framing job at $65 an hour.','What am I missing?']";
 const newTryChips = "['💰 Save me money','How much concrete for a 20x24 slab at 4 inches?','Quote a 3-day framing job at $65 an hour.','What am I missing?']";
