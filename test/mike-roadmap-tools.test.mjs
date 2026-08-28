@@ -23,12 +23,12 @@ describe('Mike roadmap tools', () => {
       frequency: 'one_time',
       availableCash: 5000,
       upcomingExpenses: 2500,
-      safetyBuffer: 1000,
+      safetyBuffer: 1500,
     });
     assert.equal(result.affordability.status, 'affordable_but_tight');
     assert.equal(result.affordability.spendableAfterUpcomingExpenses, 2500);
     assert.equal(result.affordability.remainingAfterPurchase, 1300);
-    assert.equal(result.affordability.protectedRemaining, 300);
+    assert.equal(result.affordability.protectedRemaining, -200);
   });
 
   it('blocks an unaffordable purchase using only supplied facts', () => {
