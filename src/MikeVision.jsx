@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Camera, X } from 'lucide-react';
 import { createVisionInput, createCameraConstraints, stopVisionStream } from './mikeVision.js';
+import './mikeVision.css';
 
 export default function MikeVision({ disabled = false, onCapture, busy = false }) {
   const [open, setOpen] = useState(false);
