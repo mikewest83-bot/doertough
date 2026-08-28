@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Mic, Send, ArrowRight, User, LogOut, X } from 'lucide-react';
+import { Mic, Send, ArrowRight, User, LogOut, X, Camera } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
+import VisionCapture from './VisionCapture.jsx';
 
 const TOKEN_KEY = 'mike_token';
 const readToken = () => { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; } };
@@ -37,6 +38,7 @@ function App() {
   const [authNotice, setAuthNotice] = useState('');
   const [resetToken, setResetToken] = useState('');
   const [accountsOn, setAccountsOn] = useState(false);
+  const [visionImage, setVisionImage] = useState(null);
 
   const conversationRef = useRef(null);
   const conversationModeRef = useRef(false);
@@ -175,14 +177,18 @@ function App() {
 
   const toggleConversation = async () => { if (voiceTransitionRef.current) return; if (conversationModeRef.current || conversationRef.current) { voiceTransitionRef.current = true; try { await stopRealtimeConversation(); } finally { voiceTransitionRef.current = false; } } else await startRealtimeConversation(); };
 
-  const ask = async (raw) => {
+  const ask = async (raw, imageOverride = visionImage) => {
     const text = (raw || '').trim();
-    if (!text || busy || conversationModeRef.current || conversationRef.current) return;
+    if ((!text && !imageOverride) || busy || conversationModeRef.current || conversationRef.current) return;
     setInput(''); setBusy(true); setError('');
     const history = messages.slice(-10);
-    setMessages((prev) => [...prev, { role: 'user', text }]);
+    const attachedImage = imageOverride || null;
+    setMessages((prev) => [...prev, { role: 'user', text: text || 'Take a look at this.' }]);
+    setVisionImage(null);
     try {
-      const data = await fetchJson('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ message: text, history }) }, 55000);
+      const body = { message: text || 'Take a look at this image and tell me what you see and what I should consider.', history };
+      if (attachedImage) body.image = attachedImage;
+      const data = await fetchJson('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(body) }, 55000);
       setMessages((prev) => [...prev, { role: 'mike', text: data.text }]);
       setBusy(false);
     } catch (err) {
@@ -284,7 +290,12 @@ function App() {
 
       <section className="chat" aria-live="polite">{messages.map((m, i) => <div key={i} className={'bubble ' + m.role}>{m.text}</div>)}{busy && <div className="bubble mike">Give me a second. I'm thinking…</div>}</section>
       {error && <div className="error" role="alert">{error}</div>}
-      <form onSubmit={(e) => { e.preventDefault(); ask(input); }}><input id="input" value={input} onChange={(e) => setInput(e.target.value)} placeholder="What's on your mind?" autoComplete="off" disabled={conversationMode} /><button disabled={!input.trim() || busy || conversationMode} aria-label="Send"><Send size={18} /></button></form>
+      <form onSubmit={(e) => { e.preventDefault(); ask(input); }}>
+        <VisionCapture disabled={busy || conversationMode} value={visionImage} onChange={setVisionImage} />
+        <input id="input" value={input} onChange={(e) => setInput(e.target.value)} placeholder={visionImage ? 'Ask Mike about the photo…' : "What's on your mind?"} autoComplete="off" disabled={conversationMode} />
+        <button disabled={(!input.trim() && !visionImage) || busy || conversationMode} aria-label="Send"><Send size={18} /></button>
+      </form>
+      {visionImage && <div className="vision-preview" role="status"><img src={visionImage.dataUrl} alt="Selected for Mike to review" /><div><strong>Mike can see this.</strong><button type="button" onClick={() => setVisionImage(null)}>Remove photo</button></div></div>}
       <p className="fine">Mike is a Doer Tough AI assistant. Current facts and changing information should be verified before important decisions.</p>
     </main>
   );
