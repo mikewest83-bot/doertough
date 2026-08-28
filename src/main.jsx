@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Mic, Send, ArrowRight, User, LogOut, X } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
+import MikeVision from './MikeVision.jsx';
 import './style.css';
 
 const TOKEN_KEY = 'mike_token';
@@ -191,6 +192,27 @@ function App() {
     }
   };
 
+  const askVision = async (dataUrl) => {
+    if (busy || conversationModeRef.current || conversationRef.current) return;
+    setBusy(true); setError('');
+    const history = messages.slice(-10);
+    setMessages((prev) => [...prev, { role: 'user', text: '📷 I showed Mike an image.' }]);
+    try {
+      const data = await fetchJson('/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ message: 'Take a look at this and help me understand what I am looking at.', image: { dataUrl, mediaType: 'image/jpeg' }, history }),
+      }, 60000);
+      setMessages((prev) => [...prev, { role: 'mike', text: data.text }]);
+    } catch (err) {
+      const msg = err.name === 'AbortError' ? 'Mike took too long to analyze that image. Try again.' : err.message || 'Mike could not analyze that image.';
+      setError(msg);
+      setMessages((prev) => [...prev, { role: 'mike', text: msg }]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const switchAuthMode = (mode) => { setAuthMode(mode); setAuthError(''); setAuthNotice(''); };
   const submitAuth = async (e) => {
     e?.preventDefault?.();
@@ -284,7 +306,7 @@ function App() {
 
       <section className="chat" aria-live="polite">{messages.map((m, i) => <div key={i} className={'bubble ' + m.role}>{m.text}</div>)}{busy && <div className="bubble mike">Give me a second. I'm thinking…</div>}</section>
       {error && <div className="error" role="alert">{error}</div>}
-      <form onSubmit={(e) => { e.preventDefault(); ask(input); }}><input id="input" value={input} onChange={(e) => setInput(e.target.value)} placeholder="What's on your mind?" autoComplete="off" disabled={conversationMode} /><button disabled={!input.trim() || busy || conversationMode} aria-label="Send"><Send size={18} /></button></form>
+      <form onSubmit={(e) => { e.preventDefault(); ask(input); }}><input id="input" value={input} onChange={(e) => setInput(e.target.value)} placeholder="What's on your mind?" autoComplete="off" disabled={conversationMode} /><MikeVision disabled={conversationMode} busy={busy} onCapture={askVision} /><button disabled={!input.trim() || busy || conversationMode} aria-label="Send"><Send size={18} /></button></form>
       <p className="fine">Mike is a Doer Tough AI assistant. Current facts and changing information should be verified before important decisions.</p>
     </main>
   );
