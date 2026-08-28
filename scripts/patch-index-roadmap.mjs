@@ -69,5 +69,13 @@ if (source.includes(oldMigrate) && !source.includes('then(() => ensureRbacSchema
   source = source.replace(oldMigrate, newMigrate);
 }
 
+// Keep the first customer-facing CTA simple: it launches the same text path as
+// any other prompt, while making the new differentiator visible on the home page.
+const oldTryChips = "['How much concrete for a 20x24 slab at 4 inches?','Quote a 3-day framing job at $65 an hour.','What am I missing?']";
+const newTryChips = "['💰 Save me money','How much concrete for a 20x24 slab at 4 inches?','Quote a 3-day framing job at $65 an hour.','What am I missing?']";
+if (source.includes(oldTryChips) && !source.includes(newTryChips)) {
+  source = source.replace(oldTryChips, newTryChips);
+}
+
 fs.writeFileSync(target, source);
-console.log('[build] Mike roadmap tool pack and RBAC wiring ready');
+console.log('[build] Mike roadmap tool pack, RBAC, and Save Me Money CTA ready');
