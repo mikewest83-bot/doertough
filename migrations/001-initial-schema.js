@@ -3,7 +3,7 @@
    Down: drop tables in reverse order.
 */
 
-exports.shorthands = undefined;
+export const shorthands = undefined;
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS users (
@@ -74,11 +74,11 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages (conversation_id, created_at);
 `;
 
-exports.up = (pgm) => {
+export const up = (pgm) => {
   pgm.sql(SCHEMA_SQL);
 };
 
-exports.down = (pgm) => {
+export const down = (pgm) => {
   // Drop tables in reverse order to avoid FK errors
   pgm.dropTable('messages', { ifExists: true, cascade: true });
   pgm.dropTable('conversations', { ifExists: true, cascade: true });
