@@ -22,11 +22,8 @@ export async function analyzePurchaseWithDealTough(input) {
   return analyzeWithDealTough(normalizeDealInput(input));
 }
 
-// Reserved for the future least-privilege Money service boundary. It is not
-// registered as a Mike tool until Money exposes a stable endpoint and Mike
-// can establish explicit per-user authorization without Plaid access.
-export async function analyzeMoneyCapability({ capability, input, authorization } = {}) {
-  return analyzeWithDoerToughMoney(capability, input || {}, authorization);
+export async function analyzeMoneyCapability({ capability, input } = {}) {
+  return analyzeWithDoerToughMoney(capability, input || {});
 }
 
 export const DOERTOUGH_INTELLIGENCE_TOOLS = [
@@ -47,11 +44,26 @@ export const DOERTOUGH_INTELLIGENCE_TOOLS = [
       required: ["category", "askingPrice"],
       additionalProperties: false
     }
+  },
+  {
+    type: "function",
+    name: "use_doertough_money_intelligence",
+    description: "Use the existing Doer Tough Money calculation engine when the user asks for a financial scenario, safe-to-spend calculation, purchase affordability, spending summary/trend, or financial snapshot. This tool uses capability-level calculations only; it does not access Plaid, bank credentials, or the Money database. Use only facts the user has supplied in the conversation or that are already present in the tool input.",
+    parameters: {
+      type: "object",
+      properties: {
+        capability: { type: "string", enum: ["safe_to_spend", "purchase_affordability", "spending_summary", "spending_trend", "financial_snapshot"], description: "Money intelligence capability to run." },
+        input: { type: "object", description: "Minimum scenario facts needed for the selected capability." }
+      },
+      required: ["capability"],
+      additionalProperties: false
+    }
   }
 ];
 
 export const DOERTOUGH_INTELLIGENCE_HANDLERS = {
   analyze_purchase_with_dealtough: analyzePurchaseWithDealTough,
+  use_doertough_money_intelligence: analyzeMoneyCapability,
 };
 
 export { intelligenceStatus };
