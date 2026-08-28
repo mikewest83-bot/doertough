@@ -30,13 +30,74 @@ function money(value) {
   return value === null ? null : `$${Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-export function saveMeMoney({ category = 'purchase', amount, frequency = 'monthly', situation, goal, urgency = 'normal' } = {}) {
+/**
+ * Even-derived affordability logic for Mike.
+ *
+ * It intentionally uses only facts supplied by the user/tool caller. It does
+ * not infer bank balances, income, or future transactions. When upcoming
+ * expenses are supplied, they are deducted before the purchase decision.
+ */
+export function purchaseAffordability({ availableCash, purchaseAmount, upcomingExpenses = 0, safetyBuffer = 0 } = {}) {
+  const available = normalizeAmount(availableCash);
+  const purchase = normalizeAmount(purchaseAmount);
+  const upcoming = normalizeAmount(upcomingExpenses) ?? 0;
+  const buffer = normalizeAmount(safetyBuffer) ?? 0;
+
+  if (available === null || purchase === null) {
+    return {
+      tool: 'purchase_affordability',
+      status: 'insufficient_information',
+      availableCash: available,
+      purchaseAmount: purchase,
+      upcomingExpenses: upcoming,
+      safetyBuffer: buffer,
+      remainingAfterPurchase: null,
+      spendableAfterUpcomingExpenses: null,
+      recommendation: 'I need the available cash and purchase amount before I can calculate whether this is affordable.',
+      dataRule: 'Use only user-supplied financial facts. Do not infer balances, income, or future expenses.',
+    };
+  }
+
+  const spendable = Number((available - upcoming).toFixed(2));
+  const remaining = Number((spendable - purchase).toFixed(2));
+  const protectedRemaining = Number((remaining - buffer).toFixed(2));
+
+  let status = 'affordable';
+  let recommendation = `The purchase leaves ${money(remaining)} after the supplied upcoming expenses.`;
+
+  if (spendable < purchase) {
+    status = 'not_affordable';
+    recommendation = `I would not make the purchase based on these numbers; you would be ${money(Math.abs(remaining))} short after the supplied upcoming expenses.`;
+  } else if (protectedRemaining < 0) {
+    status = 'affordable_but_tight';
+    recommendation = `You can make the purchase, but it would leave less than your stated ${money(buffer)} safety buffer. I would consider waiting or negotiating the price down.`;
+  }
+
+  return {
+    tool: 'purchase_affordability',
+    status,
+    availableCash: available,
+    purchaseAmount: purchase,
+    upcomingExpenses: upcoming,
+    safetyBuffer: buffer,
+    spendableAfterUpcomingExpenses: spendable,
+    remainingAfterPurchase: remaining,
+    protectedRemaining,
+    recommendation,
+    dataRule: 'Use only user-supplied financial facts. Do not infer balances, income, or future expenses.',
+  };
+}
+
+export function saveMeMoney({ category = 'purchase', amount, frequency = 'monthly', situation, goal, urgency = 'normal', availableCash, purchaseAmount, upcomingExpenses = 0, safetyBuffer = 0 } = {}) {
   const current = normalizeAmount(amount);
   const freq = Object.prototype.hasOwnProperty.call(FREQUENCY_MULTIPLIER, frequency) ? frequency : 'monthly';
   const monthly = monthlyAmount(current, freq);
   const annual = monthly === null ? null : Number((monthly * 12).toFixed(2));
   const context = clean(situation);
   const target = clean(goal);
+  const affordability = (availableCash !== undefined || purchaseAmount !== undefined)
+    ? purchaseAffordability({ availableCash, purchaseAmount: purchaseAmount ?? amount, upcomingExpenses, safetyBuffer })
+    : null;
 
   const universalQuestions = [
     'What is the current price or bill, and what exactly does it include?',
@@ -69,6 +130,7 @@ export function saveMeMoney({ category = 'purchase', amount, frequency = 'monthl
     urgency: clean(urgency, 30) || 'normal',
     situation: context || null,
     goal: target || null,
+    affordability,
     nextSteps: steps,
     recommendedApproach: current === null
       ? 'Get the current all-in price first, then compare alternatives and negotiate from a target rather than a guess.'
@@ -154,7 +216,8 @@ export function advocatePlan({ goal, facts = [], constraints = [], desiredOutcom
 }
 
 export const MONEY_TOOLS = [
-  { type: 'function', name: 'save_me_money', description: 'Help the user find a practical way to reduce a bill, purchase price, service cost, subscription, insurance cost, utility, or debt cost. Start with the user facts and build a savings target and negotiation checklist. Never invent current competitor pricing.', parameters: { type: 'object', properties: { category: { type: 'string', description: 'purchase, insurance, subscription, service, utility, debt, or another short category.' }, amount: { type: 'number', description: 'Current dollar amount, if known.' }, frequency: { type: 'string', enum: ['weekly','biweekly','monthly','quarterly','yearly','one_time'], description: 'How often the amount is paid.' }, situation: { type: 'string', description: 'What the user is paying for and the relevant facts.' }, goal: { type: 'string', description: 'What outcome the user wants.' }, urgency: { type: 'string', description: 'How urgent the decision is.' } }, required: [], additionalProperties: false } },
+  { type: 'function', name: 'save_me_money', description: 'Help the user find a practical way to reduce a bill, purchase price, service cost, subscription, insurance cost, utility, or debt cost. When available cash, purchase amount, upcoming expenses, or a safety buffer are supplied, also calculate whether the purchase is affordable. Never invent current competitor pricing.', parameters: { type: 'object', properties: { category: { type: 'string', description: 'purchase, insurance, subscription, service, utility, debt, or another short category.' }, amount: { type: 'number', description: 'Current dollar amount, if known.' }, frequency: { type: 'string', enum: ['weekly','biweekly','monthly','quarterly','yearly','one_time'], description: 'How often the amount is paid.' }, situation: { type: 'string', description: 'What the user is paying for and the relevant facts.' }, goal: { type: 'string', description: 'What outcome the user wants.' }, urgency: { type: 'string', description: 'How urgent the decision is.' }, availableCash: { type: 'number', description: 'Available cash supplied by the user, before upcoming expenses.' }, purchaseAmount: { type: 'number', description: 'One-time purchase amount to evaluate for affordability. Defaults to amount when omitted.' }, upcomingExpenses: { type: 'number', description: 'Known upcoming expenses that should be reserved before the purchase.' }, safetyBuffer: { type: 'number', description: 'Minimum cash buffer the user wants left after the purchase.' } }, required: [], additionalProperties: false } },
+  { type: 'function', name: 'purchase_affordability', description: 'Determine whether a purchase is affordable using only user-supplied available cash, purchase amount, known upcoming expenses, and optional safety buffer. Never infer bank balances, income, or future expenses.', parameters: { type: 'object', properties: { availableCash: { type: 'number' }, purchaseAmount: { type: 'number' }, upcomingExpenses: { type: 'number' }, safetyBuffer: { type: 'number' } }, required: ['availableCash', 'purchaseAmount'], additionalProperties: false } },
   { type: 'function', name: 'second_opinion', description: 'Structure a second opinion on an important decision. Surface the strongest upside, downside, missing information, risks, and what would change the recommendation.', parameters: { type: 'object', properties: { decision: { type: 'string' }, options: { type: 'array', items: { type: 'string' } }, priorities: { type: 'array', items: { type: 'string' } }, concerns: { type: 'array', items: { type: 'string' } } }, required: ['decision'], additionalProperties: false } },
   { type: 'function', name: 'what_am_i_missing', description: 'Look for important gaps, hidden costs, risks, alternatives, and unanswered questions without inventing facts.', parameters: { type: 'object', properties: { situation: { type: 'string' }, knownFacts: { type: 'array', items: { type: 'string' } }, proposedAction: { type: 'string' } }, required: ['situation'], additionalProperties: false } },
   { type: 'function', name: 'get_me_a_better_deal', description: 'Build a practical negotiation plan and message for getting a better price or terms.', parameters: { type: 'object', properties: { item: { type: 'string' }, askingPrice: { type: 'number' }, targetPrice: { type: 'number' }, alternatives: { type: 'array', items: { type: 'string' } }, leverage: { type: 'array', items: { type: 'string' } } }, required: ['item'], additionalProperties: false } },
@@ -163,6 +226,7 @@ export const MONEY_TOOLS = [
 
 export const MONEY_TOOL_HANDLERS = {
   save_me_money: saveMeMoney,
+  purchase_affordability: purchaseAffordability,
   second_opinion: secondOpinion,
   what_am_i_missing: whatAmIMissing,
   get_me_a_better_deal: getMeABetterDeal,
