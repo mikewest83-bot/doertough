@@ -1,9 +1,11 @@
-# Doer Tough
+# Doer Tough Website
 
-Doer Tough is a brand built around action, discipline, and resilience.
+Doer Tough — Built Not Born.
 
-**Built Not Born.**
+## Overview
+
+This repository contains the Doer Tough website and supporting server configuration.
 
 ## Development
 
-Install dependencies with `npm install`, then use the scripts in `package.json` to run the site locally.
+Install dependencies and run the application using the scripts in `package.json`.
