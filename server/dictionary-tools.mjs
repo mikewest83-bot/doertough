@@ -4,6 +4,7 @@
 // See: https://dictionaryapi.dev/
 
 import { DOERTOUGH_INTELLIGENCE_TOOLS, DOERTOUGH_INTELLIGENCE_HANDLERS } from './doertough-intelligence-tools.mjs';
+import { REAL_ESTATE_TOOLS, REAL_ESTATE_HANDLERS } from './rentcast-tools.mjs';
 
 const TIMEOUT_MS = 7000;
 const cache = new Map();
@@ -23,10 +24,10 @@ export async function lookUpWord({ word } = {}) {
     const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(query)}`, {
       headers: { 'User-Agent': 'MikeAI/1.0 (https://doertoughmikeai.com)' }, signal: AbortSignal.timeout(TIMEOUT_MS)
     });
-    if (!response.ok) return { error: `I couldn't find a dictionary entry for "${query}".` };
+    if (!response.ok) return { error: `I couldn't find a dictionary entry for \"${query}\".` };
     const entries = await response.json();
     const entry = Array.isArray(entries) ? entries[0] : null;
-    if (!entry) return { error: `I couldn't find a dictionary entry for "${query}".` };
+    if (!entry) return { error: `I couldn't find a dictionary entry for \"${query}\".` };
     const phonetics = (entry.phonetics || []).filter((p) => p?.text || p?.audio).slice(0, 4).map((p) => ({ text: p.text || null, audio: p.audio || null }));
     const meanings = (entry.meanings || []).slice(0, 8).map((meaning) => ({
       partOfSpeech: meaning.partOfSpeech || null,
@@ -39,7 +40,7 @@ export async function lookUpWord({ word } = {}) {
     return result;
   } catch (error) {
     console.error('[dictionary] lookup failed:', error.message || error);
-    return { error: `The dictionary lookup is unavailable right now for "${query}".` };
+    return { error: `The dictionary lookup is unavailable right now for \"${query}\".` };
   }
 }
 
@@ -50,9 +51,11 @@ export const DICTIONARY_TOOLS = [
     parameters: { type: 'object', properties: { word: { type: 'string', description: 'The English word to look up.' } }, required: ['word'], additionalProperties: false },
   },
   ...DOERTOUGH_INTELLIGENCE_TOOLS,
+  ...REAL_ESTATE_TOOLS,
 ];
 
 export const DICTIONARY_TOOL_HANDLERS = {
   look_up_word: lookUpWord,
   ...DOERTOUGH_INTELLIGENCE_HANDLERS,
+  ...REAL_ESTATE_HANDLERS,
 };
