@@ -119,24 +119,31 @@ export async function handleStripeWebhook(event) {
         return;
       }
 
+      if (!session.customer || !session.subscription) {
+        console.error(
+          `[stripe] checkout ${session.id} is missing customer or subscription - cannot establish paid entitlement`
+        );
+        return;
+      }
+
+      // Store the Stripe identifiers so later subscription webhooks can match
+      // the account even if this checkout event arrives before them. This does
+      // not grant access by itself.
       await attachStripeCustomer(user.id, session.customer, session.subscription);
 
-      // The session itself doesn't carry the subscription's status, so read
-      // it back rather than guessing.
+      // The checkout event alone is not authoritative enough to grant access:
+      // verify the actual subscription state first. A transient Stripe lookup
+      // failure must leave the existing entitlement unchanged rather than
+      // guessing `trialing` and granting paid access.
       const subscription = await fetchSubscription(session.subscription);
-      if (subscription) {
-        await applySubscription({ ...user, id: user.id }, subscription);
-      } else {
-        // Fall back to trialing so the customer isn't left locked out while
-        // the subscription events catch up.
-        await setSubscriptionState(user.id, {
-          plan: 'pro',
-          status: 'trialing',
-          subscriptionId: session.subscription,
-          currentPeriodEnd: null,
-          trialEnd: null,
-        });
+      if (!subscription) {
+        console.error(
+          `[stripe] checkout ${session.id} subscription ${session.subscription} could not be verified - entitlement unchanged`
+        );
+        return;
       }
+
+      await applySubscription({ ...user, id: user.id }, subscription);
       break;
     }
 
