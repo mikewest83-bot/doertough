@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/patch-index-realtime-tools.mjs && vite build",
+    "build": "node scripts/patch-index-roadmap.mjs && node scripts/patch-index-realtime-tools.mjs && vite build",
     "start": "node server/index.mjs",
     "migrate": "node-pg-migrate up",
     "migrate:down": "node-pg-migrate down",
@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.0",
-    "bcryptjs": "^3.0.3",
+    "bcryptjs": "^3.0.0",
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.0",
     "openai": "^5.12.2",
