@@ -15,8 +15,8 @@ describe('Doer Tough intelligence bridge', () => {
   });
 
   it('does not expose credential fields as tool parameters', () => {
-    const properties = DOERTOUGH_INTELLIGENCE_TOOLS.flatMap((tool) => Object.values(tool.parameters.properties || {}));
+    const keys = DOERTOUGH_INTELLIGENCE_TOOLS.flatMap((tool) => Object.keys(tool.parameters.properties || {}));
     const forbidden = new Set(['password', 'passwordHash', 'bankPassword', 'plaidAccessToken', 'serviceToken', 'apiKey']);
-    for (const property of properties) assert.equal(forbidden.has(property?.name), false);
+    for (const key of keys) assert.equal(forbidden.has(key), false);
   });
 });
