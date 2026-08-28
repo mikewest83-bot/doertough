@@ -16,6 +16,13 @@ if (!source.includes(importMoney)) {
   source = source.replace(anchor, `${anchor}\n${importMoney}`);
 }
 
+const importIntelligence = "import { DOERTOUGH_INTELLIGENCE_TOOLS, DOERTOUGH_INTELLIGENCE_HANDLERS } from './doertough-intelligence-tools.mjs';";
+if (!source.includes(importIntelligence)) {
+  const anchor = importMoney;
+  if (!source.includes(anchor)) throw new Error('Roadmap patch money-tools import anchor not found');
+  source = source.replace(anchor, `${anchor}\n${importIntelligence}`);
+}
+
 const importReminder = "import { REMINDER_TOOLS, setReminderTool, listRemindersTool, cancelReminderTool, ensureReminderSchema } from './reminders.mjs';";
 if (!source.includes(importReminder)) {
   const anchor = "import { installGuards } from './guard.mjs';";
@@ -37,18 +44,21 @@ if (!source.includes(importRbac)) {
 
 if (!source.includes('...MONEY_TOOLS')) {
   const oldTools = "const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS];";
-  const newTools = "const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS, ...MONEY_TOOLS, ...REMINDER_TOOLS];";
+  const newTools = "const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS, ...MONEY_TOOLS, ...REMINDER_TOOLS, ...DOERTOUGH_INTELLIGENCE_TOOLS];";
   if (!source.includes(oldTools)) throw new Error('Roadmap patch LIVE_TOOLS anchor not found');
   source = source.replace(oldTools, newTools);
-} else if (!source.includes('...REMINDER_TOOLS')) {
-  source = source.replace('...FIELD_TOOLS, ...MONEY_TOOLS];', '...FIELD_TOOLS, ...MONEY_TOOLS, ...REMINDER_TOOLS];');
+} else {
+  if (!source.includes('...REMINDER_TOOLS')) source = source.replace('...FIELD_TOOLS, ...MONEY_TOOLS];', '...FIELD_TOOLS, ...MONEY_TOOLS, ...REMINDER_TOOLS];');
+  if (!source.includes('...DOERTOUGH_INTELLIGENCE_TOOLS')) source = source.replace('...MONEY_TOOLS, ...REMINDER_TOOLS];', '...MONEY_TOOLS, ...REMINDER_TOOLS, ...DOERTOUGH_INTELLIGENCE_TOOLS];');
 }
 
 if (!source.includes('...MONEY_TOOL_HANDLERS')) {
   const oldHandlers = "  ...FIELD_TOOL_HANDLERS,\n};";
-  const newHandlers = "  ...FIELD_TOOL_HANDLERS,\n  ...MONEY_TOOL_HANDLERS,\n};";
+  const newHandlers = "  ...FIELD_TOOL_HANDLERS,\n  ...MONEY_TOOL_HANDLERS,\n  ...DOERTOUGH_INTELLIGENCE_HANDLERS,\n};";
   if (!source.includes(oldHandlers)) throw new Error('Roadmap patch handler anchor not found');
   source = source.replace(oldHandlers, newHandlers);
+} else if (!source.includes('...DOERTOUGH_INTELLIGENCE_HANDLERS')) {
+  source = source.replace('  ...MONEY_TOOL_HANDLERS,\n};', '  ...MONEY_TOOL_HANDLERS,\n  ...DOERTOUGH_INTELLIGENCE_HANDLERS,\n};');
 }
 
 if (!source.includes('/api/owner/overview')) {
@@ -152,4 +162,4 @@ if (source.includes(oldTryChips) && !source.includes(newTryChips)) {
 }
 
 fs.writeFileSync(target, source);
-console.log('[build] Mike roadmap tool pack, RBAC, reminders, and Save Me Money CTA ready');
+console.log('[build] Mike roadmap tool pack, Doer Tough intelligence, RBAC, reminders, and Save Me Money CTA ready');
