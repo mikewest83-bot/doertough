@@ -7,6 +7,11 @@ import {
   setSubscriptionState,
 } from './db.mjs';
 import { fetchSubscription } from './billing.mjs';
+import {
+  claimStripeEvent,
+  markStripeEventProcessed,
+  releaseStripeEvent,
+} from './stripe-idempotency.mjs';
 
 /**
  * Stripe webhook verification without exposing the Stripe secret to the browser.
@@ -47,14 +52,8 @@ export function stripeWebhookConfigured() {
   return Boolean(process.env.STRIPE_WEBHOOK_SECRET);
 }
 
-// A subscription is worth Pro while Stripe says it is active or in trial.
-// Anything else - past_due, canceled, unpaid, incomplete - drops to free.
 const PRO_STATUSES = new Set(['active', 'trialing']);
 
-// Stripe's 2025-03-31 "Basil" API version removed `invoice.subscription` and
-// moved it to `invoice.parent.subscription_details.subscription`. Read both,
-// so this works whichever API version the account is pinned to. Without this
-// the invoice.paid branch below silently no-ops on a current version.
 function subscriptionIdOf(invoice) {
   if (!invoice) return null;
   if (invoice.parent?.type === 'subscription_details') {
@@ -91,17 +90,8 @@ async function applySubscription(user, subscription) {
   console.log(`[stripe] ${user.email} -> plan=${plan} status=${status}`);
 }
 
-export async function handleStripeWebhook(event) {
-  console.log(`[stripe] received ${event.type} (${event.id})`);
-
-  if (!dbEnabled) {
-    console.error('[stripe] database not configured - cannot record entitlement');
-    return;
-  }
-
+async function processStripeWebhookEvent(event) {
   switch (event.type) {
-    // The moment a checkout completes we learn which account paid, via the
-    // client_reference_id we set when creating the session.
     case 'checkout.session.completed': {
       const session = event.data.object;
       const userId = session.client_reference_id;
@@ -126,15 +116,8 @@ export async function handleStripeWebhook(event) {
         return;
       }
 
-      // Store the Stripe identifiers so later subscription webhooks can match
-      // the account even if this checkout event arrives before them. This does
-      // not grant access by itself.
       await attachStripeCustomer(user.id, session.customer, session.subscription);
 
-      // The checkout event alone is not authoritative enough to grant access:
-      // verify the actual subscription state first. A transient Stripe lookup
-      // failure must leave the existing entitlement unchanged rather than
-      // guessing `trialing` and granting paid access.
       const subscription = await fetchSubscription(session.subscription);
       if (!subscription) {
         console.error(
@@ -144,15 +127,13 @@ export async function handleStripeWebhook(event) {
       }
 
       await applySubscription({ ...user, id: user.id }, subscription);
-      break;
+      return;
     }
 
     case 'customer.subscription.created':
     case 'customer.subscription.updated':
     case 'customer.subscription.deleted': {
       const subscription = event.data.object;
-
-      // Prefer the metadata we set at checkout; fall back to the customer id.
       const metaUserId = subscription.metadata?.mike_user_id;
       const user = metaUserId
         ? await getUserById(metaUserId)
@@ -178,7 +159,7 @@ export async function handleStripeWebhook(event) {
       }
 
       await applySubscription(user, subscription);
-      break;
+      return;
     }
 
     case 'invoice.payment_failed': {
@@ -186,10 +167,8 @@ export async function handleStripeWebhook(event) {
       const user = await getUserByStripeCustomer(invoice.customer);
       if (!user) return;
 
-      // Don't cut access on the first failure - Stripe retries, and the
-      // subscription events will move the status if it ultimately fails.
       console.warn(`[stripe] payment failed for ${user.email} (invoice ${invoice.id})`);
-      break;
+      return;
     }
 
     case 'invoice.paid': {
@@ -199,18 +178,44 @@ export async function handleStripeWebhook(event) {
 
       const subscriptionId = subscriptionIdOf(invoice);
       if (!subscriptionId) {
-        // A one-off invoice with no subscription attached - nothing to renew.
         console.log(`[stripe] invoice ${invoice.id} is not subscription-linked, ignoring`);
         return;
       }
 
       const subscription = await fetchSubscription(subscriptionId);
       if (subscription) await applySubscription(user, subscription);
-      break;
+      return;
     }
 
     default:
-      // Stripe can send many events. Unhandled events are intentionally ignored.
-      break;
+      return;
+  }
+}
+
+export async function handleStripeWebhook(event) {
+  console.log(`[stripe] received ${event.type} (${event.id})`);
+
+  if (!dbEnabled) {
+    console.error('[stripe] database not configured - cannot record entitlement');
+    return;
+  }
+
+  // Stripe retries deliveries. Claim the event before processing so concurrent
+  // or repeated deliveries cannot apply entitlement changes twice. A failed
+  // attempt releases the claim, allowing Stripe's retry to run normally.
+  const claimed = await claimStripeEvent(event.id);
+  if (!claimed) {
+    console.log(`[stripe] duplicate event ${event.id} ignored`);
+    return;
+  }
+
+  try {
+    await processStripeWebhookEvent(event);
+    await markStripeEventProcessed(event.id);
+  } catch (err) {
+    await releaseStripeEvent(event.id).catch((releaseErr) => {
+      console.error('[stripe] failed to release webhook claim:', releaseErr.message || releaseErr);
+    });
+    throw err;
   }
 }
