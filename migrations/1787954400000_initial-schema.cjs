@@ -50,8 +50,8 @@ CREATE INDEX IF NOT EXISTS voice_sessions_time_idx ON voice_sessions (started_at
 CREATE UNIQUE INDEX IF NOT EXISTS voice_sessions_key_idx ON voice_sessions (session_key) WHERE session_key IS NOT NULL;
 CREATE TABLE IF NOT EXISTS conversations (
   id BIGSERIAL PRIMARY KEY,
-  user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE
-  ,created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS messages (
   id BIGSERIAL PRIMARY KEY,
