@@ -36,7 +36,7 @@ if (!source.includes("app.post('/api/realtime/tool'")) {
     '    }',
     "    if (!args || typeof args !== 'object' || Array.isArray(args)) return res.status(400).json({ error: 'tool_arguments_invalid' });",
     '',
-    '    const handler = getRealtimeToolHandler(name);',
+    '    const handler = getRealtimeToolHandler(name, req.user.id);',
     "    if (!handler) return res.status(403).json({ error: 'tool_not_allowed' });",
     '',
     '    const output = await handler(args);',
