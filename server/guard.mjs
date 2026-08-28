@@ -1,7 +1,8 @@
 // server/guard.mjs
 // Abuse guards for money-sensitive and authentication routes.
 // Realtime voice has its own durable usage controls in Postgres; the token
-// endpoint is intentionally not subject to the generic request-rate limiter.
+// endpoint intentionally skips the generic in-memory limiter because voice
+// startup can legitimately involve multiple HTTP requests.
 
 const PROTECTED = [
   '/api/ask',
@@ -116,10 +117,10 @@ export function installGuards(app) {
       return res.status(403).json({ error: 'origin_required' });
     }
 
-    // Realtime token issuance is already protected by authentication,
-    // origin checks, and the durable Postgres voice allowance. Do not apply
-    // the generic HTTP request limiter here; browser/WebRTC startup may make
-    // multiple token requests while negotiating a session.
+    // Realtime token issuance is protected by authentication, origin checks,
+    // and the durable Postgres voice allowance/reservation. It intentionally
+    // skips the generic in-memory limiter because WebRTC startup can legitimately
+    // make multiple token requests while negotiating a session.
     if (isVoiceToken) return next();
 
     const ip = req.ip || req.socket?.remoteAddress || 'unknown';
@@ -148,7 +149,7 @@ export function installGuards(app) {
 
   console.log(
     `[guard] active — ${PER_MINUTE}/min, ${PER_HOUR}/hr general; ` +
-      `voice token limiter bypassed; ` +
+      `voice token protected by auth/origin/Postgres allowance; ` +
       `auth ${AUTH_PER_MINUTE}/min, ${AUTH_PER_HOUR}/hr per IP; ` +
       `${ALLOWED_ORIGINS.size} allowed origins; access code ${ACCESS_CODE ? 'ON' : 'off'}`
   );
