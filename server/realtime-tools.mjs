@@ -5,7 +5,7 @@ import { BUSINESS_TOOLS, BUSINESS_TOOL_HANDLERS } from './business.mjs';
 import { FREE_TOOLS, FREE_TOOL_HANDLERS } from './free-tools.mjs';
 import { FIELD_TOOLS, FIELD_TOOL_HANDLERS } from './field-tools.mjs';
 import { MONEY_TOOLS, MONEY_TOOL_HANDLERS } from './money-tools.mjs';
-import { REMINDER_TOOLS } from './reminders.mjs';
+import { REMINDER_TOOLS, reminderHandlerFor } from './reminders.mjs';
 
 const OWNER_ONLY_TOOLS = new Set(['get_store_sales', 'get_bot_status', 'get_btc_rsi']);
 
@@ -26,9 +26,9 @@ const HANDLERS = {
   ...MONEY_TOOL_HANDLERS,
 };
 
-export function getRealtimeToolHandler(name) {
+export function getRealtimeToolHandler(name, userId) {
   if (OWNER_ONLY_TOOLS.has(name)) return null;
-  return HANDLERS[name] || null;
+  return reminderHandlerFor(name, userId) || HANDLERS[name] || null;
 }
 
 export function isRealtimeToolAllowed(name) {
