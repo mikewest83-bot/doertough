@@ -5,6 +5,7 @@ import { BUSINESS_TOOLS, BUSINESS_TOOL_HANDLERS } from './business.mjs';
 import { FREE_TOOLS, FREE_TOOL_HANDLERS } from './free-tools.mjs';
 import { FIELD_TOOLS, FIELD_TOOL_HANDLERS } from './field-tools.mjs';
 import { MONEY_TOOLS, MONEY_TOOL_HANDLERS } from './money-tools.mjs';
+import { REMINDER_TOOLS } from './reminders.mjs';
 
 const OWNER_ONLY_TOOLS = new Set(['get_store_sales', 'get_bot_status', 'get_btc_rsi']);
 
@@ -14,6 +15,7 @@ export const REALTIME_TOOLS = [
   ...FREE_TOOLS,
   ...FIELD_TOOLS,
   ...MONEY_TOOLS,
+  ...REMINDER_TOOLS,
 ].filter((tool) => !OWNER_ONLY_TOOLS.has(tool.name));
 
 const HANDLERS = {
