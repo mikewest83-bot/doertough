@@ -55,15 +55,19 @@ if (!source.includes("app.post('/api/realtime/tool'")) {
   source = source.slice(0, index) + route + source.slice(index);
 }
 
-// Database migrations run only in the Railway pre-deploy gate. Keeping a
-// second startup migration path creates race/retry ambiguity and can allow
-// the application to become ready while schema work is still in progress.
+// Database migrations run only in the Railway pre-deploy gate. Remove both
+// known startup forms so this patch is safe against the legacy and current
+// server bootstrap variants.
 source = source.replace(
   "  migrate,\n",
   ''
 );
 source = source.replace(
-  "\nmigrate().catch((error) => console.error('[db] migrate threw:', error.message || error));\n",
+  /\nmigrate\(\)\.then\(async \(\) => \{ await ensureRbacSchema\(\); await ensureReminderSchema\(\); \}\)\.catch\(\(error\) => console\.error\('\[db\] migrate threw:', error\.message \|\| error\)\);\n?/g,
+  '\n'
+);
+source = source.replace(
+  /\nmigrate\(\)\.catch\(\(error\) => console\.error\('\[db\] migrate threw:', error\.message \|\| error\)\);\n?/g,
   '\n'
 );
 
