@@ -24,6 +24,7 @@ const DEFAULT_ORIGINS = [
   'https://doertoughmikeai.com',
   'https://www.doertoughmikeai.com',
   'https://mike-ai-production.up.railway.app',
+  'https://mike-ai-vision-staging.up.railway.app',
   'http://localhost:3000',
   'http://localhost:5173',
 ];
