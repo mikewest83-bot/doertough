@@ -1,6 +1,5 @@
 // Build-time, idempotent bridge for atomic voice reservation lifecycle.
-// Keeps the existing token route behavior while replacing the race-prone
-// preflight counters with a single transactional reservation decision.
+// Replaces the race-prone preflight with: reserve -> mint token -> release on failure.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,11 +22,15 @@ if (!source.includes('const reserveResult = await reserveVoiceSession({')) {
   const startIndex = source.indexOf(start);
   const endIndex = source.indexOf(end, startIndex);
   if (startIndex < 0 || endIndex < 0) throw new Error('Voice token reservation route anchors not found');
-  const replacement = `    const ownerVoiceQa = isOwner(req.user);\n    const secondsAllowance = minuteLimit * 60;\n\n    // The reservation itself is the authoritative admission decision. It is\n    // serialized in Postgres so concurrent token requests cannot both pass.\n    // Owner QA remains unlimited without weakening limits for customers.\n    const reservationLimits = ownerVoiceQa\n      ? {\n          accountSessionLimit: Number.MAX_SAFE_INTEGER,\n          accountSecondLimit: Number.MAX_SAFE_INTEGER,\n          globalSessionLimit: Number.MAX_SAFE_INTEGER,\n          globalSecondLimit: Number.MAX_SAFE_INTEGER,\n        }\n      : {\n          accountSessionLimit: sessionLimit,\n          accountSecondLimit: secondsAllowance,\n          globalSessionLimit: GLOBAL_SESSION_LIMIT,\n          globalSecondLimit: GLOBAL_MINUTE_LIMIT * 60,\n        };\n\n    const result = await getSpeechEngineToken();\n    const sessionKey = crypto.randomUUID();\n    const reserveResult = await reserveVoiceSession({\n      userId: req.user.id,\n      agentId: result.agentId,\n      sessionKey,\n      reservedSeconds: MAX_SESSION_SECONDS,\n      ...reservationLimits,\n    });\n\n    if (!reserveResult.ok) {\n      if (reserveResult.reason === 'account_session_limit' || reserveResult.reason === 'account_second_limit') {\n        return outOfBudget();\n      }\n      if (reserveResult.reason === 'global_session_limit' || reserveResult.reason === 'global_second_limit') {\n        console.error('[speech-engine] global ceiling hit during atomic reservation');\n        return res.status(503).json({\n          error: 'voice_capacity_reached',\n          message: 'Mike is at capacity right now. Try again a bit later.',\n        });\n      }\n      return res.status(503).json({ error: 'voice_reservation_failed' });\n    }\n\n`;
+
+  const replacement = `    const ownerVoiceQa = isOwner(req.user);\n    const secondsAllowance = minuteLimit * 60;\n\n    // The reservation is the authoritative admission decision. PostgreSQL\n    // serializes it so concurrent token requests cannot both pass the budget.\n    const reservationLimits = ownerVoiceQa\n      ? { accountSessionLimit: Number.MAX_SAFE_INTEGER, accountSecondLimit: Number.MAX_SAFE_INTEGER, globalSessionLimit: Number.MAX_SAFE_INTEGER, globalSecondLimit: Number.MAX_SAFE_INTEGER }\n      : { accountSessionLimit: sessionLimit, accountSecondLimit: secondsAllowance, globalSessionLimit: GLOBAL_SESSION_LIMIT, globalSecondLimit: GLOBAL_MINUTE_LIMIT * 60 };\n\n    const sessionKey = crypto.randomUUID();\n    const agentId = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1';\n    const reserveResult = await reserveVoiceSession({\n      userId: req.user.id,\n      agentId,\n      sessionKey,\n      reservedSeconds: MAX_SESSION_SECONDS,\n      ...reservationLimits,\n    });\n\n    if (!reserveResult.ok) {\n      if (reserveResult.reason === 'account_session_limit' || reserveResult.reason === 'account_second_limit') return outOfBudget();\n      if (reserveResult.reason === 'global_session_limit' || reserveResult.reason === 'global_second_limit') {\n        console.error('[speech-engine] global ceiling hit during atomic reservation');\n        return res.status(503).json({ error: 'voice_capacity_reached', message: 'Mike is at capacity right now. Try again a bit later.' });\n      }\n      return res.status(503).json({ error: 'voice_reservation_failed' });\n    }\n\n    let result;\n    try {\n      result = await getSpeechEngineToken();\n    } catch (error) {\n      try { await releaseVoiceReservation(sessionKey, req.user.id); }\n      catch (releaseError) { console.error('[speech-engine] failed to release reservation after token failure:', releaseError.message || releaseError); }\n      throw error;\n    }\n\n`;
   source = source.slice(0, startIndex) + replacement + source.slice(endIndex);
 }
 
-// The build-time bridge above has already removed the legacy startup migration
-// call. Do not touch migration behavior here.
+// Guard against the legacy non-atomic preflight surviving a future patch.
+if (source.includes('const usedSessions = await countVoiceSessions(req.user.id, MAX_SESSION_SECONDS);')) {
+  throw new Error('Legacy voice reservation preflight remains after finalization');
+}
+
 fs.writeFileSync(target, source);
 console.log('[build] atomic voice reservation lifecycle integrated');
