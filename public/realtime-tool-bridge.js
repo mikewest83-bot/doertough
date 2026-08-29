@@ -2,11 +2,27 @@
 // The browser only forwards authenticated tool requests to Mike's server;
 // tool implementations and provider credentials remain server-side.
 (() => {
+  const originalFetch = window.fetch.bind(window);
   const originalCreateDataChannel = RTCPeerConnection.prototype.createDataChannel;
   const TOKEN_KEY = 'mike_token';
 
   const getToken = () => {
     try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; }
+  };
+
+  // Backward-compatibility shim for the voice client. The production server's
+  // canonical token endpoint is GET /api/speech/token; older bundles call
+  // POST /api/speech/session. Translate only that exact request.
+  window.fetch = (input, init = {}) => {
+    const url = typeof input === 'string' ? input : input?.url || '';
+    const method = String(init?.method || (typeof input !== 'string' ? input?.method : 'GET')).toUpperCase();
+    if (url.endsWith('/api/speech/session') && method === 'POST') {
+      const headers = new Headers(init?.headers || (typeof input !== 'string' ? input?.headers : undefined));
+      const token = getToken();
+      if (token) headers.set('Authorization', `Bearer ${token}`);
+      return originalFetch('/api/speech/token', { method: 'GET', headers, signal: init?.signal });
+    }
+    return originalFetch(input, init);
   };
 
   RTCPeerConnection.prototype.createDataChannel = function (...args) {
@@ -24,11 +40,12 @@
 
       let output;
       try {
-        const response = await fetch('/api/realtime/tool', {
+        const token = getToken();
+        const response = await originalFetch('/api/realtime/tool', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
           body: JSON.stringify({ name, arguments: message.arguments || '{}' }),
         });
