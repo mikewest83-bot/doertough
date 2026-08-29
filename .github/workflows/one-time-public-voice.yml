@@ -1,5 +1,5 @@
 name: One-time public voice access patch
-# Triggered patch runner; removes itself after a successful patch.
+# Triggered patch runner; removes itself after a successful patch. Automatic main push trigger enabled.
 
 on:
   workflow_dispatch:
