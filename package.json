@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/patch-index-roadmap.mjs && node scripts/patch-index-realtime-tools.mjs && node scripts/patch-voice-reservations.mjs && node scripts/patch-realtime-client-tools.mjs && vite build",
+    "build": "node scripts/patch-index-roadmap.mjs && node scripts/patch-index-realtime-tools.mjs && node scripts/patch-voice-reservations.mjs && node scripts/patch-voice-reservation-finalize.mjs && node scripts/patch-realtime-client-tools.mjs && vite build",
     "start": "node server/index.mjs",
     "migrate": "node-pg-migrate up --no-check-order",
     "migrate:down": "node-pg-migrate down",
@@ -16,8 +16,8 @@
     "bcryptjs": "^3.0.3",
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.0",
-    "openai": "^5.12.2",
     "lucide-react": "^0.469.0",
+    "openai": "^5.12.2",
     "pg": "^8.13.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
