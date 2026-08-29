@@ -1,0 +1,52 @@
+name: Mike AI Docker Smoke
+
+on:
+  push:
+    branches:
+      - fix/vision-clean-rebuild
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  docker-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build production image
+        run: docker build --pull --tag mike-ai-smoke:${{ github.sha }} .
+
+      - name: Inspect image
+        run: docker image inspect mike-ai-smoke:${{ github.sha }} >/dev/null
+
+      - name: Start container
+        run: |
+          docker run --detach --name mike-ai-smoke \
+            --publish 18080:3000 \
+            -e NODE_ENV=production \
+            mike-ai-smoke:${{ github.sha }}
+
+      - name: Wait for health endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:18080/api/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo 'Health endpoint did not become ready.'
+          docker logs mike-ai-smoke || true
+          exit 1
+
+      - name: Capture container logs on failure
+        if: failure()
+        run: docker logs mike-ai-smoke || true
+
+      - name: Stop container
+        if: always()
+        run: docker rm --force mike-ai-smoke || true
