@@ -32,5 +32,13 @@ if (source.includes('const usedSessions = await countVoiceSessions(req.user.id, 
   throw new Error('Legacy voice reservation preflight remains after finalization');
 }
 
+// The reservation is charged at the worst-case session length, so the response
+// must report the allowance remaining after that reservation—not a removed
+// preflight variable from the legacy implementation.
+source = source.replace(
+  'minutesRemaining: Math.max(0, Math.floor((secondsAllowance - secondsUsed) / 60)),',
+  'minutesRemaining: Math.max(0, Math.floor((secondsAllowance - MAX_SESSION_SECONDS) / 60)),',
+);
+
 fs.writeFileSync(target, source);
 console.log('[build] atomic voice reservation lifecycle integrated');
