@@ -16,7 +16,7 @@
 
   function install() {
     if (document.getElementById('mike-vision-launcher')) return true;
-    const form = document.querySelector('main > form');
+    const form = document.querySelector('main form');
     if (!form) return false;
 
     const wrap = document.createElement('div');
