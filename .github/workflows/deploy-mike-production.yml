@@ -1,0 +1,82 @@
+name: Deploy Mike AI to Railway Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DEPLOY to authorize a production deployment'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mike-ai-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate production commit
+    if: ${{ github.event.inputs.confirm == 'DEPLOY' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact production commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Apply production SDP patch
+        run: node scripts/patch-realtime-sdp.mjs
+      - name: Build
+        run: npm run build
+      - name: Verify build is idempotent
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --binary > /tmp/mike-ai-build-1.diff
+          npm run build
+          git diff --binary > /tmp/mike-ai-build-2.diff
+          cmp -s /tmp/mike-ai-build-1.diff /tmp/mike-ai-build-2.diff || {
+            echo 'Build is not idempotent.'
+            diff -u /tmp/mike-ai-build-1.diff /tmp/mike-ai-build-2.diff || true
+            exit 1
+          }
+      - name: Test
+        run: npm test
+
+  deploy:
+    name: Deploy exact commit to Railway production
+    needs: validate
+    if: ${{ needs.validate.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    steps:
+      - name: Checkout exact validated commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+      - name: Deploy to Mike AI production service
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_PROJECT_ID: eaa8cea5-274f-4bf3-ac4e-000946e91160
+          RAILWAY_SERVICE_ID: d5ad56bd-401e-46f2-b188-ade041d8861f
+        run: |
+          set -euo pipefail
+          test -n "${RAILWAY_TOKEN:-}" || { echo 'Missing RAILWAY_TOKEN repository/environment secret.'; exit 1; }
+          railway up --service "$RAILWAY_SERVICE_ID" --environment production --ci
+      - name: Deployment summary
+        run: |
+          echo "Deployed commit: $GITHUB_SHA"
+          echo "Railway service: mike-ai"
+          echo "Railway environment: production"
