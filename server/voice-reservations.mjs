@@ -1,6 +1,23 @@
-import { query, withTransaction } from './db.mjs';
+import { query, pool } from './db.mjs';
+
+async function withTransaction(fn) {
+  if (!pool) throw new Error('database_not_configured');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    throw error;
+  } finally {
+    client.release();
+  }
+}
 
 export async function reserveVoiceSession({ userId, agentId, sessionKey, reservedSeconds, accountSessionLimit, accountSecondLimit, globalSessionLimit, globalSecondLimit }) {
+  if (!Number.isFinite(reservedSeconds) || reservedSeconds <= 0) throw new Error('voice_reservation_duration_invalid');
   return withTransaction(async (client) => {
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['mike-ai:voice-reservation-budget']);
 
