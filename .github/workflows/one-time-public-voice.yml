@@ -1,6 +1,7 @@
 name: One-time public voice access patch
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
 
@@ -17,10 +18,7 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-
-          # Client: voice starts without an account. Accounts remain optional for memory/sign-in.
-          p = Path('src/main.jsx')
-          s = p.read_text()
+          p = Path('src/main.jsx'); s = p.read_text()
           old = """      if (!readToken()) {
         setAuthMode('login');
         setAuthError('Sign in to talk with Mike. Your account includes voice access.');
@@ -29,115 +27,36 @@ jobs:
         return;
       }
 """
-          if old in s:
-              s = s.replace(old, '', 1)
-          s = s.replace("/api/speech/session-end", "/api/public-voice/session-end")
-          s = s.replace("/api/speech/session", "/api/public-voice/session")
-          s = s.replace("sign_in_required", "sign_in_required")
+          if old in s: s = s.replace(old, '', 1)
+          s = s.replace('/api/speech/session-end', '/api/public-voice/session-end').replace('/api/speech/session', '/api/public-voice/session')
           p.write_text(s)
-
-          # Server: additive public voice route with a short anonymous session cap.
-          p = Path('server/index.mjs')
-          s = p.read_text()
-          marker = "// ===== Billing ====="
+          p = Path('server/index.mjs'); s = p.read_text(); marker = '// ===== Billing ====='
           if "app.post('/api/public-voice/session'" not in s:
               idx = s.index(marker)
-              route = r'''// ===== Public voice access =====
-// Mike voice is available immediately without requiring an account. Account
-// sign-in remains optional and is still used for memory/personalization.
+              route = """// ===== Public voice access =====
 const PUBLIC_VOICE_MAX_SECONDS = Number(process.env.VOICE_PUBLIC_MAX_SESSION_SECONDS || 120);
 const PUBLIC_VOICE_WINDOW_MS = 60 * 60 * 1000;
 const PUBLIC_VOICE_MAX_SESSIONS_PER_IP = Number(process.env.VOICE_PUBLIC_SESSIONS_PER_IP || 3);
 const publicVoiceBuckets = new Map();
+function publicVoiceAllowed(req) { const ip = String(req.ip || req.socket?.remoteAddress || 'unknown'); const now = Date.now(); const current = publicVoiceBuckets.get(ip); if (!current || now-current.startedAt >= PUBLIC_VOICE_WINDOW_MS) { publicVoiceBuckets.set(ip,{startedAt:now,count:1}); return true; } if (current.count >= PUBLIC_VOICE_MAX_SESSIONS_PER_IP) return false; current.count += 1; return true; }
+app.post('/api/public-voice/session', async (req,res)=>{ try { if (!publicVoiceAllowed(req)) return res.status(429).json({error:'voice_rate_limited'}); const result=await getSpeechEngineToken(); const sessionKey=crypto.randomUUID(); await recordVoiceSession(null,result.agentId,{sessionKey,reservedSeconds:PUBLIC_VOICE_MAX_SECONDS}); res.json({...result,sessionKey,maxSessionSeconds:PUBLIC_VOICE_MAX_SECONDS}); } catch(error) { res.status(error.status||502).json({error:error.message||'speech_engine_unavailable'}); } });
+app.post('/api/public-voice/session-end', async (req,res)=>{ try { const sessionKey=String(req.body?.sessionKey||'').trim(); const reported=Number(req.body?.seconds); if(!sessionKey||!Number.isFinite(reported)||reported<0) return res.status(400).json({error:'public_voice_session_invalid'}); const seconds=Math.min(Math.round(reported),PUBLIC_VOICE_MAX_SECONDS); const row=await closeVoiceSession(sessionKey,null,seconds); res.json({settled:!!row,seconds}); } catch(error) { res.status(500).json({error:'settle_failed'}); } });
 
-function publicVoiceAllowed(req) {
-  const ip = String(req.ip || req.socket?.remoteAddress || 'unknown');
-  const now = Date.now();
-  const current = publicVoiceBuckets.get(ip);
-  if (!current || now - current.startedAt >= PUBLIC_VOICE_WINDOW_MS) {
-    publicVoiceBuckets.set(ip, { startedAt: now, count: 1 });
-    return true;
-  }
-  if (current.count >= PUBLIC_VOICE_MAX_SESSIONS_PER_IP) return false;
-  current.count += 1;
-  return true;
-}
-
-app.post('/api/public-voice/session', async (req, res) => {
-  try {
-    if (!publicVoiceAllowed(req)) {
-      return res.status(429).json({ error: 'voice_rate_limited', message: 'You have reached the free voice limit for now. Try again later.' });
-    }
-
-    const globalUsedSessions = await countVoiceSessionsGlobal(PUBLIC_VOICE_MAX_SECONDS);
-    const globalUsedSeconds = await countVoiceSecondsGlobal(PUBLIC_VOICE_MAX_SECONDS);
-    if (globalUsedSessions >= GLOBAL_SESSION_LIMIT || globalUsedSeconds >= GLOBAL_MINUTE_LIMIT * 60) {
-      return res.status(503).json({ error: 'voice_capacity_reached', message: 'Mike is at capacity right now. Try again a bit later.' });
-    }
-
-    const result = await getSpeechEngineToken();
-    const sessionKey = crypto.randomUUID();
-    await recordVoiceSession(null, result.agentId, {
-      sessionKey,
-      reservedSeconds: PUBLIC_VOICE_MAX_SECONDS,
-    });
-
-    res.json({
-      ...result,
-      sessionKey,
-      maxSessionSeconds: PUBLIC_VOICE_MAX_SECONDS,
-      minutesRemaining: Math.floor(PUBLIC_VOICE_MAX_SECONDS / 60),
-    });
-  } catch (error) {
-    console.error('[public-voice] session failed:', error.message || error);
-    res.status(error.status || 502).json({ error: error.message || 'speech_engine_unavailable' });
-  }
-});
-
-app.post('/api/public-voice/session-end', async (req, res) => {
-  try {
-    const sessionKey = String(req.body?.sessionKey || '').trim();
-    const reported = Number(req.body?.seconds);
-    if (!sessionKey || !Number.isFinite(reported) || reported < 0) {
-      return res.status(400).json({ error: 'public_voice_session_invalid' });
-    }
-    const seconds = Math.min(Math.round(reported), PUBLIC_VOICE_MAX_SECONDS);
-    const row = await closeVoiceSession(sessionKey, null, seconds);
-    res.json({ settled: !!row, seconds });
-  } catch (error) {
-    console.error('[public-voice] settle failed:', error.message || error);
-    res.status(500).json({ error: 'settle_failed' });
-  }
-});
-
-'''
-              s = s[:idx] + route + s[idx:]
+"""
+              s=s[:idx]+route+s[idx:]
           p.write_text(s)
-
-          # Make the existing metering close function work for anonymous sessions too.
-          p = Path('server/db.mjs')
-          s = p.read_text()
-          old = """      WHERE session_key = $1
+          p=Path('server/db.mjs'); s=p.read_text(); old="""      WHERE session_key = $1
         AND user_id = $2
         AND actual_seconds IS NULL
-"""
-          new = """      WHERE session_key = $1
+"""; new="""      WHERE session_key = $1
         AND ((user_id = $2) OR ($2 IS NULL AND user_id IS NULL))
         AND actual_seconds IS NULL
 """
-          if old in s:
-              s = s.replace(old, new, 1)
-          else:
-              raise SystemExit('Expected voice session close predicate not found; stopping without a partial patch.')
-          p.write_text(s)
-
-          # Remove this one-time workflow after the patch so it cannot run again.
-          wf = Path('.github/workflows/one-time-public-voice.yml')
-          wf.unlink()
-
+          if old not in s: raise SystemExit('Expected voice session close predicate not found; stopping without partial patch.')
+          p.write_text(s.replace(old,new,1))
+          Path('.github/workflows/one-time-public-voice.yml').unlink()
           import subprocess
-          subprocess.run(['git','config','user.name','github-actions[bot]'], check=True)
-          subprocess.run(['git','config','user.email','41898282+github-actions[bot]@users.noreply.github.com'], check=True)
-          subprocess.run(['git','add','src/main.jsx','server/index.mjs','server/db.mjs','.github/workflows/one-time-public-voice.yml'], check=True)
-          subprocess.run(['git','commit','-m','feat: public voice access'], check=True)
-          subprocess.run(['git','push','origin','HEAD:main'], check=True)
+          for args in [['git','config','user.name','github-actions[bot]'],['git','config','user.email','41898282+github-actions[bot]@users.noreply.github.com']]: subprocess.run(args,check=True)
+          subprocess.run(['git','add','src/main.jsx','server/index.mjs','server/db.mjs','.github/workflows/one-time-public-voice.yml'],check=True)
+          subprocess.run(['git','commit','-m','feat: public voice access'],check=True)
+          subprocess.run(['git','push','origin','HEAD:main'],check=True)
