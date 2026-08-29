@@ -36,9 +36,7 @@ const visionHandler = `  const openPhotoPicker = () => { if (conversationModeRef
       }, 60000);
       const text = String(data.text || '').trim();
       if (!text) throw new Error('Mike could not get an answer from the photo.');
-      setMessages((prev) => [...prev, { role: 'user', text: 'I uploaded a photo for Mike to look at.' }]);
       window.dispatchEvent(new CustomEvent('mike-vision-result', { detail: { text } }));
-      if (!conversationRef.current?.dataChannel || conversationRef.current.dataChannel.readyState !== 'open') setMessages((prev) => [...prev, { role: 'mike', text }]);
     } catch (err) {
       if (err?.status === 401) { setAuthMode('login'); setAuthError('Sign in to use Mike Vision.'); setAuthOpen(true); }
       else setError(err?.message || 'Mike could not analyze that photo.');
