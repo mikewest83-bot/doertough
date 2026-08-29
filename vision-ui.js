@@ -48,8 +48,6 @@
 
     wrap.append(button, input, status);
 
-    // Place Vision directly beneath Mike's voice control when it exists.
-    // Fall back to the message form only if the voice control is not present yet.
     if (voiceButton) {
       voiceButton.insertAdjacentElement('afterend', wrap);
     } else {
@@ -144,7 +142,7 @@
     await pc.setLocalDescription(offer);
     while (pc.iceGatheringState !== 'complete') await sleep(50);
     const form = new FormData();
-    form.append('sdp', new Blob([pc.localDescription.sdp], { type: 'application/sdp' }));
+    form.append('sdp', pc.localDescription.sdp);
     const answerResponse = await fetch('https://api.openai.com/v1/realtime/calls', { method: 'POST', headers: { Authorization: `Bearer ${session.token}` }, body: form });
     const answer = await answerResponse.text();
     if (!answerResponse.ok) throw new Error(`Realtime connection failed (${answerResponse.status}): ${answer.slice(0, 700)}`);
