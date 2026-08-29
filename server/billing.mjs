@@ -8,7 +8,7 @@ const PRICE_ID = process.env.STRIPE_PRICE_ID || '';
 // separate from PUBLIC_APP_URL so a paid customer returns to the same origin
 // where the authenticated session lives.
 const RETURN_URL = String(process.env.BILLING_RETURN_URL || 'https://doertoughmikeai.com').replace(/\/+$/, '');
-const TRIAL_DAYS = Number(process.env.TRIAL_DAYS || process.env.PRO_TRIAL_DAYS || 3);
+const TRIAL_DAYS = Number(process.env.TRIAL_DAYS || 3);
 
 export const billingConfigured = () => !!SECRET && !!PRICE_ID;
 
