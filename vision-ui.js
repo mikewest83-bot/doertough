@@ -25,7 +25,7 @@
 
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = 'image/jpeg,image/png,image/webp';
+    input.accept = 'image/jpeg,image/png';
     input.id = 'mike-vision-input';
     input.style.display = 'none';
 
@@ -57,8 +57,8 @@
       const file = input.files?.[0];
       input.value = '';
       if (!file) return;
-      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-        addMessage('I can look at JPG, PNG, or WebP images.', 'mike');
+      if (!['image/jpeg', 'image/png'].includes(file.type)) {
+        addMessage('I can look at JPG or PNG images. If your phone offers HEIC, choose the JPEG version.', 'mike');
         return;
       }
       if (file.size > 5 * 1024 * 1024) {
@@ -85,7 +85,6 @@
       reader.readAsDataURL(file);
     });
 
-    // Use Mike's authenticated, quota-aware production Realtime endpoint.
     const sessionResponse = await fetch('/api/speech/token', {
       method: 'GET',
       headers: authHeaders(),
@@ -96,7 +95,9 @@
     const pc = new RTCPeerConnection();
     const audio = new Audio();
     audio.autoplay = true;
-    pc.addTransceiver('audio', { direction: 'recvonly' });
+    // Keep the WebRTC offer shape aligned with the working Mike voice path.
+    // Realtime image input is added after the session is established.
+    pc.addTransceiver('audio', { direction: 'sendrecv' });
     const dc = pc.createDataChannel('oai-events');
     let finished = false;
     const startedAt = Date.now();
@@ -121,8 +122,8 @@
     dc.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data);
-        if (message.type === 'response.audio_transcript.delta') transcript += String(message.delta || '');
-        if (message.type === 'response.audio_transcript.done') transcript = String(message.transcript || transcript).trim();
+        if (message.type === 'response.audio_transcript.delta' || message.type === 'response.output_audio_transcript.delta') transcript += String(message.delta || '');
+        if (message.type === 'response.audio_transcript.done' || message.type === 'response.output_audio_transcript.done') transcript = String(message.transcript || transcript).trim();
         if (message.type === 'response.done') finish(transcript.trim());
         if (message.type === 'error') finish(message.error?.message || 'Mike Vision returned an error.');
       } catch {}
@@ -135,7 +136,7 @@
     form.append('sdp', new Blob([pc.localDescription.sdp], { type: 'application/sdp' }));
     const answerResponse = await fetch('https://api.openai.com/v1/realtime/calls', { method: 'POST', headers: { Authorization: `Bearer ${session.token}` }, body: form });
     const answer = await answerResponse.text();
-    if (!answerResponse.ok) throw new Error(`Realtime connection failed (${answerResponse.status}).`);
+    if (!answerResponse.ok) throw new Error(`Realtime connection failed (${answerResponse.status}): ${answer.slice(0, 700)}`);
     await pc.setRemoteDescription({ type: 'answer', sdp: answer });
 
     const waitForOpen = async () => {
@@ -149,12 +150,13 @@
     await waitForOpen();
     dc.send(JSON.stringify({
       type: 'conversation.item.create',
+      previous_item_id: null,
       item: {
         type: 'message',
         role: 'user',
         content: [
           { type: 'input_text', text: prompt },
-          { type: 'input_image', image_url: data, detail: 'auto' },
+          { type: 'input_image', image_url: data },
         ],
       },
     }));
