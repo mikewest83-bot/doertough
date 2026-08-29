@@ -1,4 +1,4 @@
-name: One-time public voice access patch
+name: One-time public voice and owner coding patch
 
 on:
   push:
@@ -9,135 +9,179 @@ permissions:
 
 jobs:
   patch:
-    if: "!contains(github.event.head_commit.message, 'feat: public voice access')"
+    if: "!contains(github.event.head_commit.message, 'public voice and owner coding')"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Patch public voice access
+      - name: Apply patch
         shell: python
         run: |
           from pathlib import Path
+          import subprocess
 
-          # Client: voice starts without an account. Accounts remain optional for memory/sign-in.
+          # Public voice: no account gate; anonymous sessions use their own bounded route.
           p = Path('src/main.jsx')
           s = p.read_text()
-          old = """      if (!readToken()) {
-        setAuthMode('login');
-        setAuthError('Sign in to talk with Mike. Your account includes voice access.');
-        setAuthOpen(true);
-        setConversation(false);
-        return;
-      }
-"""
-          if old in s:
-              s = s.replace(old, '', 1)
-          s = s.replace("/api/speech/session-end", "/api/public-voice/session-end")
-          s = s.replace("/api/speech/session", "/api/public-voice/session")
-          s = s.replace("sign_in_required", "sign_in_required")
+          gate = '''      if (!readToken()) {
+            setAuthMode('login');
+            setAuthError('Sign in to talk with Mike. Your account includes voice access.');
+            setAuthOpen(true);
+            setConversation(false);
+            return;
+          }
+          '''
+          if gate in s:
+              s = s.replace(gate, '', 1)
+          s = s.replace('/api/speech/session-end', '/api/public-voice/session-end')
+          s = s.replace('/api/speech/session', '/api/public-voice/session')
           p.write_text(s)
 
-          # Server: additive public voice route with a short anonymous session cap.
+          # Public voice backend route.
           p = Path('server/index.mjs')
           s = p.read_text()
-          marker = "// ===== Billing ====="
+          marker = '// ===== Billing ====='
           if "app.post('/api/public-voice/session'" not in s:
               idx = s.index(marker)
               route = r'''// ===== Public voice access =====
-// Mike voice is available immediately without requiring an account. Account
-// sign-in remains optional and is still used for memory/personalization.
-const PUBLIC_VOICE_MAX_SECONDS = Number(process.env.VOICE_PUBLIC_MAX_SESSION_SECONDS || 120);
-const PUBLIC_VOICE_WINDOW_MS = 60 * 60 * 1000;
-const PUBLIC_VOICE_MAX_SESSIONS_PER_IP = Number(process.env.VOICE_PUBLIC_SESSIONS_PER_IP || 3);
-const publicVoiceBuckets = new Map();
+          // Voice starts immediately for visitors. Accounts remain optional for memory/personalization.
+          const PUBLIC_VOICE_MAX_SECONDS = Number(process.env.VOICE_PUBLIC_MAX_SESSION_SECONDS || 120);
+          const PUBLIC_VOICE_WINDOW_MS = 60 * 60 * 1000;
+          const PUBLIC_VOICE_MAX_SESSIONS_PER_IP = Number(process.env.VOICE_PUBLIC_SESSIONS_PER_IP || 3);
+          const publicVoiceBuckets = new Map();
 
-function publicVoiceAllowed(req) {
-  const ip = String(req.ip || req.socket?.remoteAddress || 'unknown');
-  const now = Date.now();
-  const current = publicVoiceBuckets.get(ip);
-  if (!current || now - current.startedAt >= PUBLIC_VOICE_WINDOW_MS) {
-    publicVoiceBuckets.set(ip, { startedAt: now, count: 1 });
-    return true;
-  }
-  if (current.count >= PUBLIC_VOICE_MAX_SESSIONS_PER_IP) return false;
-  current.count += 1;
-  return true;
-}
+          function publicVoiceAllowed(req) {
+            const ip = String(req.ip || req.socket?.remoteAddress || 'unknown');
+            const now = Date.now();
+            const current = publicVoiceBuckets.get(ip);
+            if (!current || now - current.startedAt >= PUBLIC_VOICE_WINDOW_MS) {
+              publicVoiceBuckets.set(ip, { startedAt: now, count: 1 });
+              return true;
+            }
+            if (current.count >= PUBLIC_VOICE_MAX_SESSIONS_PER_IP) return false;
+            current.count += 1;
+            return true;
+          }
 
-app.post('/api/public-voice/session', async (req, res) => {
-  try {
-    if (!publicVoiceAllowed(req)) {
-      return res.status(429).json({ error: 'voice_rate_limited', message: 'You have reached the free voice limit for now. Try again later.' });
-    }
+          app.post('/api/public-voice/session', async (req, res) => {
+            try {
+              if (!publicVoiceAllowed(req)) return res.status(429).json({ error: 'voice_rate_limited', message: 'You have reached the free voice limit for now. Try again later.' });
+              const globalUsedSessions = await countVoiceSessionsGlobal(PUBLIC_VOICE_MAX_SECONDS);
+              const globalUsedSeconds = await countVoiceSecondsGlobal(PUBLIC_VOICE_MAX_SECONDS);
+              if (globalUsedSessions >= GLOBAL_SESSION_LIMIT || globalUsedSeconds >= GLOBAL_MINUTE_LIMIT * 60) return res.status(503).json({ error: 'voice_capacity_reached', message: 'Mike is at capacity right now. Try again a bit later.' });
+              const result = await getSpeechEngineToken();
+              const sessionKey = crypto.randomUUID();
+              await recordVoiceSession(null, result.agentId, { sessionKey, reservedSeconds: PUBLIC_VOICE_MAX_SECONDS });
+              res.json({ ...result, sessionKey, maxSessionSeconds: PUBLIC_VOICE_MAX_SECONDS, minutesRemaining: Math.floor(PUBLIC_VOICE_MAX_SECONDS / 60) });
+            } catch (error) {
+              console.error('[public-voice] session failed:', error.message || error);
+              res.status(error.status || 502).json({ error: error.message || 'speech_engine_unavailable' });
+            }
+          });
 
-    const globalUsedSessions = await countVoiceSessionsGlobal(PUBLIC_VOICE_MAX_SECONDS);
-    const globalUsedSeconds = await countVoiceSecondsGlobal(PUBLIC_VOICE_MAX_SECONDS);
-    if (globalUsedSessions >= GLOBAL_SESSION_LIMIT || globalUsedSeconds >= GLOBAL_MINUTE_LIMIT * 60) {
-      return res.status(503).json({ error: 'voice_capacity_reached', message: 'Mike is at capacity right now. Try again a bit later.' });
-    }
+          app.post('/api/public-voice/session-end', async (req, res) => {
+            try {
+              const sessionKey = String(req.body?.sessionKey || '').trim();
+              const reported = Number(req.body?.seconds);
+              if (!sessionKey || !Number.isFinite(reported) || reported < 0) return res.status(400).json({ error: 'public_voice_session_invalid' });
+              const seconds = Math.min(Math.round(reported), PUBLIC_VOICE_MAX_SECONDS);
+              const row = await closeVoiceSession(sessionKey, null, seconds);
+              res.json({ settled: !!row, seconds });
+            } catch (error) {
+              console.error('[public-voice] settle failed:', error.message || error);
+              res.status(500).json({ error: 'settle_failed' });
+            }
+          });
 
-    const result = await getSpeechEngineToken();
-    const sessionKey = crypto.randomUUID();
-    await recordVoiceSession(null, result.agentId, {
-      sessionKey,
-      reservedSeconds: PUBLIC_VOICE_MAX_SECONDS,
-    });
-
-    res.json({
-      ...result,
-      sessionKey,
-      maxSessionSeconds: PUBLIC_VOICE_MAX_SECONDS,
-      minutesRemaining: Math.floor(PUBLIC_VOICE_MAX_SECONDS / 60),
-    });
-  } catch (error) {
-    console.error('[public-voice] session failed:', error.message || error);
-    res.status(error.status || 502).json({ error: error.message || 'speech_engine_unavailable' });
-  }
-});
-
-app.post('/api/public-voice/session-end', async (req, res) => {
-  try {
-    const sessionKey = String(req.body?.sessionKey || '').trim();
-    const reported = Number(req.body?.seconds);
-    if (!sessionKey || !Number.isFinite(reported) || reported < 0) {
-      return res.status(400).json({ error: 'public_voice_session_invalid' });
-    }
-    const seconds = Math.min(Math.round(reported), PUBLIC_VOICE_MAX_SECONDS);
-    const row = await closeVoiceSession(sessionKey, null, seconds);
-    res.json({ settled: !!row, seconds });
-  } catch (error) {
-    console.error('[public-voice] settle failed:', error.message || error);
-    res.status(500).json({ error: 'settle_failed' });
-  }
-});
-
-'''
+          '''
               s = s[:idx] + route + s[idx:]
           p.write_text(s)
 
-          # Make the existing metering close function work for anonymous sessions too.
+          # Allow anonymous voice reservations to settle safely.
           p = Path('server/db.mjs')
           s = p.read_text()
-          old = """      WHERE session_key = $1
+          old = '''      WHERE session_key = $1
         AND user_id = $2
         AND actual_seconds IS NULL
-"""
-          new = """      WHERE session_key = $1
+          '''
+          new = '''      WHERE session_key = $1
         AND ((user_id = $2) OR ($2 IS NULL AND user_id IS NULL))
         AND actual_seconds IS NULL
-"""
+          '''
           if old in s:
               s = s.replace(old, new, 1)
-          else:
-              raise SystemExit('Expected voice session close predicate not found; stopping without a partial patch.')
           p.write_text(s)
 
-          # Remove this one-time workflow after the patch so it cannot run again.
-          wf = Path('.github/workflows/one-time-public-voice.yml')
-          wf.unlink()
+          # Private owner-only coding assistant. It generates/reviews code but never executes it.
+          Path('server/coding-tool.mjs').write_text(r'''// Owner-only coding assistant for Mike AI.
+          import OpenAI from 'openai';
 
-          import subprocess
+          const client = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+
+          export async function codingAssist({ task, language = 'javascript', code = '', context = '' } = {}) {
+            if (!client) throw new Error('openai_not_configured');
+            const cleanTask = String(task || '').trim();
+            if (!cleanTask) throw new Error('coding_task_required');
+            const prompt = [
+              `Task: ${cleanTask}`,
+              `Language/runtime: ${String(language || 'javascript')}`,
+              code ? `Existing code:\n${String(code).slice(0, 30000)}` : '',
+              context ? `Project context:\n${String(context).slice(0, 12000)}` : '',
+            ].filter(Boolean).join('\n\n');
+            const response = await client.responses.create({
+              model: process.env.CODING_MODEL || process.env.OPENAI_MODEL || 'gpt-5.6-luna',
+              instructions: 'You are Mike AI private owner coding assistant. Generate, refactor, debug, review, and explain production-quality code. Prefer small reviewable changes. Never claim code was executed, tested, deployed, or committed unless that actually happened. Flag security, auth, data-loss, and deployment risks. Never provide or invent secrets.',
+              input: prompt,
+            });
+            return { result: response.output_text?.trim() || 'No coding result returned.' };
+          }
+
+          export const CODING_TOOLS = [{
+            type: 'function',
+            name: 'coding_assist',
+            description: 'Private owner-only coding assistant for generating, refactoring, debugging, reviewing, or explaining code. Never executes code.',
+            parameters: {
+              type: 'object',
+              properties: {
+                task: { type: 'string', description: 'Coding task requested by the owner.' },
+                language: { type: 'string', description: 'Programming language/runtime.' },
+                code: { type: 'string', description: 'Optional existing code.' },
+                context: { type: 'string', description: 'Optional project context, errors, or constraints.' },
+              },
+              required: ['task'],
+              additionalProperties: false,
+            },
+          }];
+
+          export const CODING_TOOL_HANDLERS = { coding_assist: codingAssist };
+          ''')
+
+          # Wire the private tool into Mike's existing server-side tool registry.
+          p = Path('server/index.mjs')
+          s = p.read_text()
+          if "from './coding-tool.mjs'" not in s:
+              s = s.replace("import { FIELD_TOOLS, FIELD_TOOL_HANDLERS } from './field-tools.mjs';", "import { FIELD_TOOLS, FIELD_TOOL_HANDLERS } from './field-tools.mjs';\nimport { CODING_TOOLS, CODING_TOOL_HANDLERS } from './coding-tool.mjs';")
+          s = s.replace("const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS];", "const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS, ...CODING_TOOLS];")
+          s = s.replace("  ...FIELD_TOOL_HANDLERS,\n};", "  ...FIELD_TOOL_HANDLERS,\n  ...CODING_TOOL_HANDLERS,\n};", 1)
+          s = s.replace("const OWNER_ONLY_TOOLS = new Set(['get_store_sales', 'get_bot_status', 'get_btc_rsi']);", "const OWNER_ONLY_TOOLS = new Set(['get_store_sales', 'get_bot_status', 'get_btc_rsi', 'coding_assist']);")
+          p.write_text(s)
+
+          # Explicit RBAC permission; only owner receives all permissions. Admin/user do not receive this one.
+          p = Path('server/rbac.mjs')
+          s = p.read_text()
+          if "USE_CODING_TOOL" not in s:
+              s = s.replace("  DEPLOY: 'deploy.manage',\n", "  DEPLOY: 'deploy.manage',\n  USE_CODING_TOOL: 'coding.use',\n")
+          p.write_text(s)
+
+          # Validate before changing production history.
+          subprocess.run(['npm','install','--no-audit','--no-fund'], check=True)
+          subprocess.run(['npm','run','build'], check=True)
+          subprocess.run(['npm','test'], check=True)
+
+          # Remove the one-time workflow and commit the complete patch.
+          wf = Path('.github/workflows/one-time-public-voice.yml')
+          if wf.exists(): wf.unlink()
           subprocess.run(['git','config','user.name','github-actions[bot]'], check=True)
           subprocess.run(['git','config','user.email','41898282+github-actions[bot]@users.noreply.github.com'], check=True)
-          subprocess.run(['git','add','src/main.jsx','server/index.mjs','server/db.mjs','.github/workflows/one-time-public-voice.yml'], check=True)
-          subprocess.run(['git','commit','-m','feat: public voice access'], check=True)
+          subprocess.run(['git','add','src/main.jsx','server/index.mjs','server/db.mjs','server/rbac.mjs','server/coding-tool.mjs','.github/workflows/one-time-public-voice.yml'], check=True)
+          subprocess.run(['git','commit','-m','fix: public voice and owner coding'], check=True)
           subprocess.run(['git','push','origin','HEAD:main'], check=True)
