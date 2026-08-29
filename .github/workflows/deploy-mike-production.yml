@@ -1,6 +1,8 @@
 name: Deploy Mike AI to Railway Production
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       confirm:
@@ -18,7 +20,7 @@ concurrency:
 jobs:
   validate:
     name: Validate production commit
-    if: ${{ github.event.inputs.confirm == 'DEPLOY' }}
+    if: ${{ github.event_name == 'push' || github.event.inputs.confirm == 'DEPLOY' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout exact production commit
