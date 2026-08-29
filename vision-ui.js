@@ -85,10 +85,10 @@
       reader.readAsDataURL(file);
     });
 
-    const sessionResponse = await fetch('/api/realtime/session', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ message: prompt.slice(0, 1200) }),
+    // Use Mike's authenticated, quota-aware production Realtime endpoint.
+    const sessionResponse = await fetch('/api/speech/token', {
+      method: 'GET',
+      headers: authHeaders(),
     });
     const session = await sessionResponse.json().catch(() => ({}));
     if (!sessionResponse.ok || !session.token) throw new Error(session.message || session.error || 'Mike Vision is temporarily unavailable.');
