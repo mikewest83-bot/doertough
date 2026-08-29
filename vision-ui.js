@@ -14,10 +14,16 @@
     chat.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
+  function findVoiceControl() {
+    const buttons = Array.from(document.querySelectorAll('main button'));
+    return buttons.find((el) => /^(END CONVERSATION|TAP TO TALK)$/i.test((el.textContent || '').replace(/\s+/g, ' ').trim())) || null;
+  }
+
   function install() {
     if (document.getElementById('mike-vision-launcher')) return true;
     const form = document.querySelector('main form');
-    if (!form) return false;
+    const voiceButton = findVoiceControl();
+    if (!form && !voiceButton) return false;
 
     const wrap = document.createElement('div');
     wrap.id = 'mike-vision-wrap';
@@ -34,14 +40,21 @@
     button.id = 'mike-vision-launcher';
     button.textContent = '📷 Ask Mike about a photo';
     button.setAttribute('aria-label', 'Ask Mike about a photo');
-    button.style.cssText = 'flex:1;border:1px solid #24384a;background:#101820;color:#dbe7ef;border-radius:14px;padding:12px 14px;font-weight:800;font-size:14px;cursor:pointer;';
+    button.style.cssText = 'width:100%;border:1px solid #24384a;background:#101820;color:#dbe7ef;border-radius:14px;padding:12px 14px;font-weight:800;font-size:14px;cursor:pointer;';
 
     const status = document.createElement('span');
     status.id = 'mike-vision-status';
     status.style.cssText = 'font-size:12px;color:#8fa5b5;display:none;';
 
     wrap.append(button, input, status);
-    form.parentNode.insertBefore(wrap, form.nextSibling);
+
+    // Place Vision directly beneath Mike's voice control when it exists.
+    // Fall back to the message form only if the voice control is not present yet.
+    if (voiceButton) {
+      voiceButton.insertAdjacentElement('afterend', wrap);
+    } else {
+      form.parentNode.insertBefore(wrap, form.nextSibling);
+    }
 
     button.addEventListener('click', () => {
       if (!token()) {
@@ -95,8 +108,6 @@
     const pc = new RTCPeerConnection();
     const audio = new Audio();
     audio.autoplay = true;
-    // Keep the WebRTC offer shape aligned with the working Mike voice path.
-    // Realtime image input is added after the session is established.
     pc.addTransceiver('audio', { direction: 'sendrecv' });
     const dc = pc.createDataChannel('oai-events');
     let finished = false;
