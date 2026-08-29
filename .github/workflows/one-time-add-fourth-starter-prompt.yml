@@ -1,0 +1,35 @@
+name: One-time fourth starter prompt patch
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: "!contains(github.event.head_commit.message, 'feat: add fourth starter prompt')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add fourth starter prompt and remove one-time workflow
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src/main.jsx')
+          s = p.read_text()
+          old = "const starterPrompts = ['What would you do?', 'Help me figure this out.', 'I need a second opinion.'];"
+          new = "const starterPrompts = ['What would you do?', 'Help me figure this out.', 'I need a second opinion.', 'Find me a way to save money.'];"
+          if old not in s:
+              raise SystemExit('Expected starter prompt list was not found; stopping without changes.')
+          p.write_text(s.replace(old, new, 1))
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/one-time-add-fourth-starter-prompt.yml
+          git add src/main.jsx .github/workflows/one-time-add-fourth-starter-prompt.yml
+          git commit -m "feat: add fourth starter prompt" || exit 0
+          git push origin HEAD:main
