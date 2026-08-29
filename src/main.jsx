@@ -129,7 +129,7 @@ function App() {
 
   const statusText = listening ? 'MIKE IS LISTENING' : speaking ? 'MIKE IS TALKING' : busy ? 'MIKE IS THINKING' : 'MIKE IS HERE';
   const voiceControlLabel = conversationMode ? 'END CONVERSATION' : 'TAP TO TALK';
-  const starterPrompts = ['What would you do?', 'Help me figure this out.', 'I need a second opinion.'];
+  const starterPrompts = ['What would you do?', 'Help me figure this out.', 'I need a second opinion.', 'Find me a way to save money.'];
 
   return (
     <main>
