@@ -19,6 +19,51 @@
     return buttons.find((el) => /^(END CONVERSATION|TAP TO TALK)$/i.test((el.textContent || '').replace(/\s+/g, ' ').trim())) || null;
   }
 
+  async function prepareImage(file) {
+    const maxDimension = 1600;
+    const targetType = 'image/jpeg';
+    const quality = 0.78;
+
+    const bitmap = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('The photo could not be read.'));
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('That image could not be decoded. Please choose a JPG or PNG.'));
+        img.src = String(reader.result || '');
+      };
+      reader.readAsDataURL(file);
+    });
+
+    const scale = Math.min(1, maxDimension / Math.max(bitmap.naturalWidth || bitmap.width, bitmap.naturalHeight || bitmap.height));
+    const width = Math.max(1, Math.round((bitmap.naturalWidth || bitmap.width) * scale));
+    const height = Math.max(1, Math.round((bitmap.naturalHeight || bitmap.height) * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) throw new Error('Mike could not prepare that photo.');
+    ctx.drawImage(bitmap, 0, 0, width, height);
+
+    const blob = await new Promise((resolve, reject) => {
+      canvas.toBlob((value) => value ? resolve(value) : reject(new Error('Mike could not compress that photo.')), targetType, quality);
+    });
+
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('The prepared photo could not be read.'));
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.readAsDataURL(blob);
+    });
+
+    if (!dataUrl.startsWith('data:image/jpeg;base64,')) {
+      throw new Error('Mike could not prepare that photo for Vision.');
+    }
+
+    return dataUrl;
+  }
+
   function install() {
     if (document.getElementById('mike-vision-launcher')) return true;
     const form = document.querySelector('main form');
@@ -72,8 +117,8 @@
         addMessage('I can look at JPG or PNG images. If your phone offers HEIC, choose the JPEG version.', 'mike');
         return;
       }
-      if (file.size > 5 * 1024 * 1024) {
-        addMessage('That image is too large. Please choose one under 5 MB.', 'mike');
+      if (file.size > 12 * 1024 * 1024) {
+        addMessage('That image is too large. Please choose one under 12 MB.', 'mike');
         return;
       }
       const prompt = window.prompt('What do you want Mike to look for?', 'What do you see in this photo?');
@@ -88,13 +133,10 @@
   async function analyze(file, prompt, status, button) {
     button.disabled = true;
     status.style.display = 'inline';
+    status.textContent = 'Preparing photo…';
+
+    const data = await prepareImage(file);
     status.textContent = 'Mike is looking…';
-    const data = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onerror = () => reject(new Error('The photo could not be read.'));
-      reader.onload = () => resolve(String(reader.result || ''));
-      reader.readAsDataURL(file);
-    });
 
     const sessionResponse = await fetch('/api/speech/token', {
       method: 'GET',
@@ -109,10 +151,13 @@
     pc.addTransceiver('audio', { direction: 'sendrecv' });
     const dc = pc.createDataChannel('oai-events');
     let finished = false;
+    let responseTimer = null;
     const startedAt = Date.now();
+
     const finish = async (text) => {
       if (finished) return;
       finished = true;
+      if (responseTimer) clearTimeout(responseTimer);
       if (text) addMessage(text, 'mike');
       status.textContent = 'Done';
       await sleep(250);
@@ -128,16 +173,23 @@
     };
 
     let transcript = '';
+    let textOutput = '';
     dc.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data);
         if (message.type === 'response.audio_transcript.delta' || message.type === 'response.output_audio_transcript.delta') transcript += String(message.delta || '');
         if (message.type === 'response.audio_transcript.done' || message.type === 'response.output_audio_transcript.done') transcript = String(message.transcript || transcript).trim();
-        if (message.type === 'response.done') finish(transcript.trim());
+        if (message.type === 'response.text.delta' || message.type === 'response.output_text.delta') textOutput += String(message.delta || '');
+        if (message.type === 'response.done') finish((transcript || textOutput).trim());
         if (message.type === 'error') finish(message.error?.message || 'Mike Vision returned an error.');
       } catch {}
     };
+    dc.onerror = () => finish('Mike Vision lost the image connection. Please try the photo again.');
+    pc.onconnectionstatechange = () => {
+      if (['failed', 'disconnected'].includes(pc.connectionState) && !finished) finish('Mike Vision lost the connection. Please try again.');
+    };
     pc.ontrack = (event) => { audio.srcObject = event.streams[0]; audio.play().catch(() => {}); };
+
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     while (pc.iceGatheringState !== 'complete') await sleep(50);
@@ -157,19 +209,28 @@
       throw new Error('Realtime Vision connection timed out.');
     };
     await waitForOpen();
-    dc.send(JSON.stringify({
-      type: 'conversation.item.create',
-      previous_item_id: null,
-      item: {
-        type: 'message',
-        role: 'user',
-        content: [
-          { type: 'input_text', text: prompt },
-          { type: 'input_image', image_url: data },
-        ],
-      },
-    }));
-    dc.send(JSON.stringify({ type: 'response.create' }));
+
+    try {
+      dc.send(JSON.stringify({
+        type: 'conversation.item.create',
+        previous_item_id: null,
+        item: {
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: prompt },
+            { type: 'input_image', image_url: data, detail: 'auto' },
+          ],
+        },
+      }));
+      dc.send(JSON.stringify({ type: 'response.create' }));
+    } catch (error) {
+      throw new Error(`Mike Vision could not send the photo: ${error.message || error}`);
+    }
+
+    responseTimer = setTimeout(() => {
+      finish('Mike Vision is taking too long to respond. Please try the photo again.');
+    }, 45000);
   }
 
   const observer = new MutationObserver(() => { if (install()) observer.disconnect(); });
