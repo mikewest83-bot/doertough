@@ -22,12 +22,11 @@ if (!source.includes(ownerImport)) {
   source = source.replace(anchor, `${anchor}\n${ownerImport}`);
 }
 
-// Deal alerts are exposed to Realtime voice and text chat, and the persistent
-// scheduler is started by the production server. patch-deal-finder may have
-// inserted an older partial import; replace it instead of creating duplicate
-// ESM bindings.
-const dealAlertImport = "import { DEAL_ALERT_TOOLS, dealAlertHandlerFor, startDealAlertScheduler } from './deal-alerts.mjs';";
-const legacyDealAlertImport = "import { DEAL_ALERT_TOOLS, dealAlertHandlerFor } from './deal-alerts.mjs';";
+// Deal alerts are exposed to Realtime voice and text chat. Scheduler startup
+// intentionally remains in the canonical production server path so this
+// build-time patch cannot create duplicate scheduler workers.
+const dealAlertImport = "import { DEAL_ALERT_TOOLS, dealAlertHandlerFor } from './deal-alerts.mjs';";
+const legacyDealAlertImport = "import { DEAL_ALERT_TOOLS, dealAlertHandlerFor, startDealAlertScheduler } from './deal-alerts.mjs';";
 if (!source.includes(dealAlertImport)) {
   if (source.includes(legacyDealAlertImport)) {
     source = source.replace(legacyDealAlertImport, dealAlertImport);
@@ -38,14 +37,8 @@ if (!source.includes(dealAlertImport)) {
   }
 }
 
-source = source.replace(
-  /const OWNER_ONLY_TOOLS = new Set\(\[[\s\S]*?\]\);\n/,
-  ''
-);
+source = source.replace(/const OWNER_ONLY_TOOLS = new Set\(\[[\s\S]*?\]\);\n/, '');
 
-// Newer index.mjs versions can already bind account-scoped handlers together
-// (reminders + deal alerts). Only add the legacy dedicated deal-alert handler
-// block when the index does not already have that shared registry.
 if (!source.includes('const DEAL_ALERT_HANDLERS =') && !source.includes('...ACCOUNT_SCOPED_TOOL_HANDLERS')) {
   const anchor = 'const PUBLIC_TOOLS = LIVE_TOOLS.filter((tool) => !OWNER_ONLY_TOOLS.has(tool.name));';
   if (!source.includes(anchor)) throw new Error('Deal alert tools anchor not found');
@@ -59,31 +52,22 @@ if (!source.includes('const DEAL_ALERT_HANDLERS =') && !source.includes('...ACCO
   source = source.replace(anchor, `${block}${anchor}`);
 }
 
-// Add the alert tool schemas only when the index is still using the legacy
-// single-line LIVE_TOOLS declaration. Expanded registries already contain them.
 if (!source.includes('...DEAL_ALERT_TOOLS')) {
   const anchor = 'const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS];';
   if (!source.includes(anchor)) throw new Error('LIVE_TOOLS anchor not found');
-  source = source.replace(
-    anchor,
-    'const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS, ...DEAL_ALERT_TOOLS];'
-  );
+  source = source.replace(anchor, 'const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS, ...DEAL_ALERT_TOOLS];');
 }
 
 if (!source.includes('...DEAL_ALERT_HANDLERS') && source.includes('const DEAL_ALERT_HANDLERS =')) {
   const handlerEndAnchor = '};\nconst PUBLIC_TOOLS = LIVE_TOOLS.filter((tool) => !OWNER_ONLY_TOOLS.has(tool.name));';
   if (!source.includes(handlerEndAnchor)) throw new Error('LIVE_TOOL_HANDLERS anchor not found');
-  source = source.replace(
-    handlerEndAnchor,
-    '  ...DEAL_ALERT_HANDLERS,\n};\nconst PUBLIC_TOOLS = LIVE_TOOLS.filter((tool) => !OWNER_ONLY_TOOLS.has(tool.name));'
-  );
+  source = source.replace(handlerEndAnchor, '  ...DEAL_ALERT_HANDLERS,\n};\nconst PUBLIC_TOOLS = LIVE_TOOLS.filter((tool) => !OWNER_ONLY_TOOLS.has(tool.name));');
 }
 
 if (!source.includes("app.post('/api/realtime/tool'")) {
   const marker = '// ===== Billing =====';
   const index = source.indexOf(marker);
   if (index < 0) throw new Error('Realtime tool patch billing anchor not found');
-
   const route = [
     '// ===== Realtime public tool dispatch =====',
     '// Voice tool calls are authenticated and executed server-side; the browser never',
@@ -101,8 +85,6 @@ if (!source.includes("app.post('/api/realtime/tool'")) {
     '',
     '    const handler = getRealtimeToolHandler(name, req.user);',
     "    if (!handler) return res.status(403).json({ error: 'tool_not_allowed' });",
-    '',
-    '    // Preserve authenticated identity for every voice handler, matching the text gateway.',
     '    const output = await handler({ ...args, user: req.user });',
     '    const serialized = JSON.stringify(output ?? null);',
     "    const safeOutput = serialized.length > 12000 ? serialized.slice(0, 11950) + '\\n[output truncated]' : serialized;",
@@ -115,62 +97,24 @@ if (!source.includes("app.post('/api/realtime/tool'")) {
     '',
     '',
   ].join('\n');
-
   source = source.slice(0, index) + route + source.slice(index);
 }
 
-// Database migrations run only in the Railway pre-deploy gate. Remove both
-// known startup forms so this patch is safe against the legacy and current
-// server bootstrap variants.
-source = source.replace(
-  "  migrate,\n",
-  ''
-);
-source = source.replace(
-  /\nmigrate\(\)\.then\(async \(\) => \{ await ensureRbacSchema\(\); await ensureReminderSchema\(\); \}\)\.catch\(\(error\) => console\.error\('\[db\] migrate threw:', error\.message \|\| error\)\);\n?/g,
-  '\n'
-);
-source = source.replace(
-  /\nmigrate\(\)\.catch\(\(error\) => console\.error\('\[db\] migrate threw:', error\.message \|\| error\)\);\n?/g,
-  '\n'
-);
+// Database migrations run only in the Railway pre-deploy gate.
+source = source.replace("  migrate,\n", '');
+source = source.replace(/\nmigrate\(\)\.then\(async \(\) => \{ await ensureRbacSchema\(\); await ensureReminderSchema\(\); \}\)\.catch\(\(error\) => console\.error\('\[db\] migrate threw:', error\.message \|\| error\)\);\n?/g, '\n');
+source = source.replace(/\nmigrate\(\)\.catch\(\(error\) => console\.error\('\[db\] migrate threw:', error\.message \|\| error\)\);\n?/g, '\n');
 
-// The owner/test account must never be blocked by the production customer
-// voice allowance. This prevents our own repeated QA sessions from consuming
-// the launch tester's quota while preserving the paid/free limits for every
-// other account. isOwner() is already server-side and authenticated.
 if (!source.includes('// OWNER VOICE QA BYPASS')) {
   const anchor = "    const minuteLimit = paidAccess ? PAID_MINUTE_LIMIT : FREE_MINUTE_LIMIT;";
   if (!source.includes(anchor)) throw new Error('Voice budget patch anchor not found');
-  source = source.replace(
-    anchor,
-    `${anchor}\n    // OWNER VOICE QA BYPASS\n    const ownerVoiceQa = isOwner(req.user);`
-  );
-
-  source = source.replace(
-    "    if (usedSessions >= sessionLimit) return outOfBudget();",
-    "    if (!ownerVoiceQa && usedSessions >= sessionLimit) return outOfBudget();"
-  );
-  source = source.replace(
-    "    if (secondsUsed >= secondsAllowance) return outOfBudget();",
-    "    if (!ownerVoiceQa && secondsUsed >= secondsAllowance) return outOfBudget();"
-  );
-  source = source.replace(
-    "    if (\n      globalUsedSessions >= GLOBAL_SESSION_LIMIT ||\n      globalUsedSeconds >= GLOBAL_MINUTE_LIMIT * 60\n    ) {",
-    "    if (!ownerVoiceQa && (\n      globalUsedSessions >= GLOBAL_SESSION_LIMIT ||\n      globalUsedSeconds >= GLOBAL_MINUTE_LIMIT * 60\n    )) {"
-  );
+  source = source.replace(anchor, `${anchor}\n    // OWNER VOICE QA BYPASS\n    const ownerVoiceQa = isOwner(req.user);`);
+  source = source.replace("    if (usedSessions >= sessionLimit) return outOfBudget();", "    if (!ownerVoiceQa && usedSessions >= sessionLimit) return outOfBudget();");
+  source = source.replace("    if (secondsUsed >= secondsAllowance) return outOfBudget();", "    if (!ownerVoiceQa && secondsUsed >= secondsAllowance) return outOfBudget();");
+  source = source.replace("    if (\n      globalUsedSessions >= GLOBAL_SESSION_LIMIT ||\n      globalUsedSeconds >= GLOBAL_MINUTE_LIMIT * 60\n    ) {", "    if (!ownerVoiceQa && (\n      globalUsedSessions >= GLOBAL_SESSION_LIMIT ||\n      globalUsedSeconds >= GLOBAL_MINUTE_LIMIT * 60\n    )) {");
 }
 
-// Start the persistent deal-alert worker once per production process. The
-// worker is idempotent and maintains its own database schema if necessary.
-if (!source.includes('// DEAL ALERT SCHEDULER')) {
-  const anchor = "    console.log(`[mike-ai] realtime voice ready: ${engineId || 'disabled'}`);";
-  if (!source.includes(anchor)) throw new Error('Deal alert scheduler voice anchor not found');
-  source = source.replace(
-    anchor,
-    `${anchor}\n    // DEAL ALERT SCHEDULER\n    startDealAlertScheduler();\n    console.log('[mike-ai] deal alerts scheduler ready');`
-  );
-}
-
+// Scheduler startup is intentionally NOT injected here. It belongs to the
+// canonical production server startup path and must run exactly once.
 fs.writeFileSync(target, source);
-console.log('[build] Realtime public tool dispatch ready; deal alerts attached to text + voice; persistent alert scheduler enabled; centralized owner tool policy; owner voice QA bypass enabled; startup migrations disabled');
+console.log('[build] Realtime tools wired; deal-alert scheduler left to canonical server path; owner voice QA bypass enabled; startup migrations disabled');
