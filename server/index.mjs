@@ -27,145 +27,32 @@ import { register, login, me, requestPasswordReset, resetPassword, authRequired,
 
 const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS, ...MONEY_TOOLS, ...REMINDER_TOOLS, ...DOERTOUGH_INTELLIGENCE_TOOLS];
 const LIVE_TOOL_HANDLERS = { ...BASE_HANDLERS, ...BUSINESS_TOOL_HANDLERS, ...FREE_TOOL_HANDLERS, ...FIELD_TOOL_HANDLERS, ...MONEY_TOOL_HANDLERS, ...DOERTOUGH_INTELLIGENCE_HANDLERS };
-const OWNER_ONLY_TOOLS = new Set(['get_store_sales', 'get_bot_status', 'get_btc_rsi']);
+const OWNER_ONLY_TOOLS = new Set(['get_store_sales', 'get_bot_status', 'get_btc_rsi', 'code_repo_status', 'code_read_file', 'code_search', 'code_create_branch', 'code_write_file']);
 const PUBLIC_TOOLS = LIVE_TOOLS.filter((tool) => !OWNER_ONLY_TOOLS.has(tool.name));
-const NON_OWNER_NOTE = "\n\nTOOL AVAILABILITY FOR THIS CONVERSATION\nYou are talking with a visitor, not Mike. Private business and trading tools are not available. Do not guess or invent private figures.";
+const NON_OWNER_NOTE = "\n\nPrivate owner tools and business/trading data are unavailable to visitors. Do not guess or invent private figures.";
 const mikeToolGateway = createMikeToolGateway({ handlers: LIVE_TOOL_HANDLERS, authorize: async ({ name, user }) => isOwner(user) || !OWNER_ONLY_TOOLS.has(name) });
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const app = express();
-const PORT = process.env.PORT || 3000;
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
-app.disable('x-powered-by');
+const app = express(); const PORT = process.env.PORT || 3000; const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini'; const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null; app.disable('x-powered-by');
 const requireKey = (key, name) => { if (!key) { const error = new Error(`${name}_not_configured`); error.status = 503; throw error; } };
-
-app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-  if (!stripeWebhookConfigured()) return res.status(503).json({ error: 'stripe_webhook_not_configured' });
-  if (!Buffer.isBuffer(req.body)) return res.status(500).json({ error: 'raw_body_unavailable' });
-  const rawBody = req.body.toString('utf8');
-  if (!verifyStripeSignature(rawBody, req.get('stripe-signature'), process.env.STRIPE_WEBHOOK_SECRET)) return res.status(400).json({ error: 'invalid_signature' });
-  let event; try { event = JSON.parse(rawBody); } catch { return res.status(400).json({ error: 'invalid_json' }); }
-  res.json({ received: true });
-  try { await handleStripeWebhook(event); } catch (error) { console.error('[stripe] handler error:', error.message || error); }
-});
-
-app.use(express.json({ limit: '15mb' }));
-app.use(optionalAuth);
-installGuards(app);
-
-app.post('/api/auth/register', register);
-app.post('/api/auth/login', login);
-app.get('/api/auth/me', authRequired, me);
-app.post('/api/auth/forgot-password', requestPasswordReset);
-app.post('/api/auth/reset-password', resetPassword);
-
-const MAX_SESSION_SECONDS = Number(process.env.VOICE_MAX_SESSION_SECONDS || 600);
-const PAID_SESSION_LIMIT = Number(process.env.VOICE_SESSIONS_PRO || 40);
-const FREE_SESSION_LIMIT = Number(process.env.VOICE_SESSIONS_FREE || 1);
-const GLOBAL_SESSION_LIMIT = Number(process.env.VOICE_SESSIONS_GLOBAL || 120);
-const PAID_MINUTE_LIMIT = Number(process.env.VOICE_MINUTES_PRO || 200);
-const FREE_MINUTE_LIMIT = Number(process.env.VOICE_MINUTES_FREE || 10);
-const GLOBAL_MINUTE_LIMIT = Number(process.env.VOICE_MINUTES_GLOBAL || 5000);
-
-app.post('/api/realtime/tool', authRequired, async (req, res) => {
-  try {
-    const name = String(req.body?.name || '').trim();
-    if (!isRealtimeToolAllowed(name, req.user)) return res.status(403).json({ error: 'tool_not_allowed' });
-    let args = req.body?.arguments;
-    if (typeof args === 'string') { try { args = JSON.parse(args); } catch { return res.status(400).json({ error: 'tool_arguments_invalid' }); } }
-    if (!args || typeof args !== 'object' || Array.isArray(args)) return res.status(400).json({ error: 'tool_arguments_invalid' });
-    const handler = getRealtimeToolHandler(name, req.user.id);
-    if (!handler) return res.status(403).json({ error: 'tool_not_allowed' });
-    const output = await handler(args);
-    const serialized = JSON.stringify(output ?? null);
-    res.json({ output: serialized.length > 12000 ? serialized.slice(0, 11950) + '\n[output truncated]' : serialized });
-  } catch (error) { console.error('[realtime-tool] failed:', error.message || error); res.status(500).json({ error: error.message || 'tool_failed' }); }
-});
-
-app.get('/api/speech/token', async (req, res) => {
-  try {
-    if (!req.user) return res.status(401).json({ error: 'sign_in_required', message: 'Sign in to talk with Mike.' });
-    const ownerVoiceQa = isOwner(req.user);
-    const paidAccess = hasPaidAccess(req.user);
-    const sessionLimit = paidAccess ? PAID_SESSION_LIMIT : FREE_SESSION_LIMIT;
-    const minuteLimit = paidAccess ? PAID_MINUTE_LIMIT : FREE_MINUTE_LIMIT;
-    const outOfBudget = () => res.status(402).json({ error: paidAccess ? 'voice_allowance_reached' : 'upgrade_required', message: paidAccess ? "You've used this month's voice time." : 'Start your free trial to talk with Mike.' });
-    const secondsAllowance = minuteLimit * 60;
-    const reservationLimits = ownerVoiceQa ? { accountSessionLimit: Number.MAX_SAFE_INTEGER, accountSecondLimit: Number.MAX_SAFE_INTEGER, globalSessionLimit: Number.MAX_SAFE_INTEGER, globalSecondLimit: Number.MAX_SAFE_INTEGER } : { accountSessionLimit: sessionLimit, accountSecondLimit: secondsAllowance, globalSessionLimit: GLOBAL_SESSION_LIMIT, globalSecondLimit: GLOBAL_MINUTE_LIMIT * 60 };
-    const sessionKey = crypto.randomUUID();
-    const agentId = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1';
-    const reserveResult = await reserveVoiceSession({ userId: req.user.id, agentId, sessionKey, reservedSeconds: MAX_SESSION_SECONDS, ...reservationLimits });
-    if (!reserveResult.ok) {
-      if (reserveResult.reason === 'account_session_limit' || reserveResult.reason === 'account_second_limit') return outOfBudget();
-      return res.status(503).json({ error: 'voice_capacity_reached', message: 'Mike is at capacity right now. Try again a bit later.' });
-    }
-    let result;
-    try { result = await getSpeechEngineToken(); }
-    catch (error) { try { await releaseVoiceReservation(sessionKey, req.user.id); } catch (releaseError) { console.error('[speech-engine] reservation release failed:', releaseError.message || releaseError); } throw error; }
-    res.json({ ...result, sessionKey, maxSessionSeconds: MAX_SESSION_SECONDS, minutesRemaining: ownerVoiceQa ? null : Math.max(0, Math.floor((secondsAllowance - MAX_SESSION_SECONDS) / 60)) });
-  } catch (error) { console.error('[speech-engine] token failed:', error.message || error); res.status(error.status || 502).json({ error: error.message || 'speech_engine_unavailable' }); }
-});
-
-app.post('/api/speech/session-end', authRequired, async (req, res) => {
-  try {
-    const sessionKey = String(req.body?.sessionKey || '').trim();
-    if (!sessionKey) return res.status(400).json({ error: 'session_key_required' });
-    const reported = Number(req.body?.seconds);
-    if (!Number.isFinite(reported) || reported < 0) return res.status(400).json({ error: 'seconds_invalid' });
-    const seconds = Math.min(Math.round(reported), MAX_SESSION_SECONDS);
-    const row = await closeVoiceSession(sessionKey, req.user.id, seconds);
-    if (!row) return res.json({ settled: false });
-    res.json({ settled: true, seconds });
-  } catch (error) { console.error('[speech-engine] settle failed:', error.message || error); res.status(500).json({ error: 'settle_failed' }); }
-});
-
-app.get('/api/owner/overview', authRequired, async (req, res) => { if (!isOwner(req.user)) return res.status(403).json({ error: 'forbidden' }); try { const { getRbacOverview } = await import('./rbac.mjs'); res.json(await getRbacOverview()); } catch (error) { console.error('[owner] overview failed:', error.message || error); res.status(500).json({ error: 'owner_overview_unavailable' }); } });
+app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => { if (!stripeWebhookConfigured()) return res.status(503).json({ error: 'stripe_webhook_not_configured' }); if (!Buffer.isBuffer(req.body)) return res.status(500).json({ error: 'raw_body_unavailable' }); const rawBody = req.body.toString('utf8'); if (!verifyStripeSignature(rawBody, req.get('stripe-signature'), process.env.STRIPE_WEBHOOK_SECRET)) return res.status(400).json({ error: 'invalid_signature' }); let event; try { event = JSON.parse(rawBody); } catch { return res.status(400).json({ error: 'invalid_json' }); } res.json({ received: true }); try { await handleStripeWebhook(event); } catch (error) { console.error('[stripe] handler error:', error.message || error); } });
+app.use(express.json({ limit: '15mb' })); app.use(optionalAuth); installGuards(app);
+app.post('/api/auth/register', register); app.post('/api/auth/login', login); app.get('/api/auth/me', authRequired, me); app.post('/api/auth/forgot-password', requestPasswordReset); app.post('/api/auth/reset-password', resetPassword);
+const MAX_SESSION_SECONDS = Number(process.env.VOICE_MAX_SESSION_SECONDS || 600); const PAID_SESSION_LIMIT = Number(process.env.VOICE_SESSIONS_PRO || 40); const FREE_SESSION_LIMIT = Number(process.env.VOICE_SESSIONS_FREE || 1); const GLOBAL_SESSION_LIMIT = Number(process.env.VOICE_SESSIONS_GLOBAL || 120); const PAID_MINUTE_LIMIT = Number(process.env.VOICE_MINUTES_PRO || 200); const FREE_MINUTE_LIMIT = Number(process.env.VOICE_MINUTES_FREE || 10); const GLOBAL_MINUTE_LIMIT = Number(process.env.VOICE_MINUTES_GLOBAL || 5000);
+app.post('/api/realtime/tool', authRequired, async (req, res) => { try { const name = String(req.body?.name || '').trim(); if (!isRealtimeToolAllowed(name, req.user)) return res.status(403).json({ error: 'tool_not_allowed' }); let args = req.body?.arguments; if (typeof args === 'string') { try { args = JSON.parse(args); } catch { return res.status(400).json({ error: 'tool_arguments_invalid' }); } } if (!args || typeof args !== 'object' || Array.isArray(args)) return res.status(400).json({ error: 'tool_arguments_invalid' }); const handler = getRealtimeToolHandler(name, req.user); if (!handler) return res.status(403).json({ error: 'tool_not_allowed' }); const output = await handler(args); const serialized = JSON.stringify(output ?? null); res.json({ output: serialized.length > 12000 ? serialized.slice(0, 11950) + '\n[output truncated]' : serialized }); } catch (error) { console.error('[realtime-tool] failed:', error.message || error); res.status(500).json({ error: error.message || 'tool_failed' }); } });
+app.get('/api/speech/token', async (req, res) => { try { if (!req.user) return res.status(401).json({ error: 'sign_in_required', message: 'Sign in to talk with Mike.' }); const ownerVoiceQa = isOwner(req.user); const paidAccess = hasPaidAccess(req.user); const sessionLimit = paidAccess ? PAID_SESSION_LIMIT : FREE_SESSION_LIMIT; const minuteLimit = paidAccess ? PAID_MINUTE_LIMIT : FREE_MINUTE_LIMIT; const outOfBudget = () => res.status(402).json({ error: paidAccess ? 'voice_allowance_reached' : 'upgrade_required' }); const secondsAllowance = minuteLimit * 60; const reservationLimits = ownerVoiceQa ? { accountSessionLimit: Number.MAX_SAFE_INTEGER, accountSecondLimit: Number.MAX_SAFE_INTEGER, globalSessionLimit: Number.MAX_SAFE_INTEGER, globalSecondLimit: Number.MAX_SAFE_INTEGER } : { accountSessionLimit: sessionLimit, accountSecondLimit: secondsAllowance, globalSessionLimit: GLOBAL_SESSION_LIMIT, globalSecondLimit: GLOBAL_MINUTE_LIMIT * 60 }; const sessionKey = crypto.randomUUID(); const agentId = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1'; const reserveResult = await reserveVoiceSession({ userId: req.user.id, agentId, sessionKey, reservedSeconds: MAX_SESSION_SECONDS, ...reservationLimits }); if (!reserveResult.ok) { if (reserveResult.reason === 'account_session_limit' || reserveResult.reason === 'account_second_limit') return outOfBudget(); return res.status(503).json({ error: 'voice_capacity_reached' }); } let result; try { result = await getSpeechEngineToken(); } catch (error) { try { await releaseVoiceReservation(sessionKey, req.user.id); } catch {} throw error; } res.json({ ...result, sessionKey, maxSessionSeconds: MAX_SESSION_SECONDS, minutesRemaining: ownerVoiceQa ? null : Math.max(0, Math.floor((secondsAllowance - MAX_SESSION_SECONDS) / 60)) }); } catch (error) { res.status(error.status || 502).json({ error: error.message || 'speech_engine_unavailable' }); } });
+app.post('/api/speech/session-end', authRequired, async (req, res) => { try { const sessionKey = String(req.body?.sessionKey || '').trim(); const reported = Number(req.body?.seconds); if (!sessionKey) return res.status(400).json({ error: 'session_key_required' }); if (!Number.isFinite(reported) || reported < 0) return res.status(400).json({ error: 'seconds_invalid' }); const seconds = Math.min(Math.round(reported), MAX_SESSION_SECONDS); const row = await closeVoiceSession(sessionKey, req.user.id, seconds); if (!row) return res.json({ settled: false }); res.json({ settled: true, seconds }); } catch { res.status(500).json({ error: 'settle_failed' }); } });
+app.get('/api/owner/overview', authRequired, async (req, res) => { if (!isOwner(req.user)) return res.status(403).json({ error: 'forbidden' }); try { const { getRbacOverview } = await import('./rbac.mjs'); res.json(await getRbacOverview()); } catch { res.status(500).json({ error: 'owner_overview_unavailable' }); } });
 app.get('/api/reminders', authRequired, async (req, res) => { try { res.json({ reminders: await listRemindersTool(req.user.id, { includePast: req.query?.includePast === 'true' }) }); } catch { res.status(500).json({ error: 'reminders_unavailable' }); } });
 app.post('/api/reminders', authRequired, async (req, res) => { try { const result = await setReminderTool(req.user.id, req.body || {}); if (result?.error) return res.status(400).json(result); res.json(result); } catch { res.status(500).json({ error: 'reminder_create_failed' }); } });
 app.delete('/api/reminders/:id', authRequired, async (req, res) => { try { res.json(await cancelReminderTool(req.user.id, { id: Number(req.params.id) })); } catch { res.status(500).json({ error: 'reminder_cancel_failed' }); } });
-
 app.post('/api/billing/checkout', authRequired, async (req, res) => { try { if (hasActiveSubscription(req.user)) return res.json({ ...(await createPortalSession(req.user)), alreadySubscribed: true }); res.json(await createCheckoutSession(req.user)); } catch (error) { res.status(error.status || 502).json({ error: error.message || 'checkout_unavailable' }); } });
 app.post('/api/billing/portal', authRequired, async (req, res) => { try { res.json(await createPortalSession(req.user)); } catch (error) { res.status(error.status || 502).json({ error: error.message || 'portal_unavailable' }); } });
 app.post('/api/client-log', (req, res) => { console.error(`[client] ${String(req.body?.phase || 'unknown')}: ${String(req.body?.name || 'Error')}: ${String(req.body?.message || '').slice(0, 600)}`); res.json({ logged: true }); });
-
-app.get('/api/health', (req, res) => res.json({ ok: true, service: 'mike-ai', openaiConfigured: !!process.env.OPENAI_API_KEY, voiceConfigured: !!process.env.OPENAI_API_KEY, liveToolsConfigured: true, toolCount: LIVE_TOOLS.length, voiceBudget: { maxSessionSeconds: MAX_SESSION_SECONDS, paidMinutes: PAID_MINUTE_LIMIT, freeMinutes: FREE_MINUTE_LIMIT, globalMinutes: GLOBAL_MINUTE_LIMIT, paidSessions: PAID_SESSION_LIMIT, globalSessions: GLOBAL_SESSION_LIMIT }, accountsConfigured: authConfigured(), mailConfigured: mailerConfigured(), billingConfigured: billingConfigured(), model: OPENAI_MODEL, timestamp: new Date().toISOString() }));
-
-app.post('/api/ask', async (req, res) => {
-  try {
-    requireKey(process.env.OPENAI_API_KEY, 'openai');
-    if (!openai) throw new Error('openai_client_missing');
-    const message = String(req.body?.message || '').trim();
-    if (!message) return res.status(400).json({ error: 'message_required' });
-    const history = Array.isArray(req.body?.history) ? req.body.history.slice(-10) : [];
-    let input = [...history.map((item) => ({ role: item.role === 'mike' ? 'assistant' : 'user', content: [{ type: item.role === 'mike' ? 'output_text' : 'input_text', text: String(item.text || '') }] })), { role: 'user', content: [{ type: 'input_text', text: message }] }];
-    const owner = isOwner(req.user); const tools = owner ? LIVE_TOOLS : PUBLIC_TOOLS;
-    const relevantMemories = req.user ? await getRelevantMemories(req.user.id, message, 12) : [];
-    const instructions = (owner ? MIKE_INSTRUCTIONS : MIKE_INSTRUCTIONS + NON_OWNER_NOTE) + memoryPrompt(relevantMemories);
-    let text = "I'm here. Give me another shot.";
-    for (let round = 0; round < 4; round += 1) {
-      const response = await openai.responses.create({ model: OPENAI_MODEL, instructions, input, tools });
-      const calls = (response.output || []).filter((item) => item.type === 'function_call');
-      if (!calls.length) { text = response.output_text?.trim() || text; break; }
-      input = [...input, ...response.output];
-      for (const call of calls) {
-        let args = {}; try { args = call.arguments ? JSON.parse(call.arguments) : {}; } catch {}
-        let output;
-        try { output = (!owner && OWNER_ONLY_TOOLS.has(call.name)) ? { error: 'not_available', note: "That is Mike's own private business data." } : await mikeToolGateway.execute({ name: call.name, args, user: req.user }); }
-        catch (toolError) { output = { error: toolError.message === 'mike_tool_unauthorized' || toolError.message === 'mike_tool_not_allowed' ? 'not_available' : 'tool_unavailable' }; }
-        input.push({ type: 'function_call_output', call_id: call.call_id, output: JSON.stringify(output) });
-      }
-    }
-    res.json({ text });
-  } catch (error) { console.error('[ask] failed:', error.message || error); res.status(error.status || 502).json({ error: error.message || 'mike_ai_unavailable' }); }
-});
-
+app.get('/api/health', (req, res) => res.json({ ok: true, service: 'mike-ai', openaiConfigured: !!process.env.OPENAI_API_KEY, voiceConfigured: !!process.env.OPENAI_API_KEY, liveToolsConfigured: true, toolCount: LIVE_TOOLS.length, accountsConfigured: authConfigured(), mailConfigured: mailerConfigured(), billingConfigured: billingConfigured(), model: OPENAI_MODEL, timestamp: new Date().toISOString() }));
+app.post('/api/ask', async (req, res) => { try { requireKey(process.env.OPENAI_API_KEY, 'openai'); if (!openai) throw new Error('openai_client_missing'); const message = String(req.body?.message || '').trim(); if (!message) return res.status(400).json({ error: 'message_required' }); const history = Array.isArray(req.body?.history) ? req.body.history.slice(-10) : []; let input = [...history.map((item) => ({ role: item.role === 'mike' ? 'assistant' : 'user', content: [{ type: item.role === 'mike' ? 'output_text' : 'input_text', text: String(item.text || '') }] })), { role: 'user', content: [{ type: 'input_text', text: message }] }]; const owner = isOwner(req.user); const tools = owner ? LIVE_TOOLS : PUBLIC_TOOLS; const relevantMemories = req.user ? await getRelevantMemories(req.user.id, message, 12) : []; const instructions = (owner ? MIKE_INSTRUCTIONS : MIKE_INSTRUCTIONS + NON_OWNER_NOTE) + memoryPrompt(relevantMemories); let text = "I'm here. Give me another shot."; for (let round = 0; round < 4; round += 1) { const response = await openai.responses.create({ model: OPENAI_MODEL, instructions, input, tools }); const calls = (response.output || []).filter((item) => item.type === 'function_call'); if (!calls.length) { text = response.output_text?.trim() || text; break; } input = [...input, ...response.output]; for (const call of calls) { let args = {}; try { args = call.arguments ? JSON.parse(call.arguments) : {}; } catch {} let output; try { output = await mikeToolGateway.execute({ name: call.name, args, user: req.user }); } catch (toolError) { output = { error: toolError.message === 'mike_tool_unauthorized' || toolError.message === 'mike_tool_not_allowed' ? 'not_available' : 'tool_unavailable' }; } input.push({ type: 'function_call_output', call_id: call.call_id, output: JSON.stringify(output) }); } } res.json({ text }); } catch (error) { res.status(error.status || 502).json({ error: error.message || 'mike_ai_unavailable' }); } });
 app.get('/api/memory', authRequired, async (req, res) => { try { const category = req.query?.category ? String(req.query.category) : undefined; res.json({ memories: await listMemories(req.user.id, { category }) }); } catch { res.status(500).json({ error: 'memory_unavailable' }); } });
 app.post('/api/memory', authRequired, async (req, res) => { try { const category = String(req.body?.category || 'context'); const memory = String(req.body?.memory || '').trim(); if (!memory) return res.status(400).json({ error: 'memory_required' }); if (!CATEGORIES.has(category)) return res.status(400).json({ error: 'memory_category_invalid' }); res.json({ memory: await saveMemory(req.user.id, { category, memory, importance: req.body?.importance, source: req.body?.source || 'user' }) }); } catch { res.status(500).json({ error: 'memory_save_failed' }); } });
 app.delete('/api/memory/:id', authRequired, async (req, res) => { try { res.json({ deleted: await deleteMemory(req.user.id, req.params.id) }); } catch { res.status(500).json({ error: 'memory_delete_failed' }); } });
 app.use((req, res, next) => { if (/(^|\/)\.(env|git|svn|hg)(?:$|\/)/i.test(req.path) || /^\/(?:config\.json|wp-admin|wp-login\.php|phpmyadmin|server-status|actuator|telescope|trace\.axd)/i.test(req.path)) return res.status(404).end(); next(); });
-app.use(express.static(path.join(__dirname, '..', 'dist'), { maxAge: '1h', etag: true, dotfiles: 'deny' }));
-app.use((req, res) => res.sendFile(path.join(__dirname, '..', 'dist', 'index.html')));
-
-const server = http.createServer(app);
-server.listen(PORT, async () => { console.log(`[mike-ai] listening on port ${PORT}`); console.log(`[mike-ai] openai: ${!!process.env.OPENAI_API_KEY}`); console.log(`[mike-ai] accounts: ${authConfigured()}`); try { const engineId = await initializeSpeechEngine(server); console.log(`[mike-ai] realtime voice ready: ${engineId || 'disabled'}`); } catch (error) { console.error('[mike-ai] realtime voice initialization failed:', error.message || error); } });
+app.use(express.static(path.join(__dirname, '..', 'dist'), { maxAge: '1h', etag: true, dotfiles: 'deny' })); app.use((req, res) => res.sendFile(path.join(__dirname, '..', 'dist', 'index.html')));
+const server = http.createServer(app); server.listen(PORT, async () => { console.log(`[mike-ai] listening on port ${PORT}`); console.log(`[mike-ai] openai: ${!!process.env.OPENAI_API_KEY}`); console.log(`[mike-ai] accounts: ${authConfigured()}`); try { const engineId = await initializeSpeechEngine(server); console.log(`[mike-ai] realtime voice ready: ${engineId || 'disabled'}`); } catch (error) { console.error('[mike-ai] realtime voice initialization failed:', error.message || error); } });
