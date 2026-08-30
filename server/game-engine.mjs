@@ -1,5 +1,5 @@
 const GAMES = Object.freeze({
-  beat_mike: { name: 'Beat Mike', type: 'trivia', rounds: 5 },
+  beat_mike: { name: 'Beat Mike', type: 'trivia', rounds: Infinity },
   twenty_questions: { name: '20 Questions', type: 'deduction', rounds: 20 },
   would_you_rather: { name: 'Would You Rather', type: 'choice', rounds: 5 },
   higher_or_lower: { name: 'Higher or Lower', type: 'prediction', rounds: 5 },
@@ -34,7 +34,7 @@ export function scoreRound(state, points = 0) {
   const game = getGame(state.gameId);
   const safePoints = Number.isFinite(points) ? Math.max(0, Math.min(100, Math.round(points))) : 0;
   const nextRound = state.round + 1;
-  const done = nextRound > game.rounds;
+  const done = Number.isFinite(game.rounds) && nextRound > game.rounds;
   return Object.freeze({
     ...state,
     round: nextRound,
