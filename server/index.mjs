@@ -8,6 +8,11 @@ import { LIVE_TOOLS as BASE_TOOLS, LIVE_TOOL_HANDLERS as BASE_HANDLERS } from '.
 import { BUSINESS_TOOLS, BUSINESS_TOOL_HANDLERS } from './business.mjs';
 import { FREE_TOOLS, FREE_TOOL_HANDLERS } from './free-tools.mjs';
 import { FIELD_TOOLS, FIELD_TOOL_HANDLERS } from './field-tools.mjs';
+import { MONEY_TOOLS, MONEY_TOOL_HANDLERS } from './money-tools.mjs';
+import { DOERTOUGH_INTELLIGENCE_TOOLS, DOERTOUGH_INTELLIGENCE_HANDLERS } from './doertough-intelligence-tools.mjs';
+import { DEAL_FINDER_TOOLS, DEAL_FINDER_HANDLERS } from './deal-finder.mjs';
+import { REMINDER_TOOLS, reminderHandlerFor, startReminderScheduler } from './reminders.mjs';
+import { DEAL_ALERT_TOOLS, dealAlertHandlerFor, startDealAlertScheduler } from './deal-alerts.mjs';
 import { createMikeToolGateway } from './mike-tool-gateway.mjs';
 import { installGuards } from './guard.mjs';
 import { mailerConfigured } from './mailer.mjs';
@@ -48,12 +53,38 @@ import {
 } from './auth.mjs';
 import { OWNER_ONLY_TOOLS } from './tool-access.mjs';
 
-const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS];
+const LIVE_TOOLS = [
+  ...BASE_TOOLS,
+  ...BUSINESS_TOOLS,
+  ...FREE_TOOLS,
+  ...FIELD_TOOLS,
+  ...MONEY_TOOLS,
+  ...DOERTOUGH_INTELLIGENCE_TOOLS,
+  ...DEAL_FINDER_TOOLS,
+  ...REMINDER_TOOLS,
+  ...DEAL_ALERT_TOOLS,
+];
+
+const ACCOUNT_SCOPED_TOOL_HANDLERS = Object.fromEntries([
+  ...REMINDER_TOOLS.map((tool) => [
+    tool.name,
+    (args = {}) => reminderHandlerFor(tool.name, args?.user?.id)?.(args),
+  ]),
+  ...DEAL_ALERT_TOOLS.map((tool) => [
+    tool.name,
+    (args = {}) => dealAlertHandlerFor(tool.name, args?.user?.id)?.(args),
+  ]),
+]);
+
 const LIVE_TOOL_HANDLERS = {
   ...BASE_HANDLERS,
   ...BUSINESS_TOOL_HANDLERS,
   ...FREE_TOOL_HANDLERS,
   ...FIELD_TOOL_HANDLERS,
+  ...MONEY_TOOL_HANDLERS,
+  ...DOERTOUGH_INTELLIGENCE_HANDLERS,
+  ...DEAL_FINDER_HANDLERS,
+  ...ACCOUNT_SCOPED_TOOL_HANDLERS,
 };
 const PUBLIC_TOOLS = LIVE_TOOLS.filter((tool) => !OWNER_ONLY_TOOLS.has(tool.name));
 const NON_OWNER_NOTE =
@@ -375,9 +406,6 @@ app.use((req, res) => {
 migrate().catch((error) => console.error('[db] migrate threw:', error.message || error));
 
 const server = http.createServer(app);
-// Railway's proxy can keep an upstream connection alive longer than Node's
-// default 5s. Keep the socket alive long enough that the proxy never reuses a
-// socket Node has already closed.
 server.keepAliveTimeout = 65_000;
 server.headersTimeout = 66_000;
 
@@ -390,6 +418,21 @@ server.listen(PORT, async () => {
     console.log(`[mike-ai] realtime voice ready: ${engineId || 'disabled'}`);
   } catch (error) {
     console.error('[mike-ai] realtime voice initialization failed:', error.message || error);
+  }
+
+  // Persistent account-scoped schedulers. Each worker is idempotent and
+  // maintains its own database schema when needed.
+  try {
+    startReminderScheduler();
+    console.log('[mike-ai] reminder scheduler ready');
+  } catch (error) {
+    console.error('[mike-ai] reminder scheduler initialization failed:', error.message || error);
+  }
+  try {
+    startDealAlertScheduler();
+    console.log('[mike-ai] deal alerts scheduler ready');
+  } catch (error) {
+    console.error('[mike-ai] deal alerts scheduler initialization failed:', error.message || error);
   }
 });
 
