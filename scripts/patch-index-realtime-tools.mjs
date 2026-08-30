@@ -23,12 +23,19 @@ if (!source.includes(ownerImport)) {
 }
 
 // Deal alerts are exposed to Realtime voice and text chat, and the persistent
-// scheduler is started by the production server.
+// scheduler is started by the production server. patch-deal-finder may have
+// inserted an older partial import; replace it instead of creating duplicate
+// ESM bindings.
 const dealAlertImport = "import { DEAL_ALERT_TOOLS, dealAlertHandlerFor, startDealAlertScheduler } from './deal-alerts.mjs';";
+const legacyDealAlertImport = "import { DEAL_ALERT_TOOLS, dealAlertHandlerFor } from './deal-alerts.mjs';";
 if (!source.includes(dealAlertImport)) {
-  const anchor = "import { OWNER_ONLY_TOOLS } from './tool-access.mjs';";
-  if (!source.includes(anchor)) throw new Error('Deal alert import anchor not found');
-  source = source.replace(anchor, `${anchor}\n${dealAlertImport}`);
+  if (source.includes(legacyDealAlertImport)) {
+    source = source.replace(legacyDealAlertImport, dealAlertImport);
+  } else {
+    const anchor = "import { OWNER_ONLY_TOOLS } from './tool-access.mjs';";
+    if (!source.includes(anchor)) throw new Error('Deal alert import anchor not found');
+    source = source.replace(anchor, `${anchor}\n${dealAlertImport}`);
+  }
 }
 
 source = source.replace(
