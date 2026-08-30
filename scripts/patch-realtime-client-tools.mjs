@@ -6,13 +6,20 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const target = path.join(root, 'src', 'main.jsx');
 let source = fs.readFileSync(target, 'utf8');
 
+// Keep the browser-side session request aligned with the server route.
 source = source.replaceAll("fetchJson('/api/speech/session'", "fetchJson('/api/speech/token'");
 
-const tokenLine = "      const tokenData = await fetchJson('/api/speech/token', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: '{}' }, 20000);";
-const tokenGuard = "      const realtimeClientSecret = String(tokenData?.token ?? tokenData?.value ?? tokenData?.client_secret?.value ?? '').trim();\n      if (!realtimeClientSecret || realtimeClientSecret === 'undefined' || realtimeClientSecret === 'null') throw new Error('realtime_client_secret_missing');";
+// Remove the duplicate bottom photo starter CTA. The dedicated photo control remains elsewhere.
+source = source.replace(", '📷 Ask Mike about a photo'", '');
+source = source.replace(", \"📷 Ask Mike about a photo\"", '');
+
+// Capture the validated ephemeral secret once, regardless of the token response shape.
+const tokenPattern = /const tokenData = await fetchJson\('\/api\/speech\/token',[\s\S]*?\);/;
 if (!source.includes('const realtimeClientSecret =')) {
-  if (!source.includes(tokenLine)) throw new Error('[realtime] token route anchor not found');
-  source = source.replace(tokenLine, tokenLine + '\n' + tokenGuard);
+  const tokenMatch = source.match(tokenPattern);
+  if (!tokenMatch) throw new Error('[realtime] token request anchor not found');
+  const guard = "\n      const realtimeClientSecret = String(tokenData?.token ?? tokenData?.value ?? tokenData?.client_secret?.value ?? '').trim();\n      if (!realtimeClientSecret || realtimeClientSecret === 'undefined' || realtimeClientSecret === 'null') throw new Error('realtime_client_secret_missing');";
+  source = source.replace(tokenMatch[0], tokenMatch[0] + guard);
 }
 
 const helperAnchor = "  const logClientError = async (phase, err) => { console.error(`[voice] ${phase}:`, err); try { await fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phase, name: err?.name || '', message: err?.message || String(err || ''), extra: err?.stack || '' }) }); } catch {} };";
@@ -28,16 +35,19 @@ if (!source.includes("message.type === 'response.function_call_arguments.done'")
   source = source.replace(messageAnchor, "          if (message.type === 'response.function_call_arguments.done') { void dispatchRealtimeToolCall(dataChannel, message); } else if (message.type === 'input_audio_buffer.speech_started') setStatus('listening');");
 }
 
-const directUrl = 'https://api.openai.com/v1/realtime/calls';
-if (source.includes(directUrl)) {
-  const start = source.lastIndexOf('      const answerResponse = await fetch(', source.indexOf(directUrl));
-  const end = source.indexOf('      await pc.setRemoteDescription(', start);
-  if (start < 0 || end < 0) throw new Error('[realtime] browser-direct WebRTC boundaries not found');
-  const replacement = "      const answerResponse = await fetch('/api/realtime/webrtc-answer', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders(), 'X-Mike-Realtime-Token': realtimeClientSecret }, body: JSON.stringify({ sdp: pc.localDescription.sdp }) });\n      const answer = await answerResponse.text(); if (!answerResponse.ok) throw new Error(`OpenAI realtime call failed (${answerResponse.status}): ${answer.slice(0, 500)}`);\n";
+// The WebRTC proxy patch runs immediately before this script. If a browser-direct
+// call somehow remains, replace that complete statement instead of aborting the build.
+const directStart = "const answerResponse = await fetch('https://api.openai.com/v1/realtime/calls'";
+if (source.includes(directStart)) {
+  const start = source.indexOf(directStart);
+  const endMarker = "\n      await pc.setRemoteDescription(";
+  const end = source.indexOf(endMarker, start);
+  if (end < 0) throw new Error('[realtime] direct WebRTC call boundary not found');
+  const replacement = "const answerResponse = await fetch('/api/realtime/webrtc-answer', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders(), 'X-Mike-Realtime-Token': realtimeClientSecret }, body: JSON.stringify({ sdp: pc.localDescription.sdp }) });\n      const answer = await answerResponse.text(); if (!answerResponse.ok) throw new Error(`OpenAI realtime call failed (${answerResponse.status}): ${answer.slice(0, 500)}`);";
   source = source.slice(0, start) + replacement + source.slice(end);
 }
 
-if (source.includes(directUrl)) throw new Error('[realtime] refusing to build with a browser-direct OpenAI WebRTC call');
+if (source.includes('https://api.openai.com/v1/realtime/calls')) throw new Error('[realtime] refusing to build with a browser-direct OpenAI WebRTC call');
 if (!source.includes("fetch('/api/realtime/webrtc-answer'")) throw new Error('[realtime] same-origin WebRTC proxy call was not installed');
 if (!source.includes('const realtimeClientSecret =')) throw new Error('[realtime] realtime client secret guard was not installed');
 
