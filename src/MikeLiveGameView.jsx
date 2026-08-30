@@ -13,7 +13,6 @@ export default function MikeLiveGameView() {
   const streamRef = useRef(null);
   const timerRef = useRef(null);
   const [watching, setWatching] = useState(false);
-  const [source, setSource] = useState('');
   const [error, setError] = useState('');
 
   const publishFrame = () => {
@@ -30,24 +29,29 @@ export default function MikeLiveGameView() {
     window.dispatchEvent(new CustomEvent('mike-live-game-frame', { detail: { imageUrl } }));
   };
 
-  const start = async (mode) => {
+  const stop = () => {
+    if (timerRef.current) window.clearInterval(timerRef.current);
+    timerRef.current = null;
+    stopTracks(streamRef.current);
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setWatching(false);
+  };
+
+  const startCamera = async () => {
     if (watching) return;
     setError('');
     try {
-      let stream;
-      if (mode === 'screen') {
-        if (!navigator.mediaDevices?.getDisplayMedia) throw new Error('Screen sharing is not available in this browser. Use the camera option instead.');
-        stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-      } else {
-        if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera access is not available in this browser.');
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
-      }
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera access is not available in this browser.');
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      });
       streamRef.current = stream;
       const video = videoRef.current;
       video.srcObject = stream;
       video.muted = true;
       await video.play();
-      setSource(mode);
       setWatching(true);
       publishFrame();
       timerRef.current = window.setInterval(publishFrame, FRAME_MS);
@@ -56,45 +60,32 @@ export default function MikeLiveGameView() {
     } catch (err) {
       stopTracks(streamRef.current);
       streamRef.current = null;
-      setError(err?.message || 'Mike could not start the live game view.');
+      setError(err?.message || 'Mike could not start the camera.');
     }
-  };
-
-  const stop = () => {
-    if (timerRef.current) window.clearInterval(timerRef.current);
-    timerRef.current = null;
-    stopTracks(streamRef.current);
-    streamRef.current = null;
-    if (videoRef.current) videoRef.current.srcObject = null;
-    setWatching(false);
-    setSource('');
   };
 
   useEffect(() => () => stop(), []);
 
   return (
-    <section className="mike-games mike-live-game" aria-label="Mike Live Game View" style={{ marginTop: 18 }}>
+    <section className="mike-games mike-live-game" aria-label="Mike Live" style={{ marginTop: 18 }}>
       <div className="mike-games-head">
         <div>
-          <span className="mike-games-kicker">LIVE GAME VIEW</span>
-          <h2>Let Mike watch the game.</h2>
-          <p>Mike keeps the latest visual frame in view so you can ask what just happened without repeating yourself.</p>
+          <span className="mike-games-kicker">MIKE LIVE</span>
+          <h2>Show Mike what's happening.</h2>
+          <p>Turn on your camera and talk to Mike about what you're seeing.</p>
         </div>
-        {watching ? (
-          <button type="button" className="mike-games-toggle" onClick={stop}>Stop watching</button>
-        ) : (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            <button type="button" className="mike-games-toggle" onClick={() => start('camera')}>Use camera</button>
-            <button type="button" className="mike-games-toggle" onClick={() => start('screen')}>Share screen</button>
-          </div>
+        {!watching && (
+          <button type="button" className="mike-games-toggle" onClick={startCamera}>Use camera</button>
         )}
       </div>
       {watching && (
         <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
-          <video ref={videoRef} playsInline muted style={{ width: '100%', maxHeight: 280, objectFit: 'contain', borderRadius: 14, background: '#000' }} aria-label="Live game preview" />
-          <div className="mike-game-active">● Mike is watching via {source === 'screen' ? 'screen share' : 'camera'} — refreshing the visual context every 2.5 seconds.</div>
+          <video ref={videoRef} playsInline muted style={{ width: '100%', maxHeight: 280, objectFit: 'contain', borderRadius: 14, background: '#000' }} aria-label="Mike Live camera preview" />
+          <div className="mike-game-active">● Mike is watching — visual context refreshes every 2.5 seconds.</div>
+          <button type="button" className="mike-games-toggle" onClick={stop}>End Mike Live</button>
         </div>
       )}
+      {!watching && <video ref={videoRef} playsInline muted style={{ display: 'none' }} aria-hidden="true" />}
       <canvas ref={canvasRef} style={{ display: 'none' }} aria-hidden="true" />
       {error && <div role="alert" style={{ marginTop: 10 }}>{error}</div>}
     </section>
