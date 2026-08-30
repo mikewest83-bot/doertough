@@ -4,6 +4,8 @@
 // endpoint intentionally skips the generic in-memory limiter because voice
 // startup can legitimately involve multiple HTTP requests.
 
+import crypto from 'node:crypto';
+
 const PROTECTED = [
   '/api/ask',
   '/api/tts',
@@ -34,12 +36,22 @@ const EXTRA_ORIGINS = (process.env.MIKE_ALLOWED_ORIGINS || '')
   .filter(Boolean);
 const ALLOWED_ORIGINS = new Set([...DEFAULT_ORIGINS, ...EXTRA_ORIGINS]);
 
-const REQUIRE_ORIGIN = String(process.env.MIKE_REQUIRE_ORIGIN || '') === 'true';
+// Secure by default. Explicit false is available for non-browser local tooling.
+const REQUIRE_ORIGIN = process.env.MIKE_REQUIRE_ORIGIN === undefined
+  ? true
+  : String(process.env.MIKE_REQUIRE_ORIGIN) === 'true';
 const PER_HOUR = Number(process.env.MIKE_RATE_PER_HOUR || 40);
 const PER_MINUTE = Number(process.env.MIKE_RATE_PER_MINUTE || 8);
 const AUTH_PER_HOUR = Number(process.env.MIKE_AUTH_PER_HOUR || 20);
 const AUTH_PER_MINUTE = Number(process.env.MIKE_AUTH_PER_MINUTE || 5);
 const ACCESS_CODE = process.env.MIKE_ACCESS_CODE || '';
+
+const safeEqual = (provided, expected) => {
+  const a = Buffer.from(String(provided || ''), 'utf8');
+  const b = Buffer.from(String(expected || ''), 'utf8');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+};
 
 // key -> { hour: { count, resetAt }, minute: { count, resetAt } }
 const buckets = new Map();
@@ -92,6 +104,10 @@ export function installGuards(app) {
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('Permissions-Policy', 'camera=(), geolocation=(), payment=()');
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; connect-src 'self' https: wss:; font-src 'self' data: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    );
     next();
   });
 
@@ -104,7 +120,7 @@ export function installGuards(app) {
 
     if (!isAuthRoute && !isProtected) return next();
 
-    if (ACCESS_CODE && !isAuthRoute && req.get('x-mike-code') !== ACCESS_CODE) {
+    if (ACCESS_CODE && !isAuthRoute && !safeEqual(req.get('x-mike-code'), ACCESS_CODE)) {
       return res.status(401).json({ error: 'access_code_required' });
     }
 
@@ -151,6 +167,7 @@ export function installGuards(app) {
     `[guard] active — ${PER_MINUTE}/min, ${PER_HOUR}/hr general; ` +
       `voice token protected by auth/origin/Postgres allowance; ` +
       `auth ${AUTH_PER_MINUTE}/min, ${AUTH_PER_HOUR}/hr per IP; ` +
-      `${ALLOWED_ORIGINS.size} allowed origins; access code ${ACCESS_CODE ? 'ON' : 'off'}`
+      `${ALLOWED_ORIGINS.size} allowed origins; origin required ${REQUIRE_ORIGIN ? 'ON' : 'off'}; ` +
+      `access code ${ACCESS_CODE ? 'ON' : 'off'}`
   );
 }
