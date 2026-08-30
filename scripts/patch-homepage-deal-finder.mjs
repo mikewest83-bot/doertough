@@ -1,16 +1,6 @@
 import fs from 'node:fs';
 
-const path = 'src/main.jsx';
-let source = fs.readFileSync(path, 'utf8');
-
-const marker = '      <section className="chat" aria-live="polite">';
-if (source.includes('homepage-deal-finder')) {
-  process.stdout.write('[build] Homepage Deal Finder already installed\n');
-} else if (!source.includes(marker)) {
-  throw new Error('[homepage-deal-finder] chat section anchor not found');
-} else {
-  const card = `      <section className="homepage-deal-finder" data-feature="homepage-deal-finder" aria-label="Mike Deal Finder">\n        <div className="homepage-deal-finder-copy">\n          <span className="homepage-deal-finder-kicker">MIKE DEAL FINDER</span>\n          <h2>Find the deal. Save the money.</h2>\n          <p>Tell Mike what you want, where you want it, and what you want to spend. Mike hunts current listings, spots the standouts, and helps you know what to offer before someone else grabs the deal.</p>\n          <div className="homepage-deal-finder-actions">\n            <button type="button" onClick={() => ask('Find me a good buy near me.')} disabled={busy || conversationMode}>Find me a deal</button>\n            <button type="button" className="secondary" onClick={() => ask('Set up a deal alert for something I am looking for.')} disabled={busy || conversationMode}>Keep watching for me</button>\n          </div>\n        </div>\n      </section>\n`;
-  source = source.replace(marker, card + marker);
-  fs.writeFileSync(path, source);
-  process.stdout.write('[build] Added Mike Deal Finder to homepage\n');
-}
+// Deal-alert / "Watch It for Me" UI is intentionally disabled for now.
+// Keep this build patch as a no-op so the feature cannot be reintroduced by
+// a later build from the preserved deal-finder backend code.
+process.stdout.write('[build] Watch It for Me UI disabled\n');
