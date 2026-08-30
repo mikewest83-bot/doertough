@@ -8,6 +8,8 @@ const IMPORT_MARKER = "import { CODE_TOOLS, CODE_TOOL_HANDLERS } from './code-to
 const HANDLER_MARKER = '...FIELD_TOOL_HANDLERS,\n};';
 const OWNER_MARKER = "const OWNER_CODE_TOOL_NAMES = new Set(CODE_TOOLS.map((tool) => tool.name));";
 const TOOLS_MARKER = 'const tools = owner ? [...LIVE_TOOLS, ...CODE_TOOLS] : PUBLIC_TOOLS;';
+const AUTH_MARKER = "return owner || !OWNER_ONLY_TOOLS.has(name);";
+const AUTH_REPLACEMENT = "if (OWNER_CODE_TOOL_NAMES.has(name)) return owner;\n    return owner || !OWNER_ONLY_TOOLS.has(name);";
 
 let out = source;
 
@@ -34,13 +36,12 @@ if (!out.includes(TOOLS_MARKER)) {
   out = out.replace(old, TOOLS_MARKER);
 }
 
-const oldAuthorize = 'return owner || !OWNER_ONLY_TOOLS.has(name);';
-const newAuthorize = 'return owner && (OWNER_CODE_TOOL_NAMES.has(name) || !OWNER_ONLY_TOOLS.has(name));';
-if (out.includes(oldAuthorize) && !out.includes(newAuthorize)) {
-  out = out.replace(oldAuthorize, newAuthorize);
+if (!out.includes(AUTH_REPLACEMENT)) {
+  if (!out.includes(AUTH_MARKER)) throw new Error('Owner Code Mode patch: authorization anchor not found.');
+  out = out.replace(AUTH_MARKER, AUTH_REPLACEMENT);
 }
 
-if (!out.includes(newAuthorize)) {
+if (!out.includes(AUTH_REPLACEMENT)) {
   throw new Error('Owner Code Mode patch: authorization guard could not be wired.');
 }
 
