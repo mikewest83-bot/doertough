@@ -5,9 +5,9 @@ const file = path.resolve('server/index.mjs');
 const source = fs.readFileSync(file, 'utf8');
 
 const IMPORT_MARKER = "import { CODE_TOOLS, CODE_TOOL_HANDLERS } from './code-tools.mjs';";
-const HANDLER_MARKER = '...FIELD_TOOL_HANDLERS,\n};';
 const OWNER_MARKER = "const OWNER_CODE_TOOL_NAMES = new Set(CODE_TOOLS.map((tool) => tool.name));";
 const TOOLS_MARKER = 'const tools = owner ? [...LIVE_TOOLS, ...CODE_TOOLS] : PUBLIC_TOOLS;';
+const HANDLER_LINE = '  ...CODE_TOOL_HANDLERS,';
 const AUTH_MARKER = "return owner || !OWNER_ONLY_TOOLS.has(name);";
 const AUTH_REPLACEMENT = "if (OWNER_CODE_TOOL_NAMES.has(name)) return owner;\n    return owner || !OWNER_ONLY_TOOLS.has(name);";
 
@@ -25,9 +25,13 @@ if (!out.includes(OWNER_MARKER)) {
   out = out.replace(anchor, `${anchor}\n${OWNER_MARKER}`);
 }
 
-if (!out.includes('...CODE_TOOL_HANDLERS,')) {
-  if (!out.includes(HANDLER_MARKER)) throw new Error('Owner Code Mode patch: handler anchor not found.');
-  out = out.replace(HANDLER_MARKER, `...FIELD_TOOL_HANDLERS,\n  ...CODE_TOOL_HANDLERS,\n};`);
+if (!out.includes(HANDLER_LINE)) {
+  const handlerStart = 'const LIVE_TOOL_HANDLERS = {';
+  const start = out.indexOf(handlerStart);
+  if (start < 0) throw new Error('Owner Code Mode patch: LIVE_TOOL_HANDLERS block not found.');
+  const end = out.indexOf('\n};', start);
+  if (end < 0) throw new Error('Owner Code Mode patch: LIVE_TOOL_HANDLERS end not found.');
+  out = out.slice(0, end) + `\n${HANDLER_LINE}` + out.slice(end);
 }
 
 if (!out.includes(TOOLS_MARKER)) {
