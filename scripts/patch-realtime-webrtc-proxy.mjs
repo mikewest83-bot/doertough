@@ -22,7 +22,7 @@ const route = [
   "    if (!clientSecret) return res.status(401).json({ error: 'realtime_token_required' });",
   '',
   '    const form = new FormData();',
-  "    form.append('sdp', new Blob([sdp], { type: 'application/sdp' }));",
+  "    form.append('sdp', sdp);",
   "    const origin = String(process.env.PUBLIC_APP_ORIGIN || 'https://doertoughmikeai.com').replace(/\\/$/, '');",
   "    const upstream = await fetch('https://api.openai.com/v1/realtime/calls', {",
   "      method: 'POST',",
