@@ -14,12 +14,16 @@ const safe = "      dc.send(JSON.stringify({ type: 'response.create', response: 
 if (source.includes(legacy)) source = source.replaceAll(legacy, safe);
 
 const bridge = `  useEffect(() => {
+    const visionHandoffMessage = (visionText) => 'I uploaded a photo. Mike Vision looked at it and reported:\n\n' + visionText + '\n\nTreat that as the description of the item and answer me normally. If this is about what it is worth, whether it is a good deal, or what to offer, run a real DealTough analysis instead of estimating a price yourself. If DealTough cannot establish a value, say that plainly rather than guessing a range.';
     const onVisionResult = (event) => {
       const text = String(event.detail?.text || '').trim();
       if (!text) return;
       const dc = conversationRef.current?.dataChannel;
       if (!dc || dc.readyState !== 'open') {
-        setMessages((prev) => [...prev, { role: 'user', text: 'I uploaded a photo for you to look at.' }, { role: 'mike', text }]);
+        setMessages((prev) => [...prev, { role: 'user', text: 'I uploaded a photo for you to look at.' }]);
+        fetchJson('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ message: visionHandoffMessage(text), history: [] }) }, 55000)
+          .then((data) => { const reply = String(data?.text || '').trim(); setMessages((prev) => [...prev, { role: 'mike', text: reply || text }]); })
+          .catch(() => { setMessages((prev) => [...prev, { role: 'mike', text }]); });
         return;
       }
       try {
@@ -40,4 +44,4 @@ if (!source.includes("mike-vision-result")) {
 }
 
 fs.writeFileSync(target, source);
-console.log('[build] Vision-to-voice bridge ready');
+console.log('[build] Vision-to-voice bridge ready with tool-enabled chat fallback');
