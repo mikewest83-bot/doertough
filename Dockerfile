@@ -2,8 +2,8 @@ FROM node:20-bookworm-slim
 
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install --no-audit --no-fund
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
 
 COPY . ./
 RUN node scripts/patch-realtime-sdp.mjs
