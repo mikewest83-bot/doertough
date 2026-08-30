@@ -1,8 +1,8 @@
 // Build-time, idempotent bridge for OpenAI Realtime function calls.
 // The Realtime model can request a tool over the WebRTC data channel, but
 // business logic must stay server-side. This patch teaches the browser to
-// forward authenticated tool calls to /api/realtime/tool and return the
-// result to the Realtime conversation.
+// forward authenticated tool calls to /api/realtime/tool and return the result
+// to the Realtime conversation.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +18,16 @@ const legacySessionEndpoint = "fetchJson('/api/speech/session'";
 const canonicalSessionEndpoint = "fetchJson('/api/speech/token'";
 if (source.includes(legacySessionEndpoint)) {
   source = source.replace(legacySessionEndpoint, canonicalSessionEndpoint);
+}
+
+// Normalize the ephemeral client secret at the browser/server boundary and
+// fail closed if it is missing. Never allow the literal string "undefined"
+// to become an Authorization credential sent upstream to OpenAI.
+const tokenDataLine = "      const tokenData = await fetchJson('/api/speech/token', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: '{}' }, 20000);";
+const tokenGuard = "      const realtimeClientSecret = String(tokenData?.token ?? tokenData?.value ?? tokenData?.client_secret?.value ?? '').trim();\n      if (!realtimeClientSecret || realtimeClientSecret === 'undefined' || realtimeClientSecret === 'null') throw new Error('realtime_client_secret_missing');";
+if (!source.includes('const realtimeClientSecret =')) {
+  if (!source.includes(tokenDataLine)) throw new Error('[realtime] token route anchor not found');
+  source = source.replace(tokenDataLine, `${tokenDataLine}\n${tokenGuard}`);
 }
 
 const helperAnchor = "  const logClientError = async (phase, err) => { console.error(`[voice] ${phase}:`, err); try { await fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phase, name: err?.name || '', message: err?.message || String(err || ''), extra: err?.stack || '' }) }); } catch {} };";
@@ -39,7 +49,7 @@ if (!source.includes("message.type === 'response.function_call_arguments.done'")
 // endpoint directly. The authenticated same-origin proxy owns the upstream
 // Authorization header. This runs after the other realtime client patches so
 // a later patch cannot accidentally restore the browser-direct request.
-const proxiedAnswerCall = "const answerResponse = await fetch('/api/realtime/webrtc-answer', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders(), 'X-Mike-Realtime-Token': tokenData.token }, body: JSON.stringify({ sdp: pc.localDescription.sdp }) });";
+const proxiedAnswerCall = "const answerResponse = await fetch('/api/realtime/webrtc-answer', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders(), 'X-Mike-Realtime-Token': realtimeClientSecret }, body: JSON.stringify({ sdp: pc.localDescription.sdp }) });";
 const directUrl = 'https://api.openai.com/v1/realtime/calls';
 
 if (source.includes(directUrl)) {
@@ -57,6 +67,12 @@ if (source.includes(directUrl)) {
 if (!source.includes("fetch('/api/realtime/webrtc-answer'")) {
   throw new Error('[realtime] same-origin WebRTC proxy call was not installed');
 }
+if (!source.includes('const realtimeClientSecret =')) {
+  throw new Error('[realtime] realtime client secret guard was not installed');
+}
+if (source.includes('X-Mike-Realtime-Token\': tokenData.token')) {
+  throw new Error('[realtime] refusing to build with an unguarded realtime token header');
+}
 
 fs.writeFileSync(target, source);
-console.log('[build] OpenAI Realtime client tool dispatch ready; canonical speech token endpoint enforced; browser-direct WebRTC disabled');
+console.log('[build] OpenAI Realtime client tool dispatch ready; canonical speech token endpoint enforced; guarded ephemeral secret propagation; browser-direct WebRTC disabled');
