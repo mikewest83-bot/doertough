@@ -12,22 +12,21 @@
     "test": "mocha --exit --recursive"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "^4.3.0",
-    "bcryptjs": "^3.0.0",
-    "express": "^5.1.0",
-    "jsonwebtoken": "^9.0.0",
-    "lucide-react": "^0.469.0",
-    "openai": "^5.12.2",
-    "pg": "^8.13.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "rss-parser": "^3.13.0",
-    "vite": "^6.0.0"
+    "@vitejs/plugin-react": "4.3.0",
+    "bcryptjs": "3.0.0",
+    "express": "5.1.0",
+    "jsonwebtoken": "9.0.2",
+    "lucide-react": "0.469.0",
+    "openai": "5.12.2",
+    "pg": "8.13.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "rss-parser": "3.13.0",
+    "vite": "6.4.1"
   },
   "devDependencies": {
     "node-pg-migrate": "8.0.4",
-    "mocha": "^10.2.0",
-    "chai": "^4.3.7",
-    "nc": "1.0.0"
+    "mocha": "10.2.0",
+    "chai": "4.3.7"
   }
 }
