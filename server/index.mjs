@@ -46,6 +46,7 @@ import {
   isOwner,
   authConfigured,
 } from './auth.mjs';
+import { OWNER_ONLY_TOOLS } from './tool-access.mjs';
 
 const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS];
 const LIVE_TOOL_HANDLERS = {
@@ -54,8 +55,6 @@ const LIVE_TOOL_HANDLERS = {
   ...FREE_TOOL_HANDLERS,
   ...FIELD_TOOL_HANDLERS,
 };
-
-const OWNER_ONLY_TOOLS = new Set(['get_store_sales', 'get_bot_status', 'get_btc_rsi']);
 const PUBLIC_TOOLS = LIVE_TOOLS.filter((tool) => !OWNER_ONLY_TOOLS.has(tool.name));
 const NON_OWNER_NOTE =
   '\n\nTOOL AVAILABILITY FOR THIS CONVERSATION\n' +
@@ -78,7 +77,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 45_000);
+const openai = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: OPENAI_TIMEOUT_MS, maxRetries: 0 })
+  : null;
 
 app.disable('x-powered-by');
 
@@ -134,9 +136,6 @@ app.post('/api/auth/forgot-password', requestPasswordReset);
 app.post('/api/auth/reset-password', resetPassword);
 
 // ===== Realtime voice =====
-// OpenAI Realtime is the only production voice transport. The browser gets a
-// short-lived client secret from this route, then connects directly over WebRTC.
-// Voice reservations are bounded per account and across the whole service.
 const MAX_SESSION_SECONDS = Number(process.env.VOICE_MAX_SESSION_SECONDS || 600);
 const PAID_SESSION_LIMIT = Number(process.env.VOICE_SESSIONS_PRO || 40);
 const FREE_SESSION_LIMIT = Number(process.env.VOICE_SESSIONS_FREE || 1);
@@ -147,53 +146,29 @@ const GLOBAL_MINUTE_LIMIT = Number(process.env.VOICE_MINUTES_GLOBAL || 5000);
 
 app.get('/api/speech/token', async (req, res) => {
   try {
-    if (!req.user) {
-      return res.status(401).json({ error: 'sign_in_required', message: 'Sign in to talk with Mike.' });
-    }
-
+    if (!req.user) return res.status(401).json({ error: 'sign_in_required', message: 'Sign in to talk with Mike.' });
     const paidAccess = hasPaidAccess(req.user);
     const sessionLimit = paidAccess ? PAID_SESSION_LIMIT : FREE_SESSION_LIMIT;
     const minuteLimit = paidAccess ? PAID_MINUTE_LIMIT : FREE_MINUTE_LIMIT;
     const outOfBudget = () => res.status(402).json({
       error: paidAccess ? 'voice_allowance_reached' : 'upgrade_required',
-      message: paidAccess
-        ? "You've used this month's voice time. It resets on a rolling 30-day window."
-        : 'Start your free trial to talk with Mike.',
+      message: paidAccess ? "You've used this month's voice time. It resets on a rolling 30-day window." : 'Start your free trial to talk with Mike.',
     });
-
     const usedSessions = await countVoiceSessions(req.user.id, MAX_SESSION_SECONDS);
     if (usedSessions >= sessionLimit) return outOfBudget();
-
     const secondsAllowance = minuteLimit * 60;
     const secondsUsed = await countVoiceSeconds(req.user.id, MAX_SESSION_SECONDS);
     if (secondsUsed >= secondsAllowance) return outOfBudget();
-
     const globalUsedSessions = await countVoiceSessionsGlobal(MAX_SESSION_SECONDS);
     const globalUsedSeconds = await countVoiceSecondsGlobal(MAX_SESSION_SECONDS);
-    if (
-      globalUsedSessions >= GLOBAL_SESSION_LIMIT ||
-      globalUsedSeconds >= GLOBAL_MINUTE_LIMIT * 60
-    ) {
+    if (globalUsedSessions >= GLOBAL_SESSION_LIMIT || globalUsedSeconds >= GLOBAL_MINUTE_LIMIT * 60) {
       console.error(`[speech-engine] global ceiling hit - ${globalUsedSessions} sessions, ${Math.round(globalUsedSeconds / 60)} minutes`);
-      return res.status(503).json({
-        error: 'voice_capacity_reached',
-        message: 'Mike is at capacity right now. Try again a bit later.',
-      });
+      return res.status(503).json({ error: 'voice_capacity_reached', message: 'Mike is at capacity right now. Try again a bit later.' });
     }
-
     const result = await getSpeechEngineToken();
     const sessionKey = crypto.randomUUID();
-    await recordVoiceSession(req.user.id, result.agentId, {
-      sessionKey,
-      reservedSeconds: MAX_SESSION_SECONDS,
-    });
-
-    res.json({
-      ...result,
-      sessionKey,
-      maxSessionSeconds: MAX_SESSION_SECONDS,
-      minutesRemaining: Math.max(0, Math.floor((secondsAllowance - secondsUsed) / 60)),
-    });
+    await recordVoiceSession(req.user.id, result.agentId, { sessionKey, reservedSeconds: MAX_SESSION_SECONDS });
+    res.json({ ...result, sessionKey, maxSessionSeconds: MAX_SESSION_SECONDS, minutesRemaining: Math.max(0, Math.floor((secondsAllowance - secondsUsed) / 60)) });
   } catch (error) {
     console.error('[speech-engine] token failed:', error.message || error);
     res.status(error.status || 502).json({ error: error.message || 'speech_engine_unavailable' });
@@ -204,16 +179,11 @@ app.post('/api/speech/session-end', authRequired, async (req, res) => {
   try {
     const sessionKey = String(req.body?.sessionKey || '').trim();
     if (!sessionKey) return res.status(400).json({ error: 'session_key_required' });
-
     const reported = Number(req.body?.seconds);
-    if (!Number.isFinite(reported) || reported < 0) {
-      return res.status(400).json({ error: 'seconds_invalid' });
-    }
-
+    if (!Number.isFinite(reported) || reported < 0) return res.status(400).json({ error: 'seconds_invalid' });
     const seconds = Math.min(Math.round(reported), MAX_SESSION_SECONDS);
     const row = await closeVoiceSession(sessionKey, req.user.id, seconds);
     if (!row) return res.json({ settled: false });
-
     console.log(`[speech-engine] session settled: ${seconds}s for account #${req.user.id}`);
     res.json({ settled: true, seconds });
   } catch (error) {
@@ -290,10 +260,8 @@ app.post('/api/ask', async (req, res) => {
   try {
     requireKey(process.env.OPENAI_API_KEY, 'openai');
     if (!openai) throw new Error('openai_client_missing');
-
     const message = String(req.body?.message || '').trim();
     if (!message) return res.status(400).json({ error: 'message_required' });
-
     const history = Array.isArray(req.body?.history) ? req.body.history.slice(-10) : [];
     let input = [
       ...history.map((item) => ({
@@ -302,13 +270,11 @@ app.post('/api/ask', async (req, res) => {
       })),
       { role: 'user', content: [{ type: 'input_text', text: message }] },
     ];
-
     const owner = isOwner(req.user);
     const tools = owner ? LIVE_TOOLS : PUBLIC_TOOLS;
     const relevantMemories = req.user ? await getRelevantMemories(req.user.id, message, 12) : [];
     const instructions = (owner ? MIKE_INSTRUCTIONS : MIKE_INSTRUCTIONS + NON_OWNER_NOTE) + memoryPrompt(relevantMemories);
     let text = "I'm here. Give me another shot.";
-
     for (let round = 0; round < 4; round += 1) {
       const response = await openai.responses.create({ model: OPENAI_MODEL, instructions, input, tools });
       const calls = (response.output || []).filter((item) => item.type === 'function_call');
@@ -316,12 +282,10 @@ app.post('/api/ask', async (req, res) => {
         text = response.output_text?.trim() || text;
         break;
       }
-
       input = [...input, ...response.output];
       for (const call of calls) {
         let args = {};
         try { args = call.arguments ? JSON.parse(call.arguments) : {}; } catch {}
-
         let output;
         try {
           if (!owner && OWNER_ONLY_TOOLS.has(call.name)) {
@@ -335,15 +299,13 @@ app.post('/api/ask', async (req, res) => {
             error: toolError.message === 'mike_tool_unauthorized'
               ? 'not_available'
               : toolError.message === 'mike_tool_not_allowed'
-                ? `Unknown tool "${call.name}".`
+                ? `Unknown tool \"${call.name}\".`
                 : 'tool_unavailable',
           };
         }
-
         input.push({ type: 'function_call_output', call_id: call.call_id, output: JSON.stringify(output) });
       }
     }
-
     res.json({ text });
   } catch (error) {
     console.error('[ask] failed:', error.message || error);
@@ -368,13 +330,7 @@ app.post('/api/memory', authRequired, async (req, res) => {
     const memory = String(req.body?.memory || '').trim();
     if (!memory) return res.status(400).json({ error: 'memory_required' });
     if (!CATEGORIES.has(category)) return res.status(400).json({ error: 'memory_category_invalid' });
-
-    const saved = await saveMemory(req.user.id, {
-      category,
-      memory,
-      importance: req.body?.importance,
-      source: req.body?.source || 'user',
-    });
+    const saved = await saveMemory(req.user.id, { category, memory, importance: req.body?.importance, source: req.body?.source || 'user' });
     res.json({ memory: saved });
   } catch (error) {
     console.error('[memory] save failed:', error.message || error);
@@ -401,12 +357,30 @@ app.use((req, res, next) => {
 });
 
 // ===== Static + SPA fallback =====
-app.use(express.static(path.join(__dirname, '..', 'dist'), { maxAge: '1h', etag: true, dotfiles: 'deny' }));
-app.use((req, res) => res.sendFile(path.join(__dirname, '..', 'dist', 'index.html')));
+const DIST_DIR = path.join(__dirname, '..', 'dist');
+app.use('/assets', express.static(path.join(DIST_DIR, 'assets'), {
+  maxAge: '1y',
+  immutable: true,
+  etag: false,
+  dotfiles: 'deny',
+}));
+app.use(express.static(DIST_DIR, { maxAge: 0, etag: true, dotfiles: 'deny' }));
+app.use((req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.sendFile(path.join(DIST_DIR, 'index.html'));
+});
 
 migrate().catch((error) => console.error('[db] migrate threw:', error.message || error));
 
 const server = http.createServer(app);
+// Railway's proxy can keep an upstream connection alive longer than Node's
+// default 5s. Keep the socket alive long enough that the proxy never reuses a
+// socket Node has already closed.
+server.keepAliveTimeout = 65_000;
+server.headersTimeout = 66_000;
+
 server.listen(PORT, async () => {
   console.log(`[mike-ai] listening on port ${PORT}`);
   console.log(`[mike-ai] openai: ${!!process.env.OPENAI_API_KEY}`);
@@ -418,3 +392,21 @@ server.listen(PORT, async () => {
     console.error('[mike-ai] realtime voice initialization failed:', error.message || error);
   }
 });
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[mike-ai] ${signal} received; draining HTTP connections`);
+  const forceExit = setTimeout(() => {
+    console.error('[mike-ai] graceful shutdown timed out; exiting');
+    process.exit(1);
+  }, 10_000);
+  forceExit.unref();
+  server.close(() => {
+    clearTimeout(forceExit);
+    console.log('[mike-ai] HTTP server drained; exiting');
+    process.exit(0);
+  });
+}
+for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => { void shutdown(signal); });
