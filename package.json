@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/patch-homepage-starters.mjs && node scripts/patch-index-roadmap.mjs && node scripts/patch-index-realtime-tools.mjs && node scripts/patch-voice-reservations.mjs && node scripts/patch-realtime-webrtc-proxy.mjs && node scripts/patch-vision-route.mjs && node scripts/patch-vision-voice-bridge.mjs && node scripts/patch-vision-ui.mjs && node scripts/patch-remove-duplicate-photo-button.mjs && node scripts/patch-realtime-response-create.mjs && node scripts/patch-owner-portal.mjs && node scripts/patch-realtime-audio-devices.mjs && node scripts/patch-mike-music-ui.mjs && node scripts/patch-index-coding-tools.mjs && node scripts/patch-owner-metrics.mjs && node scripts/patch-games-voice-bridge.mjs && node scripts/patch-google-tools.mjs && vite build",
+    "build": "node scripts/patch-deal-finder.mjs && node scripts/patch-homepage-starters.mjs && node scripts/patch-index-roadmap.mjs && node scripts/patch-index-realtime-tools.mjs && node scripts/patch-voice-reservations.mjs && node scripts/patch-realtime-webrtc-proxy.mjs && node scripts/patch-vision-route.mjs && node scripts/patch-vision-voice-bridge.mjs && node scripts/patch-vision-ui.mjs && node scripts/patch-remove-duplicate-photo-button.mjs && node scripts/patch-realtime-response-create.mjs && node scripts/patch-owner-portal.mjs && node scripts/patch-realtime-audio-devices.mjs && node scripts/patch-mike-music-ui.mjs && node scripts/patch-index-coding-tools.mjs && node scripts/patch-owner-metrics.mjs && node scripts/patch-games-voice-bridge.mjs && node scripts/patch-google-tools.mjs && vite build",
     "start": "node server/index.mjs",
     "migrate": "node-pg-migrate up --no-check-order",
     "migrate:down": "node-pg-migrate down",
@@ -15,8 +15,7 @@
     "@vitejs/plugin-react": "4.7.0",
     "bcryptjs": "3.0.0",
     "express": "5.1.0",
-    "jsonwebtoken": "9.0.2",
-    "lucide-react": "0.469.0",
+    "jsonwebtoken": "9.0.0",
     "node-pg-migrate": "8.0.4",
     "openai": "5.12.2",
     "pg": "8.13.0",
