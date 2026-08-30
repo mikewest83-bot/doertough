@@ -1,12 +1,18 @@
 // Owner-only coding tools for Mike AI.
 // Read operations use the public GitHub API; write operations require GITHUB_TOKEN.
-// All tools are additionally gated by the server's owner check before execution.
+// Authorization is enforced both by the gateway and inside each handler.
+
+import { isOwner } from './auth.mjs';
 
 const DEFAULT_REPO = 'mikewest83-bot/doertough';
 const API_ROOT = 'https://api.github.com';
 
 function repoName(value) {
   return String(value || DEFAULT_REPO).trim() || DEFAULT_REPO;
+}
+
+function assertOwner(user) {
+  if (!isOwner(user)) throw new Error('mike_tool_unauthorized');
 }
 
 async function githubFetch(path, options = {}) {
@@ -42,12 +48,14 @@ export const CODING_TOOLS = [
   { type:'function', name:'code_write_file', description:'Write or update one repository text file. Owner only; requires configured GitHub write credentials. Never use this for secrets.', parameters:{ type:'object', properties:{ path:{ type:'string', description:'Repository-relative file path.' }, content:{ type:'string', description:'Complete UTF-8 file contents.' }, message:{ type:'string', description:'Commit message.' }, branch:{ type:'string', description:'Target branch. Prefer a feature branch, never production directly.' } }, required:['path','content','message','branch'], additionalProperties:false } },
 ];
 
-async function codeRepoStatus({ repo } = {}) {
+async function codeRepoStatus({ repo, user } = {}) {
+  assertOwner(user);
   const data = await githubFetch(`/repos/${repoName(repo)}`);
   return { repository: data.full_name, private: !!data.private, defaultBranch: data.default_branch, visibility: data.visibility, archived: !!data.archived };
 }
 
-async function codeReadFile({ path, ref } = {}) {
+async function codeReadFile({ path, ref, user } = {}) {
+  assertOwner(user);
   const safe = assertSafePath(path);
   const repo = repoName();
   const suffix = ref ? `?ref=${encodeURIComponent(String(ref))}` : '';
@@ -58,14 +66,16 @@ async function codeReadFile({ path, ref } = {}) {
   return { path: safe, sha: data.sha, content: content.slice(0, 50000), truncated: content.length > 50000 };
 }
 
-async function codeSearch({ query, topn = 10 } = {}) {
+async function codeSearch({ query, topn = 10, user } = {}) {
+  assertOwner(user);
   const q = String(query || '').trim();
   if (!q) throw new Error('search_query_required');
   const data = await githubFetch(`/search/code?q=${encodeURIComponent(`${q} repo:${repoName()}`)}&per_page=${Math.min(20, Math.max(1, Number(topn) || 10))}`);
   return { total: data.total_count || 0, results: (data.items || []).map((item) => ({ path: item.path, url: item.html_url, repository: item.repository?.full_name })) };
 }
 
-async function codeCreateBranch({ branch, base = 'main' } = {}) {
+async function codeCreateBranch({ branch, base = 'main', user } = {}) {
+  assertOwner(user);
   requireWriteAccess();
   const name = String(branch || '').trim();
   if (!/^[A-Za-z0-9._\/-]{1,120}$/.test(name) || name === 'main' || name.startsWith('main/')) throw new Error('unsafe_branch');
@@ -76,7 +86,8 @@ async function codeCreateBranch({ branch, base = 'main' } = {}) {
   return { branch:name, sha:created.object?.sha || sha };
 }
 
-async function codeWriteFile({ path, content, message, branch } = {}) {
+async function codeWriteFile({ path, content, message, branch, user } = {}) {
+  assertOwner(user);
   requireWriteAccess();
   const safe = assertSafePath(path);
   const target = String(branch || '').trim();
