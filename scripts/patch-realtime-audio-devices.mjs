@@ -24,16 +24,21 @@ function mikeAudioDeviceSupport() {
   });
   const prepareInput = async () => {
     state.inputDeviceId = '';
-    if (!mediaDevices?.getUserMedia || !canEnumerate) return '';
-    // Do not guess Bluetooth devices by name. On iOS, the OS owns Bluetooth routing.
-    // Request permission first so device labels/IDs are exposed where supported.
-    try { await mediaDevices.getUserMedia({ audio: audioConstraints() }); } catch {
-      try { await mediaDevices.getUserMedia({ audio: true }); } catch { return ''; }
+    if (!mediaDevices?.getUserMedia) return null;
+    // Acquire the microphone exactly once. Reuse this stream for Realtime so
+    // permission prompts and device contention cannot occur twice.
+    let stream = null;
+    try {
+      stream = await mediaDevices.getUserMedia({ audio: audioConstraints() });
+    } catch {
+      try { stream = await mediaDevices.getUserMedia({ audio: true }); } catch { return null; }
     }
     const devices = await refresh();
-    const input = devices.find((d) => d.kind === 'audioinput' && d.deviceId);
-    state.inputDeviceId = input?.deviceId || '';
-    return state.inputDeviceId;
+    const activeInput = stream.getAudioTracks?.()[0]?.getSettings?.()?.deviceId || '';
+    const input = devices.find((d) => d.kind === 'audioinput' && d.deviceId === activeInput)
+      || devices.find((d) => d.kind === 'audioinput' && d.deviceId);
+    state.inputDeviceId = input?.deviceId || activeInput || '';
+    return { stream, inputDeviceId: state.inputDeviceId };
   };
   const routeOutput = async (audio) => {
     if (!audio || typeof audio.setSinkId !== 'function' || !canEnumerate) return false;
@@ -60,7 +65,7 @@ if (!source.includes('const audioDevices = mikeAudioDeviceSupport();')) {
 
 source = source.replace(
   'const localStream = await navigator.mediaDevices.getUserMedia({ audio: true });',
-  "const preferredInputId = await audioDevices.prepareInput();\n      const localStream = preferredInputId\n        ? await navigator.mediaDevices.getUserMedia({ audio: audioDevices.audioConstraints(preferredInputId) }).catch(() => navigator.mediaDevices.getUserMedia({ audio: audioDevices.audioConstraints() })).catch(() => navigator.mediaDevices.getUserMedia({ audio: true }))\n        : await navigator.mediaDevices.getUserMedia({ audio: audioDevices.audioConstraints() }).catch(() => navigator.mediaDevices.getUserMedia({ audio: true }));"
+  "const preparedAudio = await audioDevices.prepareInput();\n      if (!preparedAudio?.stream) throw new Error('Mike could not access the microphone. Check microphone permission and try again.');\n      const localStream = preparedAudio.stream;"
 );
 source = source.replace(
   "const audio = new Audio(); audio.autoplay = true;",
@@ -68,4 +73,4 @@ source = source.replace(
 );
 
 fs.writeFileSync(target, source);
-console.log('[build] Audio cleanup and device routing wired with safe fallback');
+console.log('[build] Audio cleanup and device routing wired with single microphone acquisition');
