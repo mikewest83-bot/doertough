@@ -27,6 +27,7 @@ jobs:
           docker run --detach --name mike-ai-smoke \
             --publish 18080:3000 \
             -e NODE_ENV=production \
+            -e SMOKE_TEST=1 \
             mike-ai-smoke:${{ github.sha }}
 
       - name: Wait for health endpoint
