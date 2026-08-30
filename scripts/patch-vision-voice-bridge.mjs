@@ -14,7 +14,7 @@ const safe = "      dc.send(JSON.stringify({ type: 'response.create', response: 
 if (source.includes(legacy)) source = source.replaceAll(legacy, safe);
 
 const bridge = `  useEffect(() => {
-    const visionHandoffMessage = (visionText) => 'I uploaded a photo. Mike Vision looked at it and reported:\n\n' + visionText + '\n\nTreat that as the description of the item and answer me normally. If this is about what it is worth, whether it is a good deal, or what to offer, run a real DealTough analysis instead of estimating a price yourself. If DealTough cannot establish a value, say that plainly rather than guessing a range.';
+    const visionHandoffMessage = (visionText) => 'I uploaded a photo. Mike Vision looked at it and reported:\\n\\n' + visionText + '\\n\\nTreat that as the description of the item and answer me normally. If this is about what it is worth, whether it is a good deal, or what to offer, run a real DealTough analysis instead of estimating a price yourself. If DealTough cannot establish a value, say that plainly rather than guessing a range.';
     const onVisionResult = (event) => {
       const text = String(event.detail?.text || '').trim();
       if (!text) return;
