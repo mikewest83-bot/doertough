@@ -223,10 +223,12 @@ export async function deleteMemory(userId, id) {
   if (!userId) return false;
   if (String(id).startsWith('os:')) return deleteOperatingMemory(userId, id);
   if (!(await ensureMemorySchema())) return false;
+  const value = String(id || '').trim();
+  if (!/^\d+$/.test(value)) return false;
   const { rowCount } = await query(
     `UPDATE user_memories SET active = false, updated_at = now()
       WHERE id = $1 AND user_id = $2 AND active = true`,
-    [id, userId]
+    [value, userId]
   );
   return rowCount > 0;
 }
