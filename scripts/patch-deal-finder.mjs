@@ -5,12 +5,16 @@ const personaPath = 'server/persona.mjs';
 
 function patchOnce(path, marker, replacement, label) {
   let text = fs.readFileSync(path, 'utf8');
+  if (text.includes(replacement)) {
+    console.log(`[deal-finder] ${label} already patched`);
+    return;
+  }
   if (text.includes(marker)) {
     text = text.replace(marker, replacement);
     fs.writeFileSync(path, text);
     console.log(`[deal-finder] patched ${label}`);
   } else {
-    console.log(`[deal-finder] ${label} already patched or marker missing`);
+    console.log(`[deal-finder] ${label} marker missing`);
   }
 }
 
