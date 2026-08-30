@@ -35,5 +35,28 @@ if (!source.includes("message.type === 'response.function_call_arguments.done'")
   source = source.replace(messageAnchor, messagePatch);
 }
 
+// FINAL BUILD-TIME GUARD: the browser must never call OpenAI's WebRTC
+// endpoint directly. The authenticated same-origin proxy owns the upstream
+// Authorization header. This runs after the other realtime client patches so
+// a later patch cannot accidentally restore the browser-direct request.
+const proxiedAnswerCall = "const answerResponse = await fetch('/api/realtime/webrtc-answer', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders(), 'X-Mike-Realtime-Token': tokenData.token }, body: JSON.stringify({ sdp: pc.localDescription.sdp }) });";
+const directUrl = 'https://api.openai.com/v1/realtime/calls';
+
+if (source.includes(directUrl)) {
+  const directCallPattern = /const\s+form\s*=\s*new\s+FormData\(\);\s*form\.append\(['"]sdp['"],\s*new\s+Blob\(\[pc\.localDescription\.sdp\],\s*\{\s*type:\s*['"]application\/sdp['"]\s*\}\)\);\s*const\s+answerResponse\s*=\s*await\s+fetch\(['"]https:\/\/api\.openai\.com\/v1\/realtime\/calls['"][\s\S]*?\);/;
+  if (directCallPattern.test(source)) {
+    source = source.replace(directCallPattern, proxiedAnswerCall);
+  } else {
+    throw new Error('[realtime] browser-direct WebRTC call detected but could not be safely replaced');
+  }
+}
+
+if (source.includes(directUrl)) {
+  throw new Error('[realtime] refusing to build with a browser-direct OpenAI WebRTC call');
+}
+if (!source.includes("fetch('/api/realtime/webrtc-answer'")) {
+  throw new Error('[realtime] same-origin WebRTC proxy call was not installed');
+}
+
 fs.writeFileSync(target, source);
-console.log('[build] OpenAI Realtime client tool dispatch ready; canonical speech token endpoint enforced');
+console.log('[build] OpenAI Realtime client tool dispatch ready; canonical speech token endpoint enforced; browser-direct WebRTC disabled');
