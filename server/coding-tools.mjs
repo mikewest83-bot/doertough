@@ -56,6 +56,12 @@ function assertSafePath(filePath) {
   return value;
 }
 
+function assertSafeWritePath(filePath) {
+  const value = assertSafePath(filePath);
+  if (/^\.github\/workflows(?:\/|$)/i.test(value)) throw new Error('workflow_path_blocked');
+  return value;
+}
+
 function scrubSecrets(value) {
   return String(value || '')
     .replace(/(sk-[A-Za-z0-9_-]{20,})/g, '[REDACTED_API_KEY]')
@@ -119,14 +125,14 @@ async function codeCreateBranch({ branch, base = 'main', user } = {}) {
 async function codeWriteFile({ path, content, message, branch, user } = {}) {
   assertOwner(user);
   requireWriteAccess();
-  const safe = assertSafePath(path);
+  const safe = assertSafeWritePath(path);
   const target = String(branch || '').trim();
   if (!target || /^(?:main|master|production)(?:\/|$)/i.test(target)) throw new Error('production_branch_blocked');
   const repo = assertAllowedRepo();
+  const cleanContent = String(content || '');
+  if (!cleanContent.trim()) throw new Error('empty_content_blocked');
   let existing = null;
   try { existing = await githubFetch(`/repos/${repo}/contents/${safe}?ref=${encodeURIComponent(target)}`); } catch (error) { if (error.message !== 'github_404') throw error; }
-  const cleanContent = scrubSecrets(String(content || ''));
-  if (!cleanContent.trim()) throw new Error('empty_content_blocked');
   const payload = { message:String(message || 'Update file'), content:Buffer.from(cleanContent,'utf8').toString('base64'), branch:target };
   if (existing?.sha) payload.sha = existing.sha;
   const result = await githubFetch(`/repos/${repo}/contents/${safe}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) });
