@@ -15,12 +15,21 @@ function mikeAudioDeviceSupport() {
     if (!canEnumerate) return [];
     try { return await mediaDevices.enumerateDevices(); } catch { return []; }
   };
+  const audioConstraints = (deviceId = '') => ({
+    channelCount: { ideal: 1 },
+    echoCancellation: { ideal: true },
+    noiseSuppression: { ideal: true },
+    autoGainControl: { ideal: true },
+    ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+  });
   const prepareInput = async () => {
     state.inputDeviceId = '';
     if (!mediaDevices?.getUserMedia || !canEnumerate) return '';
     // Do not guess Bluetooth devices by name. On iOS, the OS owns Bluetooth routing.
     // Request permission first so device labels/IDs are exposed where supported.
-    try { await mediaDevices.getUserMedia({ audio: true }); } catch { return ''; }
+    try { await mediaDevices.getUserMedia({ audio: audioConstraints() }); } catch {
+      try { await mediaDevices.getUserMedia({ audio: true }); } catch { return ''; }
+    }
     const devices = await refresh();
     const input = devices.find((d) => d.kind === 'audioinput' && d.deviceId);
     state.inputDeviceId = input?.deviceId || '';
@@ -33,7 +42,7 @@ function mikeAudioDeviceSupport() {
     if (!output?.deviceId) return false;
     try { await audio.setSinkId(output.deviceId); state.outputDeviceId = output.deviceId; state.supported = true; return true; } catch { return false; }
   };
-  return { state, prepareInput, routeOutput };
+  return { state, prepareInput, routeOutput, audioConstraints };
 }
 `;
 
@@ -51,7 +60,7 @@ if (!source.includes('const audioDevices = mikeAudioDeviceSupport();')) {
 
 source = source.replace(
   'const localStream = await navigator.mediaDevices.getUserMedia({ audio: true });',
-  "const preferredInputId = await audioDevices.prepareInput();\n      const localStream = preferredInputId\n        ? await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: preferredInputId } } }).catch(() => navigator.mediaDevices.getUserMedia({ audio: true }))\n        : await navigator.mediaDevices.getUserMedia({ audio: true });"
+  "const preferredInputId = await audioDevices.prepareInput();\n      const localStream = preferredInputId\n        ? await navigator.mediaDevices.getUserMedia({ audio: audioDevices.audioConstraints(preferredInputId) }).catch(() => navigator.mediaDevices.getUserMedia({ audio: audioDevices.audioConstraints() })).catch(() => navigator.mediaDevices.getUserMedia({ audio: true }))\n        : await navigator.mediaDevices.getUserMedia({ audio: audioDevices.audioConstraints() }).catch(() => navigator.mediaDevices.getUserMedia({ audio: true }));"
 );
 source = source.replace(
   "const audio = new Audio(); audio.autoplay = true;",
@@ -59,4 +68,4 @@ source = source.replace(
 );
 
 fs.writeFileSync(target, source);
-console.log('[build] Audio-device compatibility wired with platform-native Bluetooth routing and safe fallback');
+console.log('[build] Audio cleanup and device routing wired with safe fallback');
