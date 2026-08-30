@@ -35,5 +35,19 @@ if (!source.includes(ownerRender)) {
   source = source.replace(anchor, `${ownerRender}\n      ${anchor}`);
 }
 
+// Bluetooth audio compatibility: prefer a browser-exposed Bluetooth headset when available.
+const bluetoothMarker = '// Mike Bluetooth audio compatibility applied';
+if (!source.includes(bluetoothMarker)) {
+  const micAnchor = '      const localStream = await navigator.mediaDevices.getUserMedia({ audio: true });';
+  const micReplacement = `${bluetoothMarker}\n      let localStream = await navigator.mediaDevices.getUserMedia({ audio: true });\n      try {\n        const devices = await navigator.mediaDevices.enumerateDevices();\n        const bluetoothPattern = /airpods|beats|bluetooth|headset|earbuds|buds|wireless/i;\n        const preferredInput = devices.find((device) => device.kind === 'audioinput' && device.deviceId && bluetoothPattern.test(device.label || ''));\n        if (preferredInput?.deviceId) {\n          try {\n            const preferredStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: preferredInput.deviceId } } });\n            localStream.getTracks().forEach((track) => track.stop());\n            localStream = preferredStream;\n          } catch (selectionError) {\n            console.info('[voice] Bluetooth input selection unavailable; keeping browser-selected microphone.', selectionError);\n          }\n        }\n      } catch (deviceError) {\n        console.info('[voice] Could not inspect audio devices; keeping browser-selected audio.', deviceError);\n      }`;
+  if (!source.includes(micAnchor)) throw new Error('Realtime microphone initialization anchor not found');
+  source = source.replace(micAnchor, micReplacement);
+
+  const audioAnchor = '      const audio = new Audio(); audio.autoplay = true;';
+  const audioReplacement = `${audioAnchor}\n      try {\n        if (typeof audio.setSinkId === 'function') {\n          const outputs = await navigator.mediaDevices.enumerateDevices();\n          const bluetoothOutput = outputs.find((device) => device.kind === 'audiooutput' && device.deviceId && /airpods|beats|bluetooth|headset|earbuds|buds|wireless/i.test(device.label || ''));\n          if (bluetoothOutput?.deviceId) await audio.setSinkId(bluetoothOutput.deviceId);\n        }\n      } catch (outputError) {\n        console.info('[voice] Bluetooth output routing unavailable; keeping system audio.', outputError);\n      }`;
+  if (!source.includes(audioAnchor)) throw new Error('Realtime audio element anchor not found');
+  source = source.replace(audioAnchor, audioReplacement);
+}
+
 fs.writeFileSync(target, source);
-console.log('[build] Owner Access wired as a dedicated component; main Mike experience unchanged');
+console.log('[build] Owner Access isolated; Bluetooth audio compatibility applied with safe fallback');
