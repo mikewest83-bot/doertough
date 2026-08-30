@@ -6,6 +6,7 @@
 
 import Parser from 'rss-parser';
 import { DICTIONARY_TOOLS, DICTIONARY_TOOL_HANDLERS } from './dictionary-tools.mjs';
+import { CODING_TOOLS, CODING_TOOL_HANDLERS } from './coding-tools.mjs';
 
 const rssParser = new Parser({ timeout: 8000 });
 
@@ -91,8 +92,6 @@ export async function getStockQuote({ symbol } = {}) {
   return { error: `Could not find a quote for "${symbol}". Try the ticker symbol (e.g. AAPL).` };
 }
 
-// Google Maps URLs are universal, cross-platform links and do not require an API key.
-// They can open the installed Maps app on iOS/Android or fall back to the browser.
 export function getDirections({ destination, origin, travelMode = 'driving', navigate = true } = {}) {
   const dest = String(destination || '').trim();
   if (!dest) return { error: 'destination_required' };
@@ -101,13 +100,7 @@ export function getDirections({ destination, origin, travelMode = 'driving', nav
   const params = new URLSearchParams({ api: '1', destination: dest, travelmode: mode });
   if (origin) params.set('origin', String(origin).trim());
   if (navigate !== false) params.set('dir_action', 'navigate');
-  return {
-    destination: dest,
-    origin: origin ? String(origin).trim() : 'current location when supported',
-    travelMode: mode,
-    mapsUrl: `https://www.google.com/maps/dir/?${params.toString()}`,
-    note: 'Open the link to launch Google Maps. Turn-by-turn navigation depends on the Maps app/device and destination support.'
-  };
+  return { destination: dest, origin: origin ? String(origin).trim() : 'current location when supported', travelMode: mode, mapsUrl: `https://www.google.com/maps/dir/?${params.toString()}`, note: 'Open the link to launch Google Maps. Turn-by-turn navigation depends on the Maps app/device and destination support.' };
 }
 
 export function findLocalServices({ query, location } = {}) {
@@ -115,11 +108,7 @@ export function findLocalServices({ query, location } = {}) {
   if (!q) return { error: 'query_required' };
   const search = location ? `${q} near ${String(location).trim()}` : q;
   const params = new URLSearchParams({ api: '1', query: search });
-  return {
-    query: search,
-    mapsSearchUrl: `https://www.google.com/maps/search/?${params.toString()}`,
-    note: 'Open the link to see current nearby places, ratings, hours, and directions in Google Maps.'
-  };
+  return { query: search, mapsSearchUrl: `https://www.google.com/maps/search/?${params.toString()}`, note: 'Open the link to see current nearby places, ratings, hours, and directions in Google Maps.' };
 }
 
 export const LIVE_TOOLS = [
@@ -130,6 +119,7 @@ export const LIVE_TOOLS = [
   { type:'function', name:'get_directions', description:'Give the user a one-tap Google Maps route to a destination. Use this when the user asks for directions, navigation, travel time to a place, or how to get somewhere. If origin is omitted, Google Maps can use the current device location when supported.', parameters:{ type:'object', properties:{ destination:{ type:'string', description:'Destination address, place name, or coordinates.' }, origin:{ type:'string', description:'Optional starting address or place. Omit to let Google Maps use current location when supported.' }, travelMode:{ type:'string', enum:['driving','walking','bicycling','transit','two-wheeler'], description:'Travel mode. Defaults to driving.' }, navigate:{ type:'boolean', description:'Whether to request navigation mode. Defaults to true.' } }, required:['destination'], additionalProperties:false } },
   { type:'function', name:'find_local_services', description:'Create a current Google Maps search for nearby businesses or services such as urgent care, mechanics, restaurants, gas stations, hotels, stores, or attractions. Use it when the user asks what is nearby.', parameters:{ type:'object', properties:{ query:{ type:'string', description:'Business or service to find, e.g. urgent care, mechanic, gas station, restaurant.' }, location:{ type:'string', description:'Optional city, address, neighborhood, or other area to search near.' } }, required:['query'], additionalProperties:false } },
   ...DICTIONARY_TOOLS,
+  ...CODING_TOOLS,
 ];
 
 export const LIVE_TOOL_HANDLERS = {
@@ -140,4 +130,5 @@ export const LIVE_TOOL_HANDLERS = {
   get_directions: getDirections,
   find_local_services: findLocalServices,
   ...DICTIONARY_TOOL_HANDLERS,
+  ...CODING_TOOL_HANDLERS,
 };
