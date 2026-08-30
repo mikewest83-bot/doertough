@@ -14,12 +14,12 @@ if (!source.includes(importLine)) {
   source = source.replace(importAnchor, `${importAnchor}\n${importLine}`);
 }
 
-const routeAnchor = "app.use(express.json({ limit: '15mb' }));";
-const route = `${routeAnchor}\napp.post('/api/vision/analyze', authRequired, analyzeVisionImage);`;
-if (!source.includes("app.post('/api/vision/analyze'")) {
-  if (!source.includes(routeAnchor)) throw new Error('Vision route anchor not found');
-  source = source.replace(routeAnchor, route);
+const routeLine = "app.post('/api/vision/analyze', authRequired, analyzeVisionImage);";
+if (!source.includes(routeLine)) {
+  const guardAnchor = 'installGuards(app);';
+  if (!source.includes(guardAnchor)) throw new Error('Vision route guard anchor not found');
+  source = source.replace(guardAnchor, `${guardAnchor}\n\n// Vision analysis is authenticated and must remain behind the shared guard stack.\n${routeLine}`);
 }
 
 fs.writeFileSync(target, source);
-console.log('[build] server-side Vision route ready');
+console.log('[build] server-side Vision route ready behind shared guards');

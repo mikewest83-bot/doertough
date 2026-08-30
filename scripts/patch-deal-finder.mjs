@@ -5,16 +5,36 @@ const personaPath = 'server/persona.mjs';
 
 function patchOnce(path, marker, replacement, label) {
   let text = fs.readFileSync(path, 'utf8');
+  if (text.includes(replacement)) {
+    console.log(`[deal-finder] ${label} already patched`);
+    return;
+  }
   if (text.includes(marker)) {
     text = text.replace(marker, replacement);
     fs.writeFileSync(path, text);
     console.log(`[deal-finder] patched ${label}`);
   } else {
-    console.log(`[deal-finder] ${label} already patched or marker missing`);
+    console.log(`[deal-finder] ${label} marker missing`);
   }
 }
 
-patchOnce(indexPath, "import { FIELD_TOOLS, FIELD_TOOL_HANDLERS } from './field-tools.mjs';", "import { FIELD_TOOLS, FIELD_TOOL_HANDLERS } from './field-tools.mjs';\nimport { DEAL_FINDER_TOOLS, DEAL_FINDER_HANDLERS } from './deal-finder.mjs';\nimport { DEAL_ALERT_TOOLS, dealAlertHandlerFor } from './deal-alerts.mjs';", 'Deal Finder imports');
+function ensureLine(path, line, marker, label) {
+  let text = fs.readFileSync(path, 'utf8');
+  if (text.includes(line)) {
+    console.log(`[deal-finder] ${label} already patched`);
+    return;
+  }
+  if (text.includes(marker)) {
+    text = text.replace(marker, `${marker}\n${line}`);
+    fs.writeFileSync(path, text);
+    console.log(`[deal-finder] patched ${label}`);
+  } else {
+    console.log(`[deal-finder] ${label} marker missing`);
+  }
+}
+
+ensureLine(indexPath, "import { DEAL_FINDER_TOOLS, DEAL_FINDER_HANDLERS } from './deal-finder.mjs';", "import { FIELD_TOOLS, FIELD_TOOL_HANDLERS } from './field-tools.mjs';", 'Deal Finder tools import');
+ensureLine(indexPath, "import { DEAL_ALERT_TOOLS, dealAlertHandlerFor } from './deal-alerts.mjs';", "import { DEAL_FINDER_TOOLS, DEAL_FINDER_HANDLERS } from './deal-finder.mjs';", 'Deal alert tools import');
 patchOnce(indexPath, 'const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS];', 'const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS, ...DEAL_FINDER_TOOLS, ...DEAL_ALERT_TOOLS];', 'Deal Finder tools');
 patchOnce(indexPath, '  ...FIELD_TOOL_HANDLERS,\n};', '  ...FIELD_TOOL_HANDLERS,\n  ...DEAL_FINDER_HANDLERS,\n};', 'Deal Finder handlers');
 patchOnce(indexPath, '  handlers: LIVE_TOOL_HANDLERS,', "  handlers: { ...LIVE_TOOL_HANDLERS, find_local_deals: (input) => DEAL_FINDER_HANDLERS.find_local_deals?.(input), set_deal_alert: (input) => dealAlertHandlerFor('set_deal_alert', input?.user?.id)?.(input), list_deal_alerts: (input) => dealAlertHandlerFor('list_deal_alerts', input?.user?.id)?.(), cancel_deal_alert: (input) => dealAlertHandlerFor('cancel_deal_alert', input?.user?.id)?.(input) },", 'Deal Finder gateway handlers');
