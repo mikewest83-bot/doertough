@@ -22,9 +22,8 @@ if (!source.includes(ownerImport)) {
   source = source.replace(anchor, `${anchor}\n${ownerImport}`);
 }
 
-// Deal alerts are already exposed to Realtime voice through realtime-tools.mjs.
-// This also wires the same authenticated alert tools into text chat and starts
-// the persistent background checker in the production server.
+// Deal alerts are exposed to Realtime voice and text chat, and the persistent
+// scheduler is started by the production server.
 const dealAlertImport = "import { DEAL_ALERT_TOOLS, dealAlertHandlerFor, startDealAlertScheduler } from './deal-alerts.mjs';";
 if (!source.includes(dealAlertImport)) {
   const anchor = "import { OWNER_ONLY_TOOLS } from './tool-access.mjs';";
@@ -37,7 +36,10 @@ source = source.replace(
   ''
 );
 
-if (!source.includes('const DEAL_ALERT_HANDLERS =')) {
+// Newer index.mjs versions can already bind account-scoped handlers together
+// (reminders + deal alerts). Only add the legacy dedicated deal-alert handler
+// block when the index does not already have that shared registry.
+if (!source.includes('const DEAL_ALERT_HANDLERS =') && !source.includes('...ACCOUNT_SCOPED_TOOL_HANDLERS')) {
   const anchor = 'const PUBLIC_TOOLS = LIVE_TOOLS.filter((tool) => !OWNER_ONLY_TOOLS.has(tool.name));';
   if (!source.includes(anchor)) throw new Error('Deal alert tools anchor not found');
   const block = [
@@ -50,6 +52,8 @@ if (!source.includes('const DEAL_ALERT_HANDLERS =')) {
   source = source.replace(anchor, `${block}${anchor}`);
 }
 
+// Add the alert tool schemas only when the index is still using the legacy
+// single-line LIVE_TOOLS declaration. Expanded registries already contain them.
 if (!source.includes('...DEAL_ALERT_TOOLS')) {
   const anchor = 'const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS];';
   if (!source.includes(anchor)) throw new Error('LIVE_TOOLS anchor not found');
@@ -59,10 +63,13 @@ if (!source.includes('...DEAL_ALERT_TOOLS')) {
   );
 }
 
-if (!source.includes('...DEAL_ALERT_HANDLERS')) {
-  const anchor = '  ...FIELD_TOOL_HANDLERS,\n};';
-  if (!source.includes(anchor)) throw new Error('LIVE_TOOL_HANDLERS anchor not found');
-  source = source.replace(anchor, '  ...FIELD_TOOL_HANDLERS,\n  ...DEAL_ALERT_HANDLERS,\n};');
+if (!source.includes('...DEAL_ALERT_HANDLERS') && source.includes('const DEAL_ALERT_HANDLERS =')) {
+  const handlerEndAnchor = '};\nconst PUBLIC_TOOLS = LIVE_TOOLS.filter((tool) => !OWNER_ONLY_TOOLS.has(tool.name));';
+  if (!source.includes(handlerEndAnchor)) throw new Error('LIVE_TOOL_HANDLERS anchor not found');
+  source = source.replace(
+    handlerEndAnchor,
+    '  ...DEAL_ALERT_HANDLERS,\n};\nconst PUBLIC_TOOLS = LIVE_TOOLS.filter((tool) => !OWNER_ONLY_TOOLS.has(tool.name));'
+  );
 }
 
 if (!source.includes("app.post('/api/realtime/tool'")) {
