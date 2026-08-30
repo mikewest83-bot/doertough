@@ -7,9 +7,23 @@ import { ensureRbacSchema } from './rbac.mjs';
 import { ensureReminderSchema, startReminderScheduler } from './reminders.mjs';
 import { startVoiceCleanup } from './voice-cleanup.mjs';
 
-const dbReady = await migrate();
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+let dbReady = false;
+let lastError;
+for (let attempt = 1; attempt <= 3; attempt += 1) {
+  try {
+    dbReady = await migrate();
+    if (dbReady) break;
+  } catch (error) {
+    lastError = error;
+    console.error(`[db] migration attempt ${attempt}/3 failed:`, error.message || error);
+  }
+  if (attempt < 3) await sleep(1000 * 2 ** (attempt - 1));
+}
+
 if (!dbReady) {
-  throw new Error('database_schema_not_ready');
+  throw lastError || new Error('database_schema_not_ready');
 }
 
 await ensureRbacSchema();
