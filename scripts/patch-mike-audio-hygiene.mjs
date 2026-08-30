@@ -29,10 +29,15 @@ const safe = `const localStream = await navigator.mediaDevices.getUserMedia({
         console.warn('[voice] advanced audio constraints unavailable:', audioConstraintError);
       }`;
 
-// The device-routing patch may already have installed the stronger audio
-// constraints. Treat that state as success so the build remains idempotent.
-if (source.includes('echoCancellation: { ideal: true }') || source.includes('echoCancellation: true')) {
-  console.log('[build] Audio hygiene already present; leaving device-routing implementation intact');
+// This patch must be idempotent because the build pipeline may run the
+// realtime-device patch first. Detect the generated audio implementation by
+// its complete marker, not by a generic echoCancellation string that could
+// belong to an unrelated helper.
+const installedMarker = "const preferredInputId = await audioDevices.prepareInput();";
+const hygieneMarker = "echoCancellation: true,\n          noiseSuppression: true,\n          autoGainControl: true,";
+
+if (source.includes(installedMarker) || source.includes(hygieneMarker)) {
+  console.log('[build] Audio hygiene already present; leaving existing microphone implementation intact');
   process.exit(0);
 }
 
