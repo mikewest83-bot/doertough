@@ -1,10 +1,10 @@
-# Doer Tough Website
+#mikeai
 
 Doer Tough — Built Not Born.
 
 ## Overview
 
-This repository contains the Doer Tough website and supporting server configuration.
+This repository contains the Doer Tough mike ai website doertoughmikeai.com and supporting server configuration.
 
 ## Development
 
