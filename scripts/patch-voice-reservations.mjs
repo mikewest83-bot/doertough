@@ -18,7 +18,7 @@ if (!source.includes(importLine)) {
 const legacyStart = "    const usedSessions = await countVoiceSessions(req.user.id, MAX_SESSION_SECONDS);";
 const hardenedStart = "    const secondsAllowance = minuteLimit * 60;";
 const legacyEnd = "    res.json({\n      ...result,\n      sessionKey,\n      maxSessionSeconds: MAX_SESSION_SECONDS,\n      minutesRemaining: Math.max(0, Math.floor((secondsAllowance - secondsUsed) / 60)),\n    });";
-const hardenedEnd = "    res.json({ ...result, sessionKey, maxSessionSeconds: MAX_SESSION_SECONDS, minutesRemaining: Math.max(0, Math.floor((secondsAllowance - MAX_SESSION_SECONDS) / 60)) });";
+const hardenedEnd = "    res.json({ ...result, sessionKey, maxSessionSeconds: MAX_SESSION_SECONDS, minutesRemaining: Math.max(0, Math.floor((secondsAllowance - secondsUsed) / 60)) });";
 
 if (!source.includes('const reserveResult = await reserveVoiceSession({')) {
   const legacyIndex = source.indexOf(legacyStart);
