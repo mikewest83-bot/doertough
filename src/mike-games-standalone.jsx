@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { GAMES } from './MikeGames.jsx';
-import MikeLiveGameView from './MikeLiveGameView.jsx';
 import './mike-games.css';
 
 function sendToMike(prompt) {
@@ -51,7 +50,6 @@ function MikeGamesStandalone() {
         )}
         {selected && !open && <div className="mike-game-active">Game ready — Mike is waiting for your move.</div>}
       </section>
-      <MikeLiveGameView />
     </>
   );
 }
