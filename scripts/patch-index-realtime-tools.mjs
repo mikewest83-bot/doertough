@@ -16,6 +16,17 @@ if (!source.includes(importLine)) {
   source = source.replace(anchor, `${anchor}\n${importLine}`);
 }
 
+const ownerImport = "import { OWNER_ONLY_TOOLS } from './tool-access.mjs';";
+if (!source.includes(ownerImport)) {
+  const anchor = "import { getRealtimeToolHandler, isRealtimeToolAllowed } from './realtime-tools.mjs';";
+  source = source.replace(anchor, `${anchor}\n${ownerImport}`);
+}
+
+source = source.replace(
+  /const OWNER_ONLY_TOOLS = new Set\(\[[\s\S]*?\]\);\n/,
+  ''
+);
+
 if (!source.includes("app.post('/api/realtime/tool'")) {
   const marker = '// ===== Billing =====';
   const index = source.indexOf(marker);
@@ -98,4 +109,4 @@ if (!source.includes('// OWNER VOICE QA BYPASS')) {
 }
 
 fs.writeFileSync(target, source);
-console.log('[build] Realtime public tool dispatch ready; owner voice QA bypass enabled; startup migrations disabled');
+console.log('[build] Realtime public tool dispatch ready; centralized owner tool policy; owner voice QA bypass enabled; startup migrations disabled');
