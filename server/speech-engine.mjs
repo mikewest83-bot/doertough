@@ -3,7 +3,6 @@ import { REALTIME_TOOLS } from './realtime-tools.mjs';
 
 const REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1';
 const CUSTOM_VOICE_ID = String(process.env.OPENAI_REALTIME_CUSTOM_VOICE_ID || '').trim();
-// Controlled voice test: use Cedar unless a future OpenAI custom voice ID is configured.
 const REALTIME_VOICE = CUSTOM_VOICE_ID ? { id: CUSTOM_VOICE_ID } : 'cedar';
 const ENGINE_NAME = 'Mike AI OpenAI Realtime';
 
@@ -18,7 +17,6 @@ export async function initializeSpeechEngine() {
     console.warn('[realtime] disabled: OPENAI_API_KEY is not configured');
     return null;
   }
-
   const voiceLabel = CUSTOM_VOICE_ID ? `custom:${CUSTOM_VOICE_ID}` : String(REALTIME_VOICE);
   console.log(`[realtime] OpenAI Realtime ready: model=${REALTIME_MODEL}, voice=${voiceLabel}, tools=${REALTIME_TOOLS.length}`);
   return ENGINE_NAME;
@@ -26,7 +24,6 @@ export async function initializeSpeechEngine() {
 
 export async function getSpeechEngineToken() {
   requireKey(process.env.OPENAI_API_KEY, 'openai');
-
   const response = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
     method: 'POST',
     headers: {
@@ -44,17 +41,9 @@ export async function getSpeechEngineToken() {
           input: {
             noise_reduction: { type: 'near_field' },
             transcription: { model: 'gpt-4o-mini-transcribe', language: 'en' },
-            turn_detection: {
-              type: 'semantic_vad',
-              eagerness: 'low',
-              create_response: true,
-              interrupt_response: true,
-            },
+            turn_detection: { type: 'semantic_vad', eagerness: 'low', create_response: true, interrupt_response: true },
           },
-          output: {
-            voice: REALTIME_VOICE,
-            speed: 1.1,
-          },
+          output: { voice: REALTIME_VOICE, speed: 1.1 },
         },
         output_modalities: ['audio'],
         max_output_tokens: 1200,
@@ -63,17 +52,20 @@ export async function getSpeechEngineToken() {
   });
 
   const raw = await response.text();
-  if (!response.ok) {
-    throw new Error(`openai_realtime_client_secret_${response.status}: ${raw.slice(0, 700)}`);
-  }
+  if (!response.ok) throw new Error(`openai_realtime_client_secret_${response.status}: ${raw.slice(0, 700)}`);
 
   const data = JSON.parse(raw);
-  if (!data.value) throw new Error('openai_realtime_client_secret_missing');
+  const clientSecret = String(data?.value || data?.client_secret?.value || '').trim();
+  if (!clientSecret) {
+    console.error('[realtime] OpenAI returned a client-secret response without a usable value');
+    throw new Error('openai_realtime_client_secret_missing');
+  }
 
   const voiceLabel = CUSTOM_VOICE_ID ? `custom:${CUSTOM_VOICE_ID}` : String(REALTIME_VOICE);
   console.log(`[realtime] ephemeral client secret created for ${REALTIME_MODEL}/${voiceLabel} with ${REALTIME_TOOLS.length} public tools`);
   return {
-    token: data.value,
+    token: clientSecret,
+    clientSecret,
     agentId: REALTIME_MODEL,
     transport: 'openai-webrtc',
   };
