@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: write
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
@@ -16,8 +19,29 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f package-lock.json ]]; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --no-audit --no-fund
+            npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          fi
+      - name: Persist generated lockfile
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.head_commit.message != 'chore: add reproducible npm lockfile [skip ci]'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f package-lock.json ]] && ! git diff --quiet -- package-lock.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add package-lock.json
+            git commit -m "chore: add reproducible npm lockfile [skip ci]"
+            git push
+          fi
       - name: Apply production SDP patch
         run: node scripts/patch-realtime-sdp.mjs
       - name: Build
