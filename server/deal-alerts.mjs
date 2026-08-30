@@ -17,7 +17,7 @@ export async function ensureDealAlertSchema() {
       budget NUMERIC,
       radius_miles INT,
       constraints TEXT,
-      frequency_minutes INT NOT NULL DEFAULT 60,
+      frequency_minutes INT NOT NULL DEFAULT 5,
       enabled BOOLEAN NOT NULL DEFAULT true,
       notified_urls JSONB NOT NULL DEFAULT '[]'::jsonb,
       last_checked_at TIMESTAMPTZ,
@@ -25,6 +25,7 @@ export async function ensureDealAlertSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    ALTER TABLE deal_alerts ALTER COLUMN frequency_minutes SET DEFAULT 5;
     CREATE INDEX IF NOT EXISTS deal_alerts_due_idx ON deal_alerts(enabled, last_checked_at);
     CREATE INDEX IF NOT EXISTS deal_alerts_user_idx ON deal_alerts(user_id, enabled, created_at DESC);
   `);
@@ -39,7 +40,7 @@ export async function createDealAlert(userId, args = {}) {
   const constraints = clean(args.constraints, 1000) || null;
   const budget = args.budget == null || args.budget === '' ? null : Number(args.budget);
   const radius = args.radiusMiles == null || args.radiusMiles === '' ? null : Number(args.radiusMiles);
-  const frequency = Math.min(1440, Math.max(30, Number(args.frequencyMinutes || 60)));
+  const frequency = Math.min(1440, Math.max(5, Number(args.frequencyMinutes || 5)));
   if (!category || !location) throw new Error('deal_alert_category_and_location_required');
   if (budget !== null && (!Number.isFinite(budget) || budget < 0)) throw new Error('deal_alert_budget_invalid');
   if (radius !== null && (!Number.isFinite(radius) || radius <= 0 || radius > 500)) throw new Error('deal_alert_radius_invalid');
@@ -118,14 +119,14 @@ export function startDealAlertScheduler() {
 
 function toolError(error) { return { error: error.message || 'deal_alert_unavailable' }; }
 export async function setDealAlertTool(userId, args = {}) {
-  try { const alert = await createDealAlert(userId, args); return { tool: 'set_deal_alert', alert, message: `Deal alert set for ${alert.category} near ${alert.location}. I’ll check at least every ${alert.frequency_minutes} minutes and notify you when I find a new matching listing.` }; }
+  try { const alert = await createDealAlert(userId, args); return { tool: 'set_deal_alert', alert, message: `Deal alert set for ${alert.category} near ${alert.location}. I’ll check every ${alert.frequency_minutes} minutes and notify you when I find a new matching listing.` }; }
   catch (error) { return toolError(error); }
 }
 export async function listDealAlertsTool(userId) { try { return { tool: 'list_deal_alerts', alerts: await listDealAlerts(userId) }; } catch (error) { return toolError(error); } }
 export async function cancelDealAlertTool(userId, args = {}) { try { const id = Number(args.id); if (!Number.isInteger(id) || id <= 0) return { error: 'deal_alert_id_invalid' }; return { tool: 'cancel_deal_alert', canceled: await cancelDealAlert(userId, id) }; } catch (error) { return toolError(error); } }
 
 export const DEAL_ALERT_TOOLS = [
-  { type:'function', name:'set_deal_alert', description:'Create a persistent alert that searches current public listings for the signed-in user and emails them when a new matching deal is found. Use when the user wants Mike to keep looking for a specific item or bargain. Never claim an alert was set unless this succeeds.', parameters:{type:'object',properties:{category:{type:'string'},location:{type:'string'},budget:{type:'number'},radiusMiles:{type:'number'},constraints:{type:'string'},frequencyMinutes:{type:'integer',description:'Check interval in minutes; minimum 30, default 60.'}},required:['category','location'],additionalProperties:false}},
+  { type:'function', name:'set_deal_alert', description:'Create a persistent alert that searches current public listings for the signed-in user and emails them when a new matching deal is found. Use when the user wants Mike to keep looking for a specific item or bargain. Never claim an alert was set unless this succeeds.', parameters:{type:'object',properties:{category:{type:'string'},location:{type:'string'},budget:{type:'number'},radiusMiles:{type:'number'},constraints:{type:'string'},frequencyMinutes:{type:'integer',description:'Check interval in minutes; minimum 5, default 5.'}},required:['category','location'],additionalProperties:false}},
   { type:'function', name:'list_deal_alerts', description:'List the signed-in user\'s active and inactive deal alerts.', parameters:{type:'object',properties:{},additionalProperties:false}},
   { type:'function', name:'cancel_deal_alert', description:'Disable one of the signed-in user\'s deal alerts by id.', parameters:{type:'object',properties:{id:{type:'integer'}},required:['id'],additionalProperties:false}},
 ];
