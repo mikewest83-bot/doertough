@@ -18,7 +18,7 @@ const tokenPattern = /const tokenData = await fetchJson\('\/api\/speech\/token',
 if (!source.includes('const realtimeClientSecret =')) {
   const tokenMatch = source.match(tokenPattern);
   if (!tokenMatch) throw new Error('[realtime] token request anchor not found');
-  const guard = "\n      const realtimeClientSecret = String(tokenData?.token ?? tokenData?.value ?? tokenData?.client_secret?.value ?? '').trim();\n      if (!realtimeClientSecret || realtimeClientSecret === 'undefined' || realtimeClientSecret === 'null') throw new Error('realtime_client_secret_missing');";
+  const guard = "\n      const realtimeClientSecret = String(tokenData?.clientSecret ?? tokenData?.token ?? tokenData?.value ?? tokenData?.client_secret?.value ?? '').trim();\n      if (!realtimeClientSecret || realtimeClientSecret === 'undefined' || realtimeClientSecret === 'null') throw new Error('realtime_client_secret_missing');";
   source = source.replace(tokenMatch[0], tokenMatch[0] + guard);
 }
 
