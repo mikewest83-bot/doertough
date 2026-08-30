@@ -7,6 +7,7 @@ export const MIKE_CAPABILITIES = Object.freeze([
   { name: 'business_tools', description: 'Business and commerce capabilities', risk: 'controlled' },
   { name: 'free_tools', description: 'General-purpose free capabilities', risk: 'controlled' },
   { name: 'field_tools', description: 'Field and practical task capabilities', risk: 'controlled' },
+  { name: 'marketplace_assistant', description: 'Marketplace listing analysis, pricing, negotiation, and buyer or seller guidance', risk: 'controlled' },
   { name: 'memory', description: 'Account-scoped conversational memory', risk: 'private' },
   { name: 'support_coach', description: 'Emotionally supportive conversation, reflection, perspective, and practical coping support', risk: 'safety_controlled' },
   { name: 'realtime_voice', description: 'Realtime voice transport', risk: 'separate' },
