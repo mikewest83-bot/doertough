@@ -8,6 +8,7 @@ import { LIVE_TOOLS as BASE_TOOLS, LIVE_TOOL_HANDLERS as BASE_HANDLERS } from '.
 import { BUSINESS_TOOLS, BUSINESS_TOOL_HANDLERS } from './business.mjs';
 import { FREE_TOOLS, FREE_TOOL_HANDLERS } from './free-tools.mjs';
 import { FIELD_TOOLS, FIELD_TOOL_HANDLERS } from './field-tools.mjs';
+import { createMikeToolGateway } from './mike-tool-gateway.mjs';
 import { installGuards } from './guard.mjs';
 import { mailerConfigured } from './mailer.mjs';
 import { MIKE_INSTRUCTIONS } from './persona.mjs';
@@ -64,6 +65,14 @@ const NON_OWNER_NOTE =
   'say plainly that those are Mike\'s own private business numbers and you do not ' +
   'share them. Do not guess, estimate, or invent any figure. Everything else you ' +
   'know about the portfolio is fair game.';
+
+const mikeToolGateway = createMikeToolGateway({
+  handlers: LIVE_TOOL_HANDLERS,
+  authorize: async ({ name, user }) => {
+    const owner = isOwner(user);
+    return owner || !OWNER_ONLY_TOOLS.has(name);
+  },
+});
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -313,17 +322,22 @@ app.post('/api/ask', async (req, res) => {
         let args = {};
         try { args = call.arguments ? JSON.parse(call.arguments) : {}; } catch {}
 
-        const handler = LIVE_TOOL_HANDLERS[call.name];
         let output;
         try {
           if (!owner && OWNER_ONLY_TOOLS.has(call.name)) {
             output = { error: 'not_available', note: "That is Mike's own private business data." };
           } else {
-            output = handler ? await handler(args) : { error: `Unknown tool "${call.name}".` };
+            output = await mikeToolGateway.execute({ name: call.name, args, user: req.user });
           }
         } catch (toolError) {
           console.error(`[ask] tool ${call.name} failed:`, toolError.message || toolError);
-          output = { error: toolError.message || 'tool_unavailable' };
+          output = {
+            error: toolError.message === 'mike_tool_unauthorized'
+              ? 'not_available'
+              : toolError.message === 'mike_tool_not_allowed'
+                ? `Unknown tool "${call.name}".`
+                : 'tool_unavailable',
+          };
         }
 
         input.push({ type: 'function_call_output', call_id: call.call_id, output: JSON.stringify(output) });
