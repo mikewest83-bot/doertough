@@ -4,8 +4,8 @@
 // as a pre-deploy safety gate; this remains idempotent for existing databases.
 import { migrate } from './db.mjs';
 import { ensureRbacSchema } from './rbac.mjs';
-import { ensureReminderSchema, startReminderScheduler } from './reminders.mjs';
-import { ensureDealAlertSchema, startDealAlertScheduler } from './deal-alerts.mjs';
+import { ensureReminderSchema } from './reminders.mjs';
+import { ensureDealAlertSchema } from './deal-alerts.mjs';
 import { startVoiceCleanup } from './voice-cleanup.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -39,6 +39,4 @@ await import('./index.mjs');
 
 if (!smokeTest) {
   startVoiceCleanup(10_000);
-  startReminderScheduler();
-  startDealAlertScheduler();
 }
