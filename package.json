@@ -9,7 +9,7 @@
     "start": "node server/index.mjs",
     "migrate": "node-pg-migrate up --no-check-order",
     "migrate:down": "node-pg-migrate down",
-    "test": "mocha --exit --recursive"
+    "dependencies": {}
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.0",
@@ -18,7 +18,7 @@
     "jsonwebtoken": "^9.0.0",
     "lucide-react": "^0.469.0",
     "openai": "^5.12.2",
-    "pg": "^8.13.0",
+    "pg": "^8.13.1",
     "rss-parser": "^3.13.0",
     "vite": "^6.0.0"
   },
