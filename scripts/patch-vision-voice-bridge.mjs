@@ -7,6 +7,12 @@ const target = path.join(root, 'src', 'main.jsx');
 let source = fs.readFileSync(target, 'utf8');
 
 const marker = "  useEffect(() => { let cancelled = false; (async () => { try { const health = await fetchJson('/api/health', {}, 10000);";
+const legacy = "      dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio', 'text'] } }));";
+const safe = "      dc.send(JSON.stringify({ type: 'response.create', response: {} }));";
+
+// Keep the Vision bridge compatible with the current Realtime event schema.
+if (source.includes(legacy)) source = source.replaceAll(legacy, safe);
+
 const bridge = `  useEffect(() => {
     const onVisionResult = (event) => {
       const text = String(event.detail?.text || '').trim();
@@ -20,7 +26,7 @@ const bridge = `  useEffect(() => {
         setMessages((prev) => [...prev, { role: 'user', text: 'I uploaded a photo for you to look at.' }]);
         const context = 'The user uploaded a photo and Mike Vision analyzed it. Treat the following as visual context and answer naturally using it. Vision analysis: ' + text;
         dc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: context }] } }));
-        dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio', 'text'] } }));
+        dc.send(JSON.stringify({ type: 'response.create', response: {} }));
       } catch (err) { console.warn('[vision] voice bridge failed:', err); setMessages((prev) => [...prev, { role: 'mike', text }]); }
     };
     window.addEventListener('mike-vision-result', onVisionResult);
