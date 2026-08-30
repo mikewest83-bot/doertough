@@ -11,6 +11,7 @@ import {
   getGoogleConnection,
   googleOAuthConfigured,
 } from './google-oauth.mjs';
+import { consumeDaily, isDailyLimited, secondsUntilReset } from './usage-ceiling.mjs';
 
 const PROTECTED = [
   '/api/ask',
@@ -18,7 +19,13 @@ const PROTECTED = [
   '/api/avatar',
   '/api/speech/token',
   '/api/client-log',
-  '/api/liveavatar/session',
+  // Vision is the most expensive call in the app - a full multimodal request
+  // on an image up to 5 MB. It was outside the guard stack entirely.
+  '/api/vision/analyze',
+  // Auth-gated but previously unthrottled, so a signed-in account could spin
+  // up Stripe sessions in a loop.
+  '/api/billing/checkout',
+  '/api/billing/portal',
 ];
 
 const AUTH_PROTECTED = [
@@ -50,6 +57,8 @@ const AUTH_PER_MINUTE = Number(process.env.MIKE_AUTH_PER_MINUTE || 5);
 const ACCESS_CODE = process.env.MIKE_ACCESS_CODE || '';
 
 // key -> { hour: { count, resetAt }, minute: { count, resetAt } }
+// Per-process and therefore per-replica. It is the fast first pass; the durable
+// per-account ceiling in usage-ceiling.mjs is what holds across replicas.
 const buckets = new Map();
 
 function hit(key, perMinute, perHour) {
@@ -160,60 +169,85 @@ export function installGuards(app) {
   app.set('trust proxy', 1);
   installGoogleRoutes(app);
 
-  app.use((req, res, next) => {
-    const isAuthRoute = matches(req.path, AUTH_PROTECTED);
-    const isProtected = matches(req.path, PROTECTED);
-    const isVoiceToken = req.path === '/api/speech/token';
+  app.use(async (req, res, next) => {
+    try {
+      const isAuthRoute = matches(req.path, AUTH_PROTECTED);
+      const isProtected = matches(req.path, PROTECTED);
+      const isVoiceToken = req.path === '/api/speech/token';
 
-    if (!isAuthRoute && !isProtected) return next();
+      if (!isAuthRoute && !isProtected) return next();
 
-    if (ACCESS_CODE && !isAuthRoute && req.get('x-mike-code') !== ACCESS_CODE) {
-      return res.status(401).json({ error: 'access_code_required' });
+      if (ACCESS_CODE && !isAuthRoute && req.get('x-mike-code') !== ACCESS_CODE) {
+        return res.status(401).json({ error: 'access_code_required' });
+      }
+
+      const origin = req.get('origin');
+      if (origin && !ALLOWED_ORIGINS.has(origin)) {
+        console.warn(`[guard] blocked origin: ${origin} -> ${req.path}`);
+        return res.status(403).json({ error: 'origin_not_allowed' });
+      }
+      if (!origin && REQUIRE_ORIGIN) {
+        return res.status(403).json({ error: 'origin_required' });
+      }
+
+      // Realtime token issuance is protected by authentication, origin checks,
+      // and the durable Postgres voice allowance/reservation. It intentionally
+      // skips the generic in-memory limiter because WebRTC startup can legitimately
+      // make multiple token requests while negotiating a session.
+      if (isVoiceToken) return next();
+
+      const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+      const identity = req.user?.id ? `user:${req.user.id}` : `ip:${ip}`;
+      const key = isAuthRoute ? `auth:${ip}` : identity;
+
+      const result = isAuthRoute
+        ? hit(key, AUTH_PER_MINUTE, AUTH_PER_HOUR)
+        : hit(key, PER_MINUTE, PER_HOUR);
+
+      if (!result.ok) {
+        console.warn(`[guard] rate limited ${key} (${result.window}) -> ${req.path}`);
+        res.setHeader('Retry-After', String(result.retryAfter));
+        return res.status(429).json({
+          error: 'rate_limited',
+          message: isAuthRoute
+            ? 'Too many attempts. Wait a minute and try again.'
+            : "Mike's catching his breath. Try again in a minute.",
+          retryAfterSeconds: result.retryAfter,
+        });
+      }
+
+      res.setHeader('X-RateLimit-Remaining', String(result.remaining));
+
+      // Durable per-account ceiling on the endpoints that cost money. Only
+      // applies to signed-in accounts; anonymous traffic is already bounded by
+      // the per-IP limiter above. Fails open.
+      if (req.user?.id && isDailyLimited(req.path)) {
+        const daily = await consumeDaily(req.user.id, req.path);
+        if (!daily.ok) {
+          const retryAfter = secondsUntilReset();
+          console.warn(`[guard] daily ceiling reached user:${req.user.id} -> ${req.path} (${daily.used}/${daily.limit})`);
+          res.setHeader('Retry-After', String(retryAfter));
+          return res.status(429).json({
+            error: 'daily_limit_reached',
+            message: "That's all of today's allowance. It resets at midnight UTC.",
+            retryAfterSeconds: retryAfter,
+          });
+        }
+      }
+
+      return next();
+    } catch (error) {
+      // A guard failure must never break the request path.
+      console.error('[guard] middleware error, allowing request:', error.message || error);
+      return next();
     }
-
-    const origin = req.get('origin');
-    if (origin && !ALLOWED_ORIGINS.has(origin)) {
-      console.warn(`[guard] blocked origin: ${origin} -> ${req.path}`);
-      return res.status(403).json({ error: 'origin_not_allowed' });
-    }
-    if (!origin && REQUIRE_ORIGIN) {
-      return res.status(403).json({ error: 'origin_required' });
-    }
-
-    // Realtime token issuance is protected by authentication, origin checks,
-    // and the durable Postgres voice allowance/reservation. It intentionally
-    // skips the generic in-memory limiter because WebRTC startup can legitimately
-    // make multiple token requests while negotiating a session.
-    if (isVoiceToken) return next();
-
-    const ip = req.ip || req.socket?.remoteAddress || 'unknown';
-    const identity = req.user?.id ? `user:${req.user.id}` : `ip:${ip}`;
-    const key = isAuthRoute ? `auth:${ip}` : identity;
-
-    const result = isAuthRoute
-      ? hit(key, AUTH_PER_MINUTE, AUTH_PER_HOUR)
-      : hit(key, PER_MINUTE, PER_HOUR);
-
-    if (!result.ok) {
-      console.warn(`[guard] rate limited ${key} (${result.window}) -> ${req.path}`);
-      res.setHeader('Retry-After', String(result.retryAfter));
-      return res.status(429).json({
-        error: 'rate_limited',
-        message: isAuthRoute
-          ? 'Too many attempts. Wait a minute and try again.'
-          : "Mike's catching his breath. Try again in a minute.",
-        retryAfterSeconds: result.retryAfter,
-      });
-    }
-
-    res.setHeader('X-RateLimit-Remaining', String(result.remaining));
-    next();
   });
 
   console.log(
     `[guard] active — ${PER_MINUTE}/min, ${PER_HOUR}/hr general; ` +
       `voice token protected by auth/origin/Postgres allowance; ` +
       `auth ${AUTH_PER_MINUTE}/min, ${AUTH_PER_HOUR}/hr per IP; ` +
+      `durable daily ceiling on /api/ask and /api/vision/analyze; ` +
       `${ALLOWED_ORIGINS.size} allowed origins; access code ${ACCESS_CODE ? 'ON' : 'off'}`
   );
 }
