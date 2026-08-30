@@ -1,6 +1,4 @@
 // Build-time, idempotent wiring for Mike's roadmap foundation.
-// Keeps the main server file stable while adding the new server-side tool pack
-// and owner/admin authorization boundary.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,19 +41,20 @@ if (!source.includes(importRbac)) {
 
 if (!source.includes('...MONEY_TOOLS')) {
   const oldTools = "const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS];";
+  const dealFinderTools = "const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS, ...DEAL_FINDER_TOOLS, ...DEAL_ALERT_TOOLS];";
   const newTools = "const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS, ...MONEY_TOOLS, ...REMINDER_TOOLS, ...DOERTOUGH_INTELLIGENCE_TOOLS];";
-  if (!source.includes(oldTools)) throw new Error('Roadmap patch LIVE_TOOLS anchor not found');
-  source = source.replace(oldTools, newTools);
-} else {
-  if (!source.includes('...REMINDER_TOOLS')) source = source.replace('...FIELD_TOOLS, ...MONEY_TOOLS];', '...FIELD_TOOLS, ...MONEY_TOOLS, ...REMINDER_TOOLS];');
-  if (!source.includes('...DOERTOUGH_INTELLIGENCE_TOOLS')) source = source.replace('...MONEY_TOOLS, ...REMINDER_TOOLS];', '...MONEY_TOOLS, ...REMINDER_TOOLS, ...DOERTOUGH_INTELLIGENCE_TOOLS];');
+  if (source.includes(oldTools)) source = source.replace(oldTools, newTools);
+  else if (source.includes(dealFinderTools)) source = source.replace(dealFinderTools, "const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS, ...DEAL_FINDER_TOOLS, ...DEAL_ALERT_TOOLS, ...MONEY_TOOLS, ...REMINDER_TOOLS, ...DOERTOUGH_INTELLIGENCE_TOOLS];");
+  else if (!source.includes('...DEAL_FINDER_TOOLS')) throw new Error('Roadmap patch LIVE_TOOLS anchor not found');
 }
 
 if (!source.includes('...MONEY_TOOL_HANDLERS')) {
   const oldHandlers = "  ...FIELD_TOOL_HANDLERS,\n};";
+  const dealFinderHandlers = "  ...FIELD_TOOL_HANDLERS,\n  ...DEAL_FINDER_HANDLERS,\n};";
   const newHandlers = "  ...FIELD_TOOL_HANDLERS,\n  ...MONEY_TOOL_HANDLERS,\n  ...DOERTOUGH_INTELLIGENCE_HANDLERS,\n};";
-  if (!source.includes(oldHandlers)) throw new Error('Roadmap patch handler anchor not found');
-  source = source.replace(oldHandlers, newHandlers);
+  if (source.includes(oldHandlers)) source = source.replace(oldHandlers, newHandlers);
+  else if (source.includes(dealFinderHandlers)) source = source.replace(dealFinderHandlers, "  ...FIELD_TOOL_HANDLERS,\n  ...DEAL_FINDER_HANDLERS,\n  ...MONEY_TOOL_HANDLERS,\n  ...DOERTOUGH_INTELLIGENCE_HANDLERS,\n};");
+  else throw new Error('Roadmap patch handler anchor not found');
 } else if (!source.includes('...DOERTOUGH_INTELLIGENCE_HANDLERS')) {
   source = source.replace('  ...MONEY_TOOL_HANDLERS,\n};', '  ...MONEY_TOOL_HANDLERS,\n  ...DOERTOUGH_INTELLIGENCE_HANDLERS,\n};');
 }
@@ -122,9 +121,6 @@ if (!source.includes('REMINDER_TOOL_HANDLERS[call.name]')) {
   source = source.replace('        const handler = LIVE_TOOL_HANDLERS[call.name];', '        const handler = REMINDER_TOOL_HANDLERS[call.name] || LIVE_TOOL_HANDLERS[call.name];');
 }
 
-// Runtime database migration is intentionally disabled here. The migration/schema
-// work must run as an explicit pre-deploy step; this build patch must never leave
-// an orphaned migrate() invocation in the generated runtime server.
 const runtimeMigrationPatterns = [
   "migrate().catch((error) => console.error('[db] migrate threw:', error.message || error));",
   "migrate().then(async () => { await ensureRbacSchema(); await ensureReminderSchema(); }).catch((error) => console.error('[db] migrate threw:', error.message || error));",
@@ -138,9 +134,6 @@ const oldTryChips = "['How much concrete for a 20x24 slab at 4 inches?','Quote a
 const newTryChips = "['💰 Save me money','How much concrete for a 20x24 slab at 4 inches?','Quote a 3-day framing job at $65 an hour.','What am I missing?']";
 if (source.includes(oldTryChips) && !source.includes(newTryChips)) source = source.replace(oldTryChips, newTryChips);
 
-// Keep the actual React customer experience aligned with the roadmap instead of
-// relying only on generated server markup. This patch is idempotent and runs as
-// part of the existing production build before Vite compiles the app.
 const appTarget = path.join(root, 'src', 'main.jsx');
 let app = fs.readFileSync(appTarget, 'utf8');
 const oldChips = "{['How much concrete for a 20x24 slab at 4 inches?','Quote a 3-day framing job at $65 an hour.','What am I missing?'].map((prompt) =>";
