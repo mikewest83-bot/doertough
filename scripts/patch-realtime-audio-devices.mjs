@@ -67,10 +67,13 @@ source = source.replace(
   'const localStream = await navigator.mediaDevices.getUserMedia({ audio: true });',
   "const preparedAudio = await audioDevices.prepareInput();\n      if (!preparedAudio?.stream) throw new Error('Mike could not access the microphone. Check microphone permission and try again.');\n      const localStream = preparedAudio.stream;"
 );
-source = source.replace(
-  "const audio = new Audio(); audio.autoplay = true;",
-  "const audio = new Audio(); audio.autoplay = true;\n      audioDevices.routeOutput(audio).catch(() => {});"
-);
+
+if (!source.includes("audioDevices.routeOutput(audio).catch(() => {});")) {
+  source = source.replace(
+    "const audio = new Audio(); audio.autoplay = true;",
+    "const audio = new Audio(); audio.autoplay = true;\n      audioDevices.routeOutput(audio).catch(() => {});"
+  );
+}
 
 fs.writeFileSync(target, source);
 console.log('[build] Audio cleanup and device routing wired with single microphone acquisition');
