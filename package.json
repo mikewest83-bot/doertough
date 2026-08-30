@@ -9,7 +9,7 @@
     "start": "node server/index.mjs",
     "migrate": "node-pg-migrate up --no-check-order",
     "migrate:down": "node-pg-migrate down",
-    "dependencies": {}
+    "test": "mocha --exit --recursive"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.0",
