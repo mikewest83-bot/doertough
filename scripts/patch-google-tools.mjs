@@ -77,10 +77,16 @@ if (!source.includes('export async function googleGmailSearch')) {
   source = source.replace(marker, `${helpers}${marker}`);
 }
 
+// Repair any previously generated Google tool entries that used single-quoted
+// JavaScript strings containing apostrophes. This runs before the idempotency
+// check so an already-patched but malformed live.mjs is repaired on rebuild.
+source = source.replace(/description:'Search the signed-in user's Gmail\. Only use after the user has connected Google\. Return concise email metadata and snippets\.'/g, 'description:"Search Gmail for the connected Google account. Use only after Google is connected. Return concise email metadata and snippets."');
+source = source.replace(/description:'Read the signed-in user's primary Google Calendar for the next several days\.'/g, 'description:"Read the primary Google Calendar for the connected Google account for the next several days."');
+
 const toolMarker = "  { type:'function', name:'get_weather'";
-const toolEntries = `  { type:'function', name:'google_gmail_search', description:"Search the signed-in user's Gmail. Only use after the user has connected Google. Return concise email metadata and snippets.", parameters:{ type:'object', properties:{ query:{ type:'string', description:'Gmail search query, e.g. from:john@example.com newer_than:7d or is:unread.' }, maxResults:{ type:'integer', minimum:1, maximum:20, description:'Maximum number of messages to return.' } }, required:[], additionalProperties:false } },
-  { type:'function', name:'google_calendar_events', description:"Read the signed-in user's primary Google Calendar for the next several days.", parameters:{ type:'object', properties:{ days:{ type:'integer', minimum:1, maximum:31, description:'Number of future days to inspect.' } }, required:[], additionalProperties:false } },
-  { type:'function', name:'google_gmail_create_draft', description:'Create a Gmail draft for the signed-in user. This tool creates a draft only and never sends email.', parameters:{ type:'object', properties:{ to:{ type:'string', description:'Recipient email address.' }, subject:{ type:'string', description:'Email subject.' }, body:{ type:'string', description:'Email body.' } }, required:['to','subject','body'], additionalProperties:false } },
+const toolEntries = `  { type:'function', name:'google_gmail_search', description:'Search Gmail for the connected Google account. Use only after Google is connected. Return concise email metadata and snippets.', parameters:{ type:'object', properties:{ query:{ type:'string', description:'Gmail search query, e.g. from:john@example.com newer_than:7d or is:unread.' }, maxResults:{ type:'integer', minimum:1, maximum:20, description:'Maximum number of messages to return.' } }, required:[], additionalProperties:false } },
+  { type:'function', name:'google_calendar_events', description:'Read the primary Google Calendar for the connected Google account for the next several days.', parameters:{ type:'object', properties:{ days:{ type:'integer', minimum:1, maximum:31, description:'Number of future days to inspect.' } }, required:[], additionalProperties:false } },
+  { type:'function', name:'google_gmail_create_draft', description:'Create a Gmail draft for the connected Google account. This tool creates a draft only and never sends email.', parameters:{ type:'object', properties:{ to:{ type:'string', description:'Recipient email address.' }, subject:{ type:'string', description:'Email subject.' }, body:{ type:'string', description:'Email body.' } }, required:['to','subject','body'], additionalProperties:false } },
 `;
 if (!source.includes("name:'google_gmail_search'")) {
   if (!source.includes(toolMarker)) throw new Error('[google-tools] weather tool marker not found');
