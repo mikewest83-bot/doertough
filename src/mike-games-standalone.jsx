@@ -63,7 +63,12 @@ function mount() {
   }
   const host = document.createElement('div');
   host.dataset.mikeGamesRoot = 'true';
-  app.after(host);
+  const photoButton = app.querySelector('.vision-photo-button');
+  if (photoButton?.parentElement) {
+    photoButton.parentElement.insertAdjacentElement('afterend', host);
+  } else {
+    app.after(host);
+  }
   createRoot(host).render(<MikeGamesStandalone />);
 }
 
