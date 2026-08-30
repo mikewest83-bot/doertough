@@ -7,6 +7,9 @@ const TOKEN_KEY = 'mike_token';
 const readToken = () => { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; } };
 const writeToken = (token) => { try { if (token) localStorage.setItem(TOKEN_KEY, token); else localStorage.removeItem(TOKEN_KEY); } catch {} };
 const authHeaders = () => { const token = readToken(); return token ? { Authorization: `Bearer ${token}` } : {}; };
+const TRANSCRIPT_KEY = 'mike_show_transcript';
+const readShowTranscript = () => { try { return localStorage.getItem(TRANSCRIPT_KEY) === '1'; } catch { return false; } };
+const writeShowTranscript = (on) => { try { localStorage.setItem(TRANSCRIPT_KEY, on ? '1' : '0'); } catch {} };
 const fetchJson = async (url, options = {}, timeout = 60000) => { const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeout); try { const res = await fetch(url, { ...options, signal: controller.signal }); const data = await res.json().catch(() => ({})); if (!res.ok) { const err = new Error(data.error || `request_failed_${res.status}`); err.status = res.status; throw err; } return data; } finally { clearTimeout(timer); } };
 
 function waitForIceComplete(pc, timeout = 8000) {
@@ -37,6 +40,7 @@ function App() {
   const [authNotice, setAuthNotice] = useState('');
   const [resetToken, setResetToken] = useState('');
   const [accountsOn, setAccountsOn] = useState(false);
+  const [showTranscript, setShowTranscript] = useState(readShowTranscript);
 
   const conversationRef = useRef(null);
   const conversationModeRef = useRef(false);
@@ -91,8 +95,8 @@ function App() {
           else if (message.type === 'response.created') setStatus('talking');
           else if (message.type === 'response.audio.delta') setStatus('talking');
           else if (message.type === 'response.audio.done' || message.type === 'response.done') setStatus('listening');
-          else if (message.type === 'conversation.item.input_audio_transcription.completed') { const text = String(message.transcript || '').trim(); if (text) setMessages((prev) => [...prev, { role: 'user', text }]); }
-          else if (message.type === 'response.audio_transcript.done') { const text = String(message.transcript || '').trim(); if (text) setMessages((prev) => [...prev, { role: 'mike', text }]); }
+          else if (message.type === 'conversation.item.input_audio_transcription.completed') { const text = String(message.transcript || '').trim(); if (text) setMessages((prev) => [...prev, { role: 'user', text, voice: true }]); }
+          else if (message.type === 'response.audio_transcript.done') { const text = String(message.transcript || '').trim(); if (text) setMessages((prev) => [...prev, { role: 'mike', text, voice: true }]); }
           else if (message.type === 'error') { const detail = message.error?.message || 'Realtime voice connection error.'; console.error('[voice] realtime server error:', message); setError(detail); }
         } catch (err) { console.warn('[voice] ignored realtime event:', err); }
       };
@@ -161,6 +165,9 @@ function App() {
 
   const statusText = listening ? 'MIKE IS LISTENING' : speaking ? 'MIKE IS TALKING' : busy ? 'MIKE IS THINKING' : 'MIKE IS HERE';
   const voiceControlLabel = conversationMode ? 'END CONVERSATION' : 'TAP TO TALK';
+  const hasVoiceMessages = messages.some((m) => m.voice);
+  const visibleMessages = showTranscript ? messages : messages.filter((m) => !m.voice);
+  const toggleTranscript = () => { const next = !showTranscript; setShowTranscript(next); writeShowTranscript(next); };
   const starterPrompts = ['What would you do?', 'Help me figure this out.', 'I need a second opinion.', '📷 Ask Mike about a photo'];
 
   return (
@@ -170,7 +177,8 @@ function App() {
       <section className="voice-hero"><div className="copy"><label>YOUR EVERYDAY DOER</label><h1>Talk to Mike.<br /><span>Get a straight answer.</span></h1><p>Voice or text, any hour. Price a job, plan your week, talk through a call you have to make, work out what a used truck is really worth. Mike answers like somebody who has done the work — not like a manual.</p><ul className="trust-row"><li>Voice + text</li><li>Cancel anytime</li><li>Mike is here</li></ul><div className="try-row"><span className="try-label">Try him right now</span><div className="try-chips">{starterPrompts.map((prompt) => (<button key={prompt} type="button" className="try-chip" onClick={() => prompt.startsWith('📷') ? openPhotoPicker() : ask(prompt)} disabled={busy || (conversationMode && !prompt.startsWith('📷'))}>{prompt}</button>))}</div></div></div>
         <div className={'voice-box ' + (listening ? 'is-listening' : speaking ? 'is-speaking' : '')} onClick={toggleConversation} role="button" tabIndex={0} aria-label={conversationMode ? 'Stop talking with Mike' : 'Start talking with Mike'} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleConversation(); }}><div className="voice-orb" aria-hidden="true"><span className="orb-core"><span>D</span><em>T</em></span></div><div className="voice-state"><span className="state-dot" /><strong>{statusText}</strong></div><div className="wave" aria-hidden="true">{Array.from({ length: 17 }, (_, i) => <i key={i} style={{ '--delay': `${i * 55}ms`, '--height': `${18 + ((i * 17) % 44)}px` }} />)}</div><p className="voice-hint">{conversationMode ? (listening ? 'Go ahead. Mike is listening.' : speaking ? 'Mike is talking.' : 'Conversation mode is on.') : 'Tap the mic below when you are ready.'}</p><button className={'voice-puck ' + (conversationMode ? 'active' : '')} onClick={(e) => { e.stopPropagation(); toggleConversation(); }} disabled={voiceTransitionRef.current || busy}><span className="voice-puck-icon"><Mic size={23} strokeWidth={2.3} /></span><span className="voice-puck-copy"><strong>{voiceControlLabel}</strong><small>{conversationMode ? 'Mike is connected' : 'Press and start talking'}</small></span><ArrowRight className="voice-puck-arrow" size={18} /></button></div>
       </section>
-      <section className="chat" aria-live="polite">{messages.map((m, i) => <div key={i} className={'bubble ' + m.role}>{m.text}</div>)}{busy && <div className="bubble mike">Give me a second. I'm thinking…</div>}</section>
+      {hasVoiceMessages && (<button type="button" className="transcript-toggle" onClick={toggleTranscript} aria-pressed={showTranscript} style={{ alignSelf: 'center', margin: '4px auto 0', padding: '6px 14px', fontSize: '12px', letterSpacing: '0.04em', textTransform: 'uppercase', background: 'transparent', border: '1px solid currentColor', borderRadius: '999px', color: 'inherit', opacity: 0.6, cursor: 'pointer' }}>{showTranscript ? 'Hide voice transcript' : 'Show voice transcript'}</button>)}
+      <section className="chat" aria-live="polite">{visibleMessages.map((m, i) => <div key={i} className={'bubble ' + m.role}>{m.text}</div>)}{busy && <div className="bubble mike">Give me a second. I'm thinking…</div>}</section>
       {error && <div className="error" role="alert">{error}</div>}
       <input ref={photoInputRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePhotoChange} style={{ display: 'none' }} aria-hidden="true" />
       <button type="button" className="vision-photo-button" onClick={openPhotoPicker} disabled={busy} aria-label="Ask Mike about a photo">📷 Ask Mike about a photo</button>
