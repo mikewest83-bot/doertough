@@ -1,6 +1,5 @@
 import { query, dbEnabled } from './db.mjs';
 import { findLocalDeals } from './deal-finder.mjs';
-import { sendReminder } from './mailer.mjs';
 
 let ready = false;
 const MAX = 50;
@@ -147,26 +146,21 @@ async function recordFailure(alert, reason) {
 function dealScore(result) {
   const text = String(result?.results || '');
   if (!text) return null;
-  // Prefer an explicit score supplied by the deal finder. Never invent a score
-  // from a listing that has not been evaluated by the search layer.
   const match = text.match(/(?:deal\s*score|score)\s*[:=-]\s*(\d{1,3})\s*(?:\/\s*100)?/i);
   if (!match) return null;
   const score = Math.max(0, Math.min(100, Number(match[1])));
   return Number.isFinite(score) ? score : null;
 }
 
-function shouldNotify(result) {
+function shouldTrack(result) {
   const score = dealScore(result);
-  // If the deal finder supplies a score, only notify on a genuinely worthwhile deal.
-  // If it does not, retain the existing credible-listing behavior rather than silently
-  // dropping alerts until every provider emits scores.
   return score == null ? hasCredibleDeal(result) : score >= 60;
 }
 
 export async function checkDealAlerts() {
   const alerts = await dueAlerts();
   let checked = 0;
-  let notified = 0;
+  let matched = 0;
 
   for (const alert of alerts) {
     try {
@@ -190,7 +184,7 @@ export async function checkDealAlerts() {
         alert.consecutive_failures = 0;
       }
 
-      if (!shouldNotify(result)) continue;
+      if (!shouldTrack(result)) continue;
 
       const urls = extractUrls(result.results);
       const previous = (Array.isArray(alert.notified_urls) ? alert.notified_urls : [])
@@ -200,38 +194,25 @@ export async function checkDealAlerts() {
       if (!fresh.length) continue;
 
       const score = dealScore(result);
-      const scoreLine = score == null ? '' : `\nMike deal score: ${score}/100\n`;
-      const note = `Mike found a new match for your ${alert.category} deal alert near ${alert.location}.${scoreLine}\n\n${String(result.results).slice(0, 3500)}\n\nNew listing links:\n${fresh.slice(0, 5).join('\n')}\n\nTo stop this one, tell Mike: cancel deal alert ${alert.id}.`;
-      const mail = await sendReminder({
-        to: alert.email,
-        name: alert.name,
-        title: `${score != null && score >= 90 ? '🚨 ' : ''}Deal alert: ${alert.category}`,
-        note,
-        remindAt: new Date()
-      });
-
-      if (mail.sent) {
-        await query(
-          'UPDATE deal_alerts SET notified_urls=$2::jsonb, last_notified_at=now(), consecutive_failures=0, last_error=NULL, updated_at=now() WHERE id=$1',
-          [alert.id, JSON.stringify([...new Set([...previous, ...fresh])].slice(-100))]
-        );
-        notified += 1;
-      } else {
-        await recordFailure(alert, `email_not_delivered: ${mail.reason || 'unknown'}`);
-      }
+      await query(
+        'UPDATE deal_alerts SET notified_urls=$2::jsonb, last_notified_at=now(), consecutive_failures=0, last_error=NULL, updated_at=now() WHERE id=$1',
+        [alert.id, JSON.stringify([...new Set([...previous, ...fresh])].slice(-100))]
+      );
+      matched += 1;
+      console.log(`[deal-alerts] alert #${alert.id} found ${fresh.length} new match(es)${score == null ? '' : ` (score ${score}/100)`}; email delivery disabled`);
     } catch (error) {
       console.error(`[deal-alerts] alert #${alert.id} failed:`, error.message || error);
       try { await recordFailure(alert, error.message || 'check_failed'); } catch {}
     }
   }
-  return { checked, notified };
+  return { checked, notified: 0, matched };
 }
 
 export function startDealAlertScheduler() {
   const run = async () => {
     try {
       const result = await checkDealAlerts();
-      if (result.checked || result.notified) console.log(`[deal-alerts] checked=${result.checked} notified=${result.notified}`);
+      if (result.checked || result.matched) console.log(`[deal-alerts] checked=${result.checked} matched=${result.matched} email_delivery=disabled`);
     } catch (error) {
       console.error('[deal-alerts] scheduler failed:', error.message || error);
     }
@@ -259,7 +240,7 @@ export async function setDealAlertTool(userId, args = {}) {
     return {
       tool: 'set_deal_alert',
       alert,
-      message: `Deal alert #${alert.id} set for ${alert.category} near ${alert.location}. I’ll check every ${alert.frequency_minutes} minutes and email you when a new matching listing shows up.`
+      message: `Deal alert #${alert.id} set for ${alert.category} near ${alert.location}. I’ll keep checking every ${alert.frequency_minutes} minutes. Email alerts are currently disabled.`
     };
   } catch (error) {
     return toolError(error);
@@ -285,19 +266,19 @@ export const DEAL_ALERT_TOOLS = [
   {
     type:'function',
     name:'set_deal_alert',
-    description:`Create a persistent alert that searches current public listings for the signed-in user and emails them when a new matching deal is found. Use when the user wants Mike to keep looking for a specific item or bargain. Each account can have up to ${MAX_ACTIVE_PER_USER} active alerts. Check interval choices are 5, 15, 30, or 60 minutes; default is 5. Never claim an alert was set unless this succeeds.`,
+    description:`Create a persistent scheduled search for the signed-in user. Mike will keep checking current public listings for a matching deal and track new matches. Email delivery is currently disabled. Each account can have up to ${MAX_ACTIVE_PER_USER} active alerts. Check interval choices are 5, 15, 30, or 60 minutes; default is 5. Never claim an email was sent.`,
     parameters:{type:'object',properties:{category:{type:'string'},location:{type:'string'},budget:{type:'number'},radiusMiles:{type:'number'},constraints:{type:'string'},frequencyMinutes:{type:'integer',enum:[5,15,30,60],description:'Check interval in minutes. Default 5.'}},required:['category','location'],additionalProperties:false}
   },
   {
     type:'function',
     name:'list_deal_alerts',
-    description:'List the signed-in user\'s active and inactive deal alerts, including recent failures or pauses.',
+    description:'List the signed-in user\'s active and inactive scheduled deal searches, including recent checks and failures.',
     parameters:{type:'object',properties:{},additionalProperties:false}
   },
   {
     type:'function',
     name:'cancel_deal_alert',
-    description:'Disable one of the signed-in user\'s deal alerts by id.',
+    description:'Disable one of the signed-in user\'s deal searches by id.',
     parameters:{type:'object',properties:{id:{type:'integer'}},required:['id'],additionalProperties:false}
   },
 ];
