@@ -1,5 +1,5 @@
 // Shared Realtime tool definitions and safe server-side dispatch.
-// Voice uses the same tool handlers as text; never execute business logic in the browser.
+// Voice uses the same tool handlers as text; business logic stays server-side.
 import { LIVE_TOOLS, LIVE_TOOL_HANDLERS } from './live.mjs';
 import { BUSINESS_TOOLS, BUSINESS_TOOL_HANDLERS } from './business.mjs';
 import { FREE_TOOLS, FREE_TOOL_HANDLERS } from './free-tools.mjs';
@@ -11,32 +11,15 @@ import { CODING_TOOLS, CODING_TOOL_HANDLERS } from './coding-tools.mjs';
 import { OWNER_ONLY_TOOLS } from './tool-access.mjs';
 import { isOwner } from './auth.mjs';
 
-export const REALTIME_TOOLS = [
-  ...LIVE_TOOLS,
-  ...BUSINESS_TOOLS,
-  ...FREE_TOOLS,
-  ...FIELD_TOOLS,
-  ...MONEY_TOOLS,
-  ...REMINDER_TOOLS,
-  ...DOERTOUGH_INTELLIGENCE_TOOLS,
-  ...CODING_TOOLS,
-];
-
-const HANDLERS = {
-  ...LIVE_TOOL_HANDLERS,
-  ...BUSINESS_TOOL_HANDLERS,
-  ...FREE_TOOL_HANDLERS,
-  ...FIELD_TOOL_HANDLERS,
-  ...MONEY_TOOL_HANDLERS,
-  ...CODING_TOOL_HANDLERS,
-  ...DOERTOUGH_INTELLIGENCE_HANDLERS,
-};
+export const REALTIME_TOOLS = [...LIVE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS, ...MONEY_TOOLS, ...REMINDER_TOOLS, ...DOERTOUGH_INTELLIGENCE_TOOLS, ...CODING_TOOLS];
+const HANDLERS = { ...LIVE_TOOL_HANDLERS, ...BUSINESS_TOOL_HANDLERS, ...FREE_TOOL_HANDLERS, ...FIELD_TOOL_HANDLERS, ...MONEY_TOOL_HANDLERS, ...CODING_TOOL_HANDLERS, ...DOERTOUGH_INTELLIGENCE_HANDLERS };
 
 export function getRealtimeToolHandler(name, user) {
   if (OWNER_ONLY_TOOLS.has(name) && !isOwner(user)) return null;
   return reminderHandlerFor(name, user?.id) || HANDLERS[name] || null;
 }
 
-export function isRealtimeToolAllowed(name) {
-  return REALTIME_TOOLS.some((tool) => tool.name === name);
+export function isRealtimeToolAllowed(name, user) {
+  if (!REALTIME_TOOLS.some((tool) => tool.name === name)) return false;
+  return !OWNER_ONLY_TOOLS.has(name) || isOwner(user);
 }
