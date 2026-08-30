@@ -8,6 +8,7 @@ import { MONEY_TOOLS, MONEY_TOOL_HANDLERS } from './money.mjs';
 import { REMINDER_TOOLS, reminderHandlerFor } from './reminders.mjs';
 import { DOERTOUGH_INTELLIGENCE_TOOLS, DOERTOUGH_INTELLIGENCE_HANDLERS } from './doertough-intelligence-tools.mjs';
 import { CODING_TOOLS, CODING_TOOL_HANDLERS } from './coding-tools.mjs';
+import { DEAL_FINDER_TOOLS, DEAL_FINDER_HANDLERS } from './deal-finder.mjs';
 import { OWNER_ONLY_TOOLS } from './tool-access.mjs';
 import { isOwner } from './auth.mjs';
 
@@ -20,6 +21,7 @@ export const REALTIME_TOOLS = [
   ...REMINDER_TOOLS,
   ...DOERTOUGH_INTELLIGENCE_TOOLS,
   ...CODING_TOOLS,
+  ...DEAL_FINDER_TOOLS,
 ].filter((tool) => !OWNER_ONLY_TOOLS.has(tool.name));
 
 const HANDLERS = {
@@ -30,6 +32,7 @@ const HANDLERS = {
   ...MONEY_TOOL_HANDLERS,
   ...CODING_TOOL_HANDLERS,
   ...DOERTOUGH_INTELLIGENCE_HANDLERS,
+  ...DEAL_FINDER_HANDLERS,
 };
 
 export function getRealtimeToolHandler(name, user) {
