@@ -29,7 +29,7 @@ const newMap = "{starterPrompts.map((prompt) => (<button key={prompt} type=\"but
 if (source.includes(oldMap) && !source.includes(newMap)) source = source.replace(oldMap, newMap);
 
 const formAnchor = "      <form onSubmit={(e) => { e.preventDefault(); ask(input); }}>";
-const hiddenInput = "      <input ref={photoInputRef} type=\"file\" accept=\"image/jpeg,image/png,image/webp\" onChange={handlePhotoChange} style={{ display: 'none' }} aria-hidden=\"true\" />\n";
+const hiddenInput = "      <input ref={photoInputRef} type=\"file\" accept=\"image/jpeg,image/png,image/webp\" onChange={handlePhotoChange} style={{ display: 'none' }} aria-hidden=\"true\" />\n      <button type=\"button\" className=\"vision-photo-button\" onClick={openPhotoPicker} disabled={busy || conversationMode} aria-label=\"Ask Mike about a photo\">📷 Ask Mike about a photo</button>\n";
 if (!source.includes('ref={photoInputRef}')) {
   if (!source.includes(formAnchor)) throw new Error('Vision UI form anchor not found');
   source = source.replace(formAnchor, hiddenInput + formAnchor);
