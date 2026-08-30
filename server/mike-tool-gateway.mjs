@@ -14,9 +14,6 @@ export function createMikeToolGateway({ handlers = {}, authorize = async () => t
       const permitted = await authorize({ name, args, user });
       if (!permitted) throw new Error('mike_tool_unauthorized');
 
-      // Defense in depth for repository writes. Keep these constraints here as
-      // well as inside coding-tools.mjs so a future handler cannot accidentally
-      // reopen the dangerous paths/operations.
       if (name === 'code_write_file') {
         const path = String(args?.path || '').trim();
         const branch = String(args?.branch || '').trim();
@@ -24,7 +21,11 @@ export function createMikeToolGateway({ handlers = {}, authorize = async () => t
         if (!path || path.startsWith('/') || path.includes('..') || path.includes('\\')) throw new Error('unsafe_path');
         if (/^\.github\/workflows(?:\/|$)/i.test(path)) throw new Error('workflow_path_blocked');
         if (!content.trim()) throw new Error('empty_content_blocked');
-        if (!branch || branch === 'main' || branch === 'master' || branch === 'production' || branch.startsWith('main/') || branch.startsWith('master/') || branch.startsWith('production/')) throw new Error('production_branch_blocked');
+        if (!branch || /^(?:main|master|production)(?:\/|$)/i.test(branch)) throw new Error('production_branch_blocked');
+      }
+      if (name === 'code_create_branch') {
+        const branch = String(args?.branch || '').trim();
+        if (!/^[A-Za-z0-9._\/-]{1,120}$/.test(branch) || /^(?:main|master|production)(?:\/|$)/i.test(branch)) throw new Error('unsafe_branch');
       }
 
       try {
