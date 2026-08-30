@@ -18,7 +18,7 @@ import { sendPasswordReset } from './mailer.mjs';
 import { publicRole } from './rbac.mjs';
 
 const JWT_SECRET = process.env.JWT_SECRET || '';
-const TOKEN_TTL = '30d';
+const TOKEN_TTL = '90d';
 const OWNER_EMAIL = String(process.env.OWNER_EMAIL || '').trim().toLowerCase();
 const RESET_TTL_MINUTES = Number(process.env.PASSWORD_RESET_TTL_MINUTES || 60);
 const RESET_BASE_URL = String(process.env.PUBLIC_APP_URL || 'https://doertoughmikeai.com').replace(/\/+$/, '');
@@ -35,8 +35,6 @@ const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 const looksLikeEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
 
-// Only expose account information Mike's browser actually needs.
-// Role is derived server-side; the browser never gets to choose it.
 export const publicUser = (u) => ({
   id: String(u.id),
   name: u.name,
@@ -45,8 +43,6 @@ export const publicUser = (u) => ({
   isOwner: isOwner(u),
 });
 
-// The owner is the single account allowed to see Mike's own business data.
-// If OWNER_EMAIL is unset, nobody is the owner - fail closed.
 export function isOwner(user) {
   if (!user || !OWNER_EMAIL) return false;
   return normalizeEmail(user.email) === OWNER_EMAIL;
@@ -106,7 +102,11 @@ export async function login(req, res) {
 }
 
 export async function me(req, res) {
-  res.json({ user: publicUser(req.user) });
+  const user = req.user;
+  if (!user) return res.status(401).json({ error: 'Sign in to continue.' });
+  // Rolling 90-day session: issue a fresh token whenever the authenticated
+  // browser checks its session, while preserving token-version invalidation.
+  return res.json({ user: publicUser(user), token: sign(user) });
 }
 
 export async function requestPasswordReset(req, res) {
