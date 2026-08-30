@@ -1,8 +1,6 @@
 // server/live.mjs
-//
 // Live-data tools for Mike AI: weather, news headlines, sports scores,
-// stock quotes, navigation, and local-service search. Weather/news/sports/maps
-// URLs are keyless. Stocks use Finnhub when configured and fall back to Stooq.
+// stock quotes, navigation, and local-service search.
 
 import Parser from 'rss-parser';
 import { DICTIONARY_TOOLS, DICTIONARY_TOOL_HANDLERS } from './dictionary-tools.mjs';
