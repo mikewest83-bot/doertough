@@ -22,10 +22,48 @@ if (!source.includes(ownerImport)) {
   source = source.replace(anchor, `${anchor}\n${ownerImport}`);
 }
 
+// Deal alerts are already exposed to Realtime voice through realtime-tools.mjs.
+// This also wires the same authenticated alert tools into text chat and starts
+// the persistent background checker in the production server.
+const dealAlertImport = "import { DEAL_ALERT_TOOLS, dealAlertHandlerFor, startDealAlertScheduler } from './deal-alerts.mjs';";
+if (!source.includes(dealAlertImport)) {
+  const anchor = "import { OWNER_ONLY_TOOLS } from './tool-access.mjs';";
+  if (!source.includes(anchor)) throw new Error('Deal alert import anchor not found');
+  source = source.replace(anchor, `${anchor}\n${dealAlertImport}`);
+}
+
 source = source.replace(
   /const OWNER_ONLY_TOOLS = new Set\(\[[\s\S]*?\]\);\n/,
   ''
 );
+
+if (!source.includes('const DEAL_ALERT_HANDLERS =')) {
+  const anchor = 'const PUBLIC_TOOLS = LIVE_TOOLS.filter((tool) => !OWNER_ONLY_TOOLS.has(tool.name));';
+  if (!source.includes(anchor)) throw new Error('Deal alert tools anchor not found');
+  const block = [
+    'const DEAL_ALERT_HANDLERS = Object.fromEntries(DEAL_ALERT_TOOLS.map((tool) => [',
+    '  tool.name,',
+    '  (args = {}) => dealAlertHandlerFor(tool.name, args?.user?.id)?.(args),',
+    ']));',
+    '',
+  ].join('\n');
+  source = source.replace(anchor, `${block}${anchor}`);
+}
+
+if (!source.includes('...DEAL_ALERT_TOOLS')) {
+  const anchor = 'const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS];';
+  if (!source.includes(anchor)) throw new Error('LIVE_TOOLS anchor not found');
+  source = source.replace(
+    anchor,
+    'const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS, ...DEAL_ALERT_TOOLS];'
+  );
+}
+
+if (!source.includes('...DEAL_ALERT_HANDLERS')) {
+  const anchor = '  ...FIELD_TOOL_HANDLERS,\n};';
+  if (!source.includes(anchor)) throw new Error('LIVE_TOOL_HANDLERS anchor not found');
+  source = source.replace(anchor, '  ...FIELD_TOOL_HANDLERS,\n  ...DEAL_ALERT_HANDLERS,\n};');
+}
 
 if (!source.includes("app.post('/api/realtime/tool'")) {
   const marker = '// ===== Billing =====';
@@ -109,5 +147,16 @@ if (!source.includes('// OWNER VOICE QA BYPASS')) {
   );
 }
 
+// Start the persistent deal-alert worker once per production process. The
+// worker is idempotent and maintains its own database schema if necessary.
+if (!source.includes('// DEAL ALERT SCHEDULER')) {
+  const anchor = "    console.log(`[mike-ai] realtime voice ready: ${engineId || 'disabled'}`);";
+  if (!source.includes(anchor)) throw new Error('Deal alert scheduler voice anchor not found');
+  source = source.replace(
+    anchor,
+    `${anchor}\n    // DEAL ALERT SCHEDULER\n    startDealAlertScheduler();\n    console.log('[mike-ai] deal alerts scheduler ready');`
+  );
+}
+
 fs.writeFileSync(target, source);
-console.log('[build] Realtime public tool dispatch ready; centralized owner tool policy; owner voice QA bypass enabled; startup migrations disabled');
+console.log('[build] Realtime public tool dispatch ready; deal alerts attached to text + voice; persistent alert scheduler enabled; centralized owner tool policy; owner voice QA bypass enabled; startup migrations disabled');
