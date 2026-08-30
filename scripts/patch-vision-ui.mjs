@@ -20,12 +20,18 @@ if (!source.includes('const openPhotoPicker =')) {
   source = source.replace(askAnchor, visionHandler + askAnchor);
 }
 
+// Keep the main Mike starter prompts focused on conversation. Vision gets one dedicated CTA below the composer.
+source = source.replace(
+  "const starterPrompts = ['What would you do?', 'Help me figure this out.', 'I need a second opinion.', '📷 Ask Mike about a photo'];",
+  "const starterPrompts = ['What would you do?', 'Help me figure this out.', 'I need a second opinion.'];"
+);
+
 const oldPrompt = "const starterPrompts = ['What would you do?', 'Help me figure this out.', 'I need a second opinion.', 'Find me a way to save money.'];";
-const newPrompt = "const starterPrompts = ['What would you do?', 'Help me figure this out.', 'I need a second opinion.', '📷 Ask Mike about a photo'];";
+const newPrompt = "const starterPrompts = ['What would you do?', 'Help me figure this out.', 'I need a second opinion.'];";
 if (source.includes(oldPrompt)) source = source.replace(oldPrompt, newPrompt);
 
 const oldMap = "{starterPrompts.map((prompt) => (<button key={prompt} type=\"button\" className=\"try-chip\" onClick={() => ask(prompt)} disabled={busy || conversationMode}>{prompt}</button>))}";
-const newMap = "{starterPrompts.map((prompt) => (<button key={prompt} type=\"button\" className=\"try-chip\" onClick={() => prompt.startsWith('📷') ? openPhotoPicker() : ask(prompt)} disabled={busy || (conversationMode && !prompt.startsWith('📷'))}>{prompt}</button>))}";
+const newMap = "{starterPrompts.map((prompt) => (<button key={prompt} type=\"button\" className=\"try-chip\" onClick={() => ask(prompt)} disabled={busy || conversationMode}>{prompt}</button>))}";
 if (source.includes(oldMap) && !source.includes(newMap)) source = source.replace(oldMap, newMap);
 
 const formAnchor = "      <form onSubmit={(e) => { e.preventDefault(); ask(input); }}>";
@@ -49,5 +55,14 @@ if (!source.includes("window.addEventListener('mike-game-start'")) {
   source = source.replace(gameMarker, gameBridge + gameMarker);
 }
 
+// Defensive mobile layout fixes for the controls shown in production screenshots.
+const styleTarget = path.join(root, 'src', 'style.css');
+let styles = fs.readFileSync(styleTarget, 'utf8');
+const visionCss = `\n/* Mike Vision CTA + mobile containment */\n.vision-photo-button{width:min(560px,88%);min-height:54px;margin:14px auto 0;padding:12px 18px;border:1px solid #27a9ff66;border-radius:999px;background:#0c151d;color:#dbe7ef;display:flex;align-items:center;justify-content:center;gap:8px;font-size:14px;font-weight:750;letter-spacing:.02em;box-shadow:0 0 0 1px #27a9ff12,0 10px 28px #0008}\n.vision-photo-button:hover{border-color:#27a9ff;background:#0e1b25}\n.vision-photo-button:disabled{opacity:.45}\n@media(max-width:760px){html,body{width:100%;max-width:100%;overflow-x:hidden}main{width:100%;max-width:100%;min-width:0;overflow-x:hidden}.voice-box{width:100%;max-width:100%;min-width:0}.voice-puck{width:calc(100% - 32px);max-width:560px}.vision-photo-button{width:calc(100% - 32px);max-width:560px;font-size:13px}}\n`;
+if (!styles.includes('/* Mike Vision CTA + mobile containment */')) {
+  styles += visionCss;
+  fs.writeFileSync(styleTarget, styles);
+}
+
 fs.writeFileSync(target, source);
-console.log('[build] Photo CTA wired to Mike Vision; Mike Games wired to text and active Realtime voice');
+console.log('[build] Vision has one dedicated CTA; mobile Mike controls are contained; main Mike experience preserved');
