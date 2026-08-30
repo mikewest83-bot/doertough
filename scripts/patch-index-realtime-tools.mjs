@@ -25,8 +25,10 @@ if (!source.includes(ownerImport)) {
 // Deal alerts are exposed to Realtime voice and text chat. Scheduler startup
 // intentionally remains in the canonical production server path so this
 // build-time patch cannot create duplicate scheduler workers.
-const dealAlertImport = "import { DEAL_ALERT_TOOLS, dealAlertHandlerFor } from './deal-alerts.mjs';";
-const legacyDealAlertImport = "import { DEAL_ALERT_TOOLS, dealAlertHandlerFor, startDealAlertScheduler } from './deal-alerts.mjs';";
+// IMPORTANT: keep startDealAlertScheduler imported because server/index.mjs
+// owns the single canonical scheduler startup call.
+const dealAlertImport = "import { DEAL_ALERT_TOOLS, dealAlertHandlerFor, startDealAlertScheduler } from './deal-alerts.mjs';";
+const legacyDealAlertImport = "import { DEAL_ALERT_TOOLS, dealAlertHandlerFor } from './deal-alerts.mjs';";
 if (!source.includes(dealAlertImport)) {
   if (source.includes(legacyDealAlertImport)) {
     source = source.replace(legacyDealAlertImport, dealAlertImport);
@@ -117,4 +119,4 @@ if (!source.includes('// OWNER VOICE QA BYPASS')) {
 // Scheduler startup is intentionally NOT injected here. It belongs to the
 // canonical production server startup path and must run exactly once.
 fs.writeFileSync(target, source);
-console.log('[build] Realtime tools wired; deal-alert scheduler left to canonical server path; owner voice QA bypass enabled; startup migrations disabled');
+console.log('[build] Realtime tools wired; deal-alert scheduler import preserved for canonical server startup; owner voice QA bypass enabled; startup migrations disabled');
