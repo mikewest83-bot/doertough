@@ -43,6 +43,7 @@ function App() {
   const statusRef = useRef('ready');
   const voiceTransitionRef = useRef(false);
   const voiceSessionRef = useRef(null);
+  const photoInputRef = useRef(null);
 
   const setConversation = (enabled) => { conversationModeRef.current = enabled; setConversationMode(enabled); };
   const setStatus = (status) => { statusRef.current = status; setListening(status === 'listening'); setSpeaking(status === 'talking'); };
@@ -118,6 +119,37 @@ function App() {
   };
 
   const toggleConversation = async () => { if (voiceTransitionRef.current) return; if (conversationModeRef.current || conversationRef.current) { voiceTransitionRef.current = true; try { await stopRealtimeConversation(); } finally { voiceTransitionRef.current = false; } } else await startRealtimeConversation(); };
+
+  const openPhotoPicker = () => { photoInputRef.current?.click(); };
+  const handlePhotoChange = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    const allowed = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!allowed.includes(file.type.toLowerCase())) { setError('Please choose a JPG, PNG, or WebP image.'); return; }
+    if (file.size > 5 * 1024 * 1024) { setError('That photo is too large. Please choose an image under 5 MB.'); return; }
+    setBusy(true); setError('');
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('Could not read that photo.'));
+        reader.readAsDataURL(file);
+      });
+      const data = await fetchJson('/api/vision/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ image: { dataUrl, mediaType: file.type.toLowerCase() }, prompt: 'What do you see in this photo? Describe the important details clearly and naturally.' })
+      }, 60000);
+      const text = String(data.text || '').trim();
+      if (!text) throw new Error('Mike could not get an answer from the photo.');
+      setMessages((prev) => [...prev, { role: 'user', text: '📷 Asked Mike about a photo' }, { role: 'mike', text }]);
+    } catch (err) {
+      if (err?.status === 401) { setAuthMode('login'); setAuthError('Sign in to use Mike Vision.'); setAuthOpen(true); }
+      else setError(err?.message || 'Mike could not analyze that photo.');
+    } finally { setBusy(false); }
+  };
+
   const ask = async (raw) => { const text = (raw || '').trim(); if (!text || busy || conversationModeRef.current || conversationRef.current) return; setInput(''); setBusy(true); setError(''); const history = messages.slice(-10); setMessages((prev) => [...prev, { role: 'user', text }]); try { const data = await fetchJson('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ message: text, history }) }, 55000); setMessages((prev) => [...prev, { role: 'mike', text: data.text }]); setBusy(false); } catch (err) { const msg = err.name === 'AbortError' ? 'Mike is taking too long to respond. Try that again.' : err.message || 'Mike AI is unavailable right now.'; setError(msg); setMessages((prev) => [...prev, { role: 'mike', text: msg }]); setBusy(false); } };
   const switchAuthMode = (mode) => { setAuthMode(mode); setAuthError(''); setAuthNotice(''); };
   const submitAuth = async (e) => { e?.preventDefault?.(); if (authBusy) return; setAuthBusy(true); setAuthError(''); setAuthNotice(''); try { if (authMode === 'forgot') { const data = await fetchJson('/api/auth/forgot-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: authForm.email }) }, 20000); setAuthNotice(data.message || 'If that email has an account, a reset link is on its way.'); return; } if (authMode === 'reset') { const data = await fetchJson('/api/auth/reset-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: resetToken, password: authForm.password }) }, 20000); writeToken(data.token); setUser(data.user); setAuthOpen(false); setResetToken(''); setAuthForm({ name: '', email: '', password: '' }); return; } const path = authMode === 'login' ? '/api/auth/login' : '/api/auth/register'; const body = authMode === 'login' ? { email: authForm.email, password: authForm.password } : authForm; const data = await fetchJson(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 20000); writeToken(data.token); setUser(data.user); setAuthOpen(false); setAuthForm({ name: '', email: '', password: '' }); } catch (err) { setAuthError(err.message || 'That did not work. Try again.'); } finally { setAuthBusy(false); } };
@@ -129,17 +161,19 @@ function App() {
 
   const statusText = listening ? 'MIKE IS LISTENING' : speaking ? 'MIKE IS TALKING' : busy ? 'MIKE IS THINKING' : 'MIKE IS HERE';
   const voiceControlLabel = conversationMode ? 'END CONVERSATION' : 'TAP TO TALK';
-  const starterPrompts = ['What would you do?', 'Help me figure this out.', 'I need a second opinion.', 'Find me a way to save money.'];
+  const starterPrompts = ['What would you do?', 'Help me figure this out.', 'I need a second opinion.', '📷 Ask Mike about a photo'];
 
   return (
     <main>
       <header><div className="brand"><b className="brand-dt"><span>D</span><em>T</em></b><div><strong>MIKE AI</strong><small>DOER TOUGH</small></div></div><div className="header-right"><span className="status">● {statusText}</span>{accountsOn && (user ? (<button className="auth-btn" onClick={signOut} title={user.email}><LogOut size={15} /> {user.name.split(' ')[0]}</button>) : (<button className="auth-btn" onClick={() => { setAuthError(''); setAuthOpen(true); }}><User size={15} /> Sign in</button>))}</div></header>
       {authOpen && (() => { const TITLES = { login: 'Welcome back', register: 'Make an account', forgot: 'Reset your password', reset: 'Choose a new password' }; const SUBS = { login: 'Sign in and Mike picks up where you left off.', register: 'So Mike remembers you and your conversations stay yours.', forgot: "Put in your email and we'll send you a link to set a new password.", reset: 'Pick something you have not used elsewhere. This signs you out everywhere else.' }; const ACTIONS = { login: 'Sign in', register: 'Create account', forgot: 'Send reset link', reset: 'Set new password' }; const showName = authMode === 'register'; const showEmail = authMode !== 'reset'; const showPassword = authMode !== 'forgot'; return (<div className="auth-overlay" role="dialog" aria-modal="true" onClick={(e) => { if (e.target === e.currentTarget) setAuthOpen(false); }}><div className="auth-card"><button className="auth-close" onClick={() => setAuthOpen(false)} aria-label="Close"><X size={18} /></button><h2>{TITLES[authMode]}</h2><p className="auth-sub">{SUBS[authMode]}</p><form onSubmit={submitAuth} className="auth-form">{showName && (<input placeholder="Your name" value={authForm.name} autoComplete="name" onChange={(e) => setAuthForm({ ...authForm, name: e.target.value })} />)}{showEmail && (<input type="email" placeholder="Email" value={authForm.email} autoComplete="email" onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })} />)}{showPassword && (<input type="password" placeholder={authMode === 'login' ? 'Password' : 'Password (8+ characters)'} value={authForm.password} autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} />)}{authError && <div className="auth-error">{authError}</div>}{authNotice && <div className="auth-sub" style={{ margin: 0 }}>{authNotice}</div>}<button type="submit" disabled={authBusy}>{authBusy ? 'Working...' : ACTIONS[authMode]}</button></form>{authMode === 'login' && (<button className="auth-switch" onClick={() => switchAuthMode('forgot')}>Forgot your password?</button>)}<button className="auth-switch" onClick={() => switchAuthMode(authMode === 'register' ? 'login' : authMode === 'login' ? 'register' : 'login')}>{authMode === 'login' ? "No account yet? Make one." : authMode === 'register' ? 'Already have an account? Sign in.' : 'Back to sign in'}</button></div></div>); })()}
-      <section className="voice-hero"><div className="copy"><label>YOUR EVERYDAY DOER</label><h1>Talk to Mike.<br /><span>Get a straight answer.</span></h1><p>Voice or text, any hour. Price a job, plan your week, talk through a call you have to make, work out what a used truck is really worth. Mike answers like somebody who has done the work — not like a manual.</p><ul className="trust-row"><li>Voice + text</li><li>Cancel anytime</li><li>Mike is here</li></ul><div className="try-row"><span className="try-label">Try him right now</span><div className="try-chips">{starterPrompts.map((prompt) => (<button key={prompt} type="button" className="try-chip" onClick={() => ask(prompt)} disabled={busy || conversationMode}>{prompt}</button>))}</div></div></div>
+      <section className="voice-hero"><div className="copy"><label>YOUR EVERYDAY DOER</label><h1>Talk to Mike.<br /><span>Get a straight answer.</span></h1><p>Voice or text, any hour. Price a job, plan your week, talk through a call you have to make, work out what a used truck is really worth. Mike answers like somebody who has done the work — not like a manual.</p><ul className="trust-row"><li>Voice + text</li><li>Cancel anytime</li><li>Mike is here</li></ul><div className="try-row"><span className="try-label">Try him right now</span><div className="try-chips">{starterPrompts.map((prompt) => (<button key={prompt} type="button" className="try-chip" onClick={() => prompt.startsWith('📷') ? openPhotoPicker() : ask(prompt)} disabled={busy || (conversationMode && !prompt.startsWith('📷'))}>{prompt}</button>))}</div></div></div>
         <div className={'voice-box ' + (listening ? 'is-listening' : speaking ? 'is-speaking' : '')} onClick={toggleConversation} role="button" tabIndex={0} aria-label={conversationMode ? 'Stop talking with Mike' : 'Start talking with Mike'} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleConversation(); }}><div className="voice-orb" aria-hidden="true"><span className="orb-core"><span>D</span><em>T</em></span></div><div className="voice-state"><span className="state-dot" /><strong>{statusText}</strong></div><div className="wave" aria-hidden="true">{Array.from({ length: 17 }, (_, i) => <i key={i} style={{ '--delay': `${i * 55}ms`, '--height': `${18 + ((i * 17) % 44)}px` }} />)}</div><p className="voice-hint">{conversationMode ? (listening ? 'Go ahead. Mike is listening.' : speaking ? 'Mike is talking.' : 'Conversation mode is on.') : 'Tap the mic below when you are ready.'}</p><button className={'voice-puck ' + (conversationMode ? 'active' : '')} onClick={(e) => { e.stopPropagation(); toggleConversation(); }} disabled={voiceTransitionRef.current || busy}><span className="voice-puck-icon"><Mic size={23} strokeWidth={2.3} /></span><span className="voice-puck-copy"><strong>{voiceControlLabel}</strong><small>{conversationMode ? 'Mike is connected' : 'Press and start talking'}</small></span><ArrowRight className="voice-puck-arrow" size={18} /></button></div>
       </section>
       <section className="chat" aria-live="polite">{messages.map((m, i) => <div key={i} className={'bubble ' + m.role}>{m.text}</div>)}{busy && <div className="bubble mike">Give me a second. I'm thinking…</div>}</section>
       {error && <div className="error" role="alert">{error}</div>}
+      <input ref={photoInputRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePhotoChange} style={{ display: 'none' }} aria-hidden="true" />
+      <button type="button" className="vision-photo-button" onClick={openPhotoPicker} disabled={busy} aria-label="Ask Mike about a photo">📷 Ask Mike about a photo</button>
       <form onSubmit={(e) => { e.preventDefault(); ask(input); }}><input id="input" value={input} onChange={(e) => setInput(e.target.value)} placeholder="What's on your mind?" autoComplete="off" disabled={conversationMode} /><button disabled={!input.trim() || busy || conversationMode} aria-label="Send"><Send size={18} /></button></form>
       <p className="fine">Mike is a Doer Tough AI assistant. Current facts and changing information should be verified before important decisions.</p>
     </main>
