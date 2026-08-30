@@ -20,7 +20,7 @@ jobs:
       - name: Commit lockfile
         run: |
           set -euo pipefail
-          if git status --porcelain -- package-lock.json | grep -q '^$'; then
+          if git diff --quiet -- package-lock.json; then
             echo "package-lock.json already matches package.json"
             exit 0
           fi
