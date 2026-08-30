@@ -8,13 +8,16 @@ import { LIVE_TOOLS as BASE_TOOLS, LIVE_TOOL_HANDLERS as BASE_HANDLERS } from '.
 import { BUSINESS_TOOLS, BUSINESS_TOOL_HANDLERS } from './business.mjs';
 import { FREE_TOOLS, FREE_TOOL_HANDLERS } from './free-tools.mjs';
 import { FIELD_TOOLS, FIELD_TOOL_HANDLERS } from './field-tools.mjs';
+import { MONEY_TOOLS, MONEY_TOOL_HANDLERS } from './money-tools.mjs';
+import { DOERTOUGH_INTELLIGENCE_TOOLS, DOERTOUGH_INTELLIGENCE_HANDLERS } from './doertough-intelligence-tools.mjs';
 import { createMikeToolGateway } from './mike-tool-gateway.mjs';
 import { installGuards } from './guard.mjs';
+import { ensureRbacSchema, getRbacOverview } from './rbac.mjs';
+import { REMINDER_TOOLS, setReminderTool, listRemindersTool, cancelReminderTool, ensureReminderSchema } from './reminders.mjs';
 import { mailerConfigured } from './mailer.mjs';
 import { MIKE_INSTRUCTIONS } from './persona.mjs';
 import { getRelevantMemories, listMemories, saveMemory, deleteMemory, memoryPrompt, CATEGORIES } from './memory.mjs';
 import {
-  migrate,
   recordVoiceSession,
   closeVoiceSession,
   countVoiceSessions,
@@ -30,6 +33,7 @@ import {
   hasActiveSubscription,
 } from './billing.mjs';
 import { initializeSpeechEngine, getSpeechEngineToken } from './speech-engine.mjs';
+import { analyzeVisionImage } from './vision.mjs';
 import {
   verifyStripeSignature,
   stripeWebhookConfigured,
@@ -46,16 +50,20 @@ import {
   isOwner,
   authConfigured,
 } from './auth.mjs';
+import { reserveVoiceSession, releaseVoiceReservation } from './voice-reservations.mjs';
+import { getRealtimeToolHandler, isRealtimeToolAllowed } from './realtime-tools.mjs';
+import { OWNER_ONLY_TOOLS } from './tool-access.mjs';
 
-const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS];
+const LIVE_TOOLS = [...BASE_TOOLS, ...BUSINESS_TOOLS, ...FREE_TOOLS, ...FIELD_TOOLS, ...MONEY_TOOLS, ...REMINDER_TOOLS, ...DOERTOUGH_INTELLIGENCE_TOOLS];
 const LIVE_TOOL_HANDLERS = {
   ...BASE_HANDLERS,
   ...BUSINESS_TOOL_HANDLERS,
   ...FREE_TOOL_HANDLERS,
   ...FIELD_TOOL_HANDLERS,
+  ...MONEY_TOOL_HANDLERS,
+  ...DOERTOUGH_INTELLIGENCE_HANDLERS,
 };
 
-const OWNER_ONLY_TOOLS = new Set(['get_store_sales', 'get_bot_status', 'get_btc_rsi']);
 const PUBLIC_TOOLS = LIVE_TOOLS.filter((tool) => !OWNER_ONLY_TOOLS.has(tool.name));
 const NON_OWNER_NOTE =
   '\n\nTOOL AVAILABILITY FOR THIS CONVERSATION\n' +
@@ -123,6 +131,7 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
 });
 
 app.use(express.json({ limit: '15mb' }));
+app.post('/api/vision/analyze', authRequired, analyzeVisionImage);
 app.use(optionalAuth);
 installGuards(app);
 
@@ -132,6 +141,17 @@ app.post('/api/auth/login', login);
 app.get('/api/auth/me', authRequired, me);
 app.post('/api/auth/forgot-password', requestPasswordReset);
 app.post('/api/auth/reset-password', resetPassword);
+
+// ===== Owner-only roadmap controls =====
+app.get('/api/owner/overview', authRequired, async (req, res) => {
+  if (!isOwner(req.user)) return res.status(403).json({ error: 'forbidden' });
+  try {
+    res.json(await getRbacOverview());
+  } catch (error) {
+    console.error('[owner] overview failed:', error.message || error);
+    res.status(500).json({ error: 'owner_overview_unavailable' });
+  }
+});
 
 // ===== Realtime voice =====
 // OpenAI Realtime is the only production voice transport. The browser gets a
@@ -154,6 +174,8 @@ app.get('/api/speech/token', async (req, res) => {
     const paidAccess = hasPaidAccess(req.user);
     const sessionLimit = paidAccess ? PAID_SESSION_LIMIT : FREE_SESSION_LIMIT;
     const minuteLimit = paidAccess ? PAID_MINUTE_LIMIT : FREE_MINUTE_LIMIT;
+    // OWNER VOICE QA BYPASS
+    const ownerVoiceQa = isOwner(req.user);
     const outOfBudget = () => res.status(402).json({
       error: paidAccess ? 'voice_allowance_reached' : 'upgrade_required',
       message: paidAccess
@@ -161,38 +183,49 @@ app.get('/api/speech/token', async (req, res) => {
         : 'Start your free trial to talk with Mike.',
     });
 
-    const usedSessions = await countVoiceSessions(req.user.id, MAX_SESSION_SECONDS);
-    if (usedSessions >= sessionLimit) return outOfBudget();
-
+    // ownerVoiceQa is installed once by patch-index-realtime-tools.mjs.
+    // Reuse it here rather than redeclaring the const in the same route scope.
     const secondsAllowance = minuteLimit * 60;
-    const secondsUsed = await countVoiceSeconds(req.user.id, MAX_SESSION_SECONDS);
-    if (secondsUsed >= secondsAllowance) return outOfBudget();
 
-    const globalUsedSessions = await countVoiceSessionsGlobal(MAX_SESSION_SECONDS);
-    const globalUsedSeconds = await countVoiceSecondsGlobal(MAX_SESSION_SECONDS);
-    if (
-      globalUsedSessions >= GLOBAL_SESSION_LIMIT ||
-      globalUsedSeconds >= GLOBAL_MINUTE_LIMIT * 60
-    ) {
-      console.error(`[speech-engine] global ceiling hit - ${globalUsedSessions} sessions, ${Math.round(globalUsedSeconds / 60)} minutes`);
-      return res.status(503).json({
-        error: 'voice_capacity_reached',
-        message: 'Mike is at capacity right now. Try again a bit later.',
-      });
-    }
+    // The reservation is the authoritative admission decision. PostgreSQL
+    // serializes it so concurrent token requests cannot both pass the budget.
+    const reservationLimits = ownerVoiceQa
+      ? { accountSessionLimit: Number.MAX_SAFE_INTEGER, accountSecondLimit: Number.MAX_SAFE_INTEGER, globalSessionLimit: Number.MAX_SAFE_INTEGER, globalSecondLimit: Number.MAX_SAFE_INTEGER }
+      : { accountSessionLimit: sessionLimit, accountSecondLimit: secondsAllowance, globalSessionLimit: GLOBAL_SESSION_LIMIT, globalSecondLimit: GLOBAL_MINUTE_LIMIT * 60 };
 
-    const result = await getSpeechEngineToken();
     const sessionKey = crypto.randomUUID();
-    await recordVoiceSession(req.user.id, result.agentId, {
+    const agentId = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1';
+    const reserveResult = await reserveVoiceSession({
+      userId: req.user.id,
+      agentId,
       sessionKey,
       reservedSeconds: MAX_SESSION_SECONDS,
+      ...reservationLimits,
     });
+
+    if (!reserveResult.ok) {
+      if (reserveResult.reason === 'account_session_limit' || reserveResult.reason === 'account_second_limit') return outOfBudget();
+      if (reserveResult.reason === 'global_session_limit' || reserveResult.reason === 'global_second_limit') {
+        console.error('[speech-engine] global ceiling hit during atomic reservation');
+        return res.status(503).json({ error: 'voice_capacity_reached', message: 'Mike is at capacity right now. Try again a bit later.' });
+      }
+      return res.status(503).json({ error: 'voice_reservation_failed' });
+    }
+
+    let result;
+    try {
+      result = await getSpeechEngineToken();
+    } catch (error) {
+      try { await releaseVoiceReservation(sessionKey, req.user.id); }
+      catch (releaseError) { console.error('[speech-engine] failed to release reservation after token failure:', releaseError.message || releaseError); }
+      throw error;
+    }
 
     res.json({
       ...result,
       sessionKey,
       maxSessionSeconds: MAX_SESSION_SECONDS,
-      minutesRemaining: Math.max(0, Math.floor((secondsAllowance - secondsUsed) / 60)),
+      minutesRemaining: Math.max(0, Math.floor((secondsAllowance - MAX_SESSION_SECONDS) / 60)),
     });
   } catch (error) {
     console.error('[speech-engine] token failed:', error.message || error);
@@ -219,6 +252,64 @@ app.post('/api/speech/session-end', authRequired, async (req, res) => {
   } catch (error) {
     console.error('[speech-engine] settle failed:', error.message || error);
     res.status(500).json({ error: 'settle_failed' });
+  }
+});
+
+// ===== Persistent reminders / alarms =====
+app.get('/api/reminders', authRequired, async (req, res) => {
+  try {
+    res.json({ reminders: await listRemindersTool(req.user.id, { includePast: req.query?.includePast === 'true' }) });
+  } catch (error) {
+    console.error('[reminders] list route failed:', error.message || error);
+    res.status(500).json({ error: 'reminders_unavailable' });
+  }
+});
+
+app.post('/api/reminders', authRequired, async (req, res) => {
+  try {
+    const result = await setReminderTool(req.user.id, req.body || {});
+    if (result?.error) return res.status(400).json(result);
+    res.json(result);
+  } catch (error) {
+    console.error('[reminders] create route failed:', error.message || error);
+    res.status(500).json({ error: 'reminder_create_failed' });
+  }
+});
+
+app.delete('/api/reminders/:id', authRequired, async (req, res) => {
+  try {
+    res.json(await cancelReminderTool(req.user.id, { id: Number(req.params.id) }));
+  } catch (error) {
+    console.error('[reminders] cancel route failed:', error.message || error);
+    res.status(500).json({ error: 'reminder_cancel_failed' });
+  }
+});
+
+// ===== Realtime public tool dispatch =====
+// Voice tool calls are authenticated and executed server-side; the browser never
+// receives private handlers or provider credentials.
+app.post('/api/realtime/tool', authRequired, async (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    if (!isRealtimeToolAllowed(name)) return res.status(403).json({ error: 'tool_not_allowed' });
+
+    let args = req.body?.arguments;
+    if (typeof args === 'string') {
+      try { args = JSON.parse(args); } catch { return res.status(400).json({ error: 'tool_arguments_invalid' }); }
+    }
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return res.status(400).json({ error: 'tool_arguments_invalid' });
+
+    const handler = getRealtimeToolHandler(name, req.user);
+    if (!handler) return res.status(403).json({ error: 'tool_not_allowed' });
+
+    // Preserve authenticated identity for every voice handler, matching the text gateway.
+    const output = await handler({ ...args, user: req.user });
+    const serialized = JSON.stringify(output ?? null);
+    const safeOutput = serialized.length > 12000 ? serialized.slice(0, 11950) + '\n[output truncated]' : serialized;
+    res.json({ output: safeOutput });
+  } catch (error) {
+    console.error('[realtime-tool] failed:', error.message || error);
+    res.status(500).json({ error: error.message || 'tool_failed' });
   }
 });
 
@@ -308,6 +399,11 @@ app.post('/api/ask', async (req, res) => {
     const relevantMemories = req.user ? await getRelevantMemories(req.user.id, message, 12) : [];
     const instructions = (owner ? MIKE_INSTRUCTIONS : MIKE_INSTRUCTIONS + NON_OWNER_NOTE) + memoryPrompt(relevantMemories);
     let text = "I'm here. Give me another shot.";
+    const REMINDER_TOOL_HANDLERS = req.user ? {
+      set_reminder: (args) => setReminderTool(req.user.id, args),
+      list_reminders: (args) => listRemindersTool(req.user.id, args),
+      cancel_reminder: (args) => cancelReminderTool(req.user.id, args),
+    } : {};
 
     for (let round = 0; round < 4; round += 1) {
       const response = await openai.responses.create({ model: OPENAI_MODEL, instructions, input, tools });
@@ -404,7 +500,6 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname, '..', 'dist'), { maxAge: '1h', etag: true, dotfiles: 'deny' }));
 app.use((req, res) => res.sendFile(path.join(__dirname, '..', 'dist', 'index.html')));
 
-migrate().catch((error) => console.error('[db] migrate threw:', error.message || error));
 
 const server = http.createServer(app);
 server.listen(PORT, async () => {
