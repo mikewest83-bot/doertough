@@ -27,7 +27,7 @@ if (!server.includes("app.post('/api/realtime/webrtc-answer'")) {
     '',
     '    const form = new FormData();',
     "    form.append('sdp', new Blob([sdp], { type: 'application/sdp' }));",
-    "    const origin = String(process.env.PUBLIC_APP_ORIGIN || 'https://doertoughmikeai.com').replace(/\\/$/, '');",
+    "    const origin = String(process.env.PUBLIC_APP_ORIGIN || 'https://doertoughmikeai.com').replace(/\/$/, '');",
     "    const upstream = await fetch('https://api.openai.com/v1/realtime/calls', {",
     "      method: 'POST',",
     '      headers: {',
@@ -54,11 +54,25 @@ if (!server.includes("app.post('/api/realtime/webrtc-answer'")) {
   server = server.slice(0, index) + route + server.slice(index);
 }
 
-// Replace the direct cross-origin OpenAI call with the authenticated same-origin proxy.
-const direct = "const answerResponse = await fetch('https://api.openai.com/v1/realtime/calls', { method: 'POST', headers: { Authorization: `Bearer ${tokenData.token}` }, body: form });";
+// Force the browser to use the same-origin proxy. Do not rely on an exact
+// source formatting match: the build has other realtime patches that can
+// rewrite the SDP FormData line before this script runs.
 const proxied = "const answerResponse = await fetch('/api/realtime/webrtc-answer', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders(), 'X-Mike-Realtime-Token': tokenData.token }, body: JSON.stringify({ sdp: pc.localDescription.sdp }) });";
-if (client.includes(direct)) client = client.replace(direct, proxied);
+const directCallStart = "const answerResponse = await fetch('https://api.openai.com/v1/realtime/calls'";
+let clientPatched = false;
+
+if (client.includes(directCallStart)) {
+  const start = client.indexOf(directCallStart);
+  const end = client.indexOf(';', start);
+  if (end < 0) throw new Error('[realtime] direct WebRTC call terminator not found');
+  client = client.slice(0, start) + proxied + client.slice(end + 1);
+  clientPatched = true;
+}
+
+if (client.includes('https://api.openai.com/v1/realtime/calls')) {
+  throw new Error('[realtime] refusing to build with a browser-direct OpenAI WebRTC call');
+}
 
 fs.writeFileSync(serverTarget, server);
 fs.writeFileSync(clientTarget, client);
-console.log('[build] Realtime WebRTC origin-safe proxy enabled');
+console.log(`[build] Realtime WebRTC origin-safe proxy enabled${clientPatched ? '; browser route patched' : '; browser route already proxied'}`);
