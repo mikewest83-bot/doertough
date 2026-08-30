@@ -4,6 +4,14 @@
 // endpoint intentionally skips the generic in-memory limiter because voice
 // startup can legitimately involve multiple HTTP requests.
 
+import {
+  beginGoogleOAuth,
+  completeGoogleOAuth,
+  disconnectGoogle,
+  getGoogleConnection,
+  googleOAuthConfigured,
+} from './google-oauth.mjs';
+
 const PROTECTED = [
   '/api/ask',
   '/api/tts',
@@ -86,6 +94,60 @@ setInterval(() => {
 const matches = (path, list) =>
   list.some((p) => path === p || path.startsWith(`${p}/`));
 
+function installGoogleRoutes(app) {
+  app.get('/api/integrations/google/status', async (req, res) => {
+    if (!req.user) return res.status(401).json({ error: 'sign_in_required' });
+    try {
+      if (!(await googleOAuthConfigured())) return res.json({ configured: false, connected: false });
+      const connection = await getGoogleConnection(req.user.id);
+      return res.json({
+        configured: true,
+        connected: Boolean(connection),
+        email: connection?.google_email || null,
+        scopes: connection?.scopes ? String(connection.scopes).split(' ') : [],
+      });
+    } catch (error) {
+      console.error('[google-oauth] status failed:', error.message || error);
+      return res.status(error.status || 503).json({ error: error.message || 'google_status_unavailable' });
+    }
+  });
+
+  app.get('/api/integrations/google/connect', async (req, res) => {
+    if (!req.user) return res.status(401).json({ error: 'sign_in_required' });
+    try {
+      return res.redirect(await beginGoogleOAuth(req.user.id));
+    } catch (error) {
+      console.error('[google-oauth] begin failed:', error.message || error);
+      return res.status(error.status || 503).json({ error: error.message || 'google_connect_unavailable' });
+    }
+  });
+
+  // Callback is intentionally unauthenticated: the one-time state maps it
+  // back to the authenticated user and expires after ten minutes.
+  app.get('/api/integrations/google/callback', async (req, res) => {
+    try {
+      if (req.query?.error) return res.redirect('/?google=denied');
+      const result = await completeGoogleOAuth(req.query?.code, req.query?.state);
+      console.log(`[google-oauth] connected Google account for Mike account #${result.userId}`);
+      return res.redirect('/?google=connected');
+    } catch (error) {
+      console.error('[google-oauth] callback failed:', error.message || error);
+      return res.redirect(`/?google=error&reason=${encodeURIComponent(error.message || 'oauth_failed')}`);
+    }
+  });
+
+  app.post('/api/integrations/google/disconnect', async (req, res) => {
+    if (!req.user) return res.status(401).json({ error: 'sign_in_required' });
+    try {
+      await disconnectGoogle(req.user.id);
+      return res.json({ disconnected: true });
+    } catch (error) {
+      console.error('[google-oauth] disconnect failed:', error.message || error);
+      return res.status(error.status || 503).json({ error: error.message || 'google_disconnect_failed' });
+    }
+  });
+}
+
 export function installGuards(app) {
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -96,6 +158,7 @@ export function installGuards(app) {
   });
 
   app.set('trust proxy', 1);
+  installGoogleRoutes(app);
 
   app.use((req, res, next) => {
     const isAuthRoute = matches(req.path, AUTH_PROTECTED);
