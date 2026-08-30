@@ -31,7 +31,7 @@ export async function getOwnerMetrics() {
     safe('voice', () => one(`SELECT
       COALESCE(SUM(CASE WHEN actual_seconds IS NULL THEN reserved_seconds ELSE actual_seconds END),0)::bigint billed_seconds,
       COUNT(*)::int sessions, COUNT(DISTINCT user_id)::int callers,
-      COUNT(*) FILTER (WHERE actual_seconds IS NULL)::int never_settled
+      COUNT(*) FILTER (WHERE actual_seconds IS NULL AND ended_at IS NULL AND started_at<=now()-interval '10 minutes')::int never_settled
       FROM voice_sessions WHERE started_at>=now()-interval '30 days'`)),
     safe('access', () => many(`SELECT role,COUNT(*)::int count FROM users GROUP BY role ORDER BY role`)),
   ]);
@@ -46,7 +46,7 @@ export async function getOwnerMetrics() {
   if (voice && voicePoolMinutes && voiceMinutes / voicePoolMinutes > .75) alerts.push({type:'danger',text:'Voice pool is above 75% of the 30-day ceiling'});
 
   return {
-    overview: overview ? { accounts:overview.accounts||0,paying:overview.paying||0,trialing:overview.trialing||0,pastDue:overview.past_due||0,canceled:overview.canceled||0,newThisWeek:overview.new_this_week||0,activeToday:overview.active_today||0,entitledPastPeriod:overview.entitled_past_period||0,paidPlanPercent:overview.accounts?Math.round(overview.paying/overview.accounts*100):0,mrr:null,trialMrr:null } : null,
+    overview: overview ? { accounts:overview.accounts||0,paying:overview.paying||0,trialing:overview.trialing||0,pastDue:overview.past_due||0,canceled:overview.canceled||0,newThisWeek:overview.new_this_week||0,activeToday:overview.active_today||0,entitledPastPeriod:overview.entitled_past_period||0,paidPlanPercent:overview.accounts?Math.round(overview.paying/overview.accounts*100):0,mrr:Math.round(overview.paying*24.99*100)/100,trialMrr:Math.round(overview.trialing*24.99*100)/100 } : null,
     growth, subscriptions,
     voice: voice ? {minutes:Math.round(voiceMinutes*10)/10,poolMinutes:voicePoolMinutes,poolPercent:voicePoolMinutes?Math.round(voiceMinutes/voicePoolMinutes*100):0,sessions:voice.sessions||0,callers:voice.callers||0,neverSettled:voice.never_settled||0} : null,
     access: access ? {roles:Object.fromEntries(access.map(r=>[r.role,Number(r.count)])),configured:true} : null,
