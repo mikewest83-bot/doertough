@@ -9,29 +9,36 @@ import { ensureDealAlertSchema, startDealAlertScheduler } from './deal-alerts.mj
 import { startVoiceCleanup } from './voice-cleanup.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const smokeTest = process.env.SMOKE_TEST === '1';
 
-let dbReady = false;
+let dbReady = smokeTest;
 let lastError;
-for (let attempt = 1; attempt <= 3; attempt += 1) {
-  try {
-    dbReady = await migrate();
-    if (dbReady) break;
-  } catch (error) {
-    lastError = error;
-    console.error(`[db] migration attempt ${attempt}/3 failed:`, error.message || error);
+
+if (!smokeTest) {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      dbReady = await migrate();
+      if (dbReady) break;
+    } catch (error) {
+      lastError = error;
+      console.error(`[db] migration attempt ${attempt}/3 failed:`, error.message || error);
+    }
+    if (attempt < 3) await sleep(1000 * 2 ** (attempt - 1));
   }
-  if (attempt < 3) await sleep(1000 * 2 ** (attempt - 1));
+
+  if (!dbReady) {
+    throw lastError || new Error('database_schema_not_ready');
+  }
+
+  await ensureRbacSchema();
+  await ensureReminderSchema();
+  await ensureDealAlertSchema();
 }
 
-if (!dbReady) {
-  throw lastError || new Error('database_schema_not_ready');
-}
-
-await ensureRbacSchema();
-await ensureReminderSchema();
-await ensureDealAlertSchema();
 await import('./index.mjs');
 
-startVoiceCleanup(10_000);
-startReminderScheduler();
-startDealAlertScheduler();
+if (!smokeTest) {
+  startVoiceCleanup(10_000);
+  startReminderScheduler();
+  startDealAlertScheduler();
+}
