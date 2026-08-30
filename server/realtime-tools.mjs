@@ -8,7 +8,10 @@ import { MONEY_TOOLS, MONEY_TOOL_HANDLERS } from './money-tools.mjs';
 import { REMINDER_TOOLS, reminderHandlerFor } from './reminders.mjs';
 import { DOERTOUGH_INTELLIGENCE_TOOLS, DOERTOUGH_INTELLIGENCE_HANDLERS } from './doertough-intelligence-tools.mjs';
 
-const OWNER_ONLY_TOOLS = new Set(['get_store_sales', 'get_bot_status', 'get_btc_rsi']);
+const OWNER_ONLY_TOOLS = new Set([
+  'get_store_sales', 'get_bot_status', 'get_btc_rsi',
+  'code_repo_status', 'code_read_file', 'code_search', 'code_create_branch', 'code_write_file',
+]);
 
 export const REALTIME_TOOLS = [
   ...LIVE_TOOLS,
