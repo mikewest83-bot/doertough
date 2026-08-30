@@ -29,13 +29,14 @@ const safe = `const localStream = await navigator.mediaDevices.getUserMedia({
         console.warn('[voice] advanced audio constraints unavailable:', audioConstraintError);
       }`;
 
-if (!source.includes(legacy)) {
-  if (source.includes("echoCancellation: true")) {
-    console.log('[build] Audio hygiene already present');
-    process.exit(0);
-  }
-  throw new Error('Realtime microphone anchor not found');
+// The device-routing patch may already have installed the stronger audio
+// constraints. Treat that state as success so the build remains idempotent.
+if (source.includes('echoCancellation: { ideal: true }') || source.includes('echoCancellation: true')) {
+  console.log('[build] Audio hygiene already present; leaving device-routing implementation intact');
+  process.exit(0);
 }
+
+if (!source.includes(legacy)) throw new Error('Realtime microphone anchor not found');
 
 source = source.replace(legacy, safe);
 fs.writeFileSync(target, source);
