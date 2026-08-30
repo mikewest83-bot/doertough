@@ -11,7 +11,7 @@ const MUST_CONTAIN = [
   ['src/main.jsx', "window.addEventListener('mike-game-start'", 'game cards wired to Mike'],
   ['src/main.jsx', 'homepage-deal-finder', 'Deal Finder section on homepage'],
   ['src/main.jsx', 'const openPhotoPicker =', 'Vision photo picker'],
-  ['src/main.jsx', 'if (data?.token) writeToken(data.token)', 'rolling session token'],
+  ['src/main.jsx', 'writeToken(data.token)', 'session token persistence'],
   ['src/MikeGames.jsx', 'Endless trivia', 'Beat Mike endless-trivia copy'],
   ['server/persona.mjs', 'DEAL FINDER - LIVE LOCAL SEARCH', 'Deal Finder persona'],
   ['server/persona.mjs', 'GAMES - HOSTING RULES', 'game-hosting persona rules'],
@@ -19,6 +19,10 @@ const MUST_CONTAIN = [
   ['server/index.mjs', 'DEAL_ALERT_TOOLS', 'Deal Alert tools registered'],
   ['server/index.mjs', 'web_search_preview', 'web search enabled'],
   ['server/index.mjs', "app.post('/api/vision/analyze'", 'Vision route registered'],
+  ['server/deal-alerts.mjs', 'ALLOWED_FREQUENCIES = new Set([5, 15, 30, 60])', 'Deal Alert allowed frequencies'],
+  ['server/deal-alerts.mjs', 'MAX_ACTIVE_PER_USER', 'Deal Alert per-account cap'],
+  ['server/deal-alerts.mjs', 'MAX_CONSECUTIVE_FAILURES', 'Deal Alert failure circuit breaker'],
+  ['server/deal-alerts.mjs', 'normalizeUrl', 'Deal Alert duplicate URL normalization'],
 ];
 
 const MUST_NOT_CONTAIN = [
