@@ -7,11 +7,8 @@ import { FIELD_TOOLS, FIELD_TOOL_HANDLERS } from './field-tools.mjs';
 import { MONEY_TOOLS, MONEY_TOOL_HANDLERS } from './money-tools.mjs';
 import { REMINDER_TOOLS, reminderHandlerFor } from './reminders.mjs';
 import { DOERTOUGH_INTELLIGENCE_TOOLS, DOERTOUGH_INTELLIGENCE_HANDLERS } from './doertough-intelligence-tools.mjs';
-
-const OWNER_ONLY_TOOLS = new Set([
-  'get_store_sales', 'get_bot_status', 'get_btc_rsi',
-  'code_repo_status', 'code_read_file', 'code_search', 'code_create_branch', 'code_write_file',
-]);
+import { CODING_TOOLS, CODING_TOOL_HANDLERS } from './coding-tools.mjs';
+import { OWNER_ONLY_TOOLS } from './tool-access.mjs';
 
 export const REALTIME_TOOLS = [
   ...LIVE_TOOLS,
@@ -21,7 +18,8 @@ export const REALTIME_TOOLS = [
   ...MONEY_TOOLS,
   ...REMINDER_TOOLS,
   ...DOERTOUGH_INTELLIGENCE_TOOLS,
-].filter((tool) => !OWNER_ONLY_TOOLS.has(tool.name));
+  ...CODING_TOOLS,
+].filter((tool) => !OWNER_ONLY_TOOLS.has(tool.name) || CODING_TOOLS.some((codingTool) => codingTool.name === tool.name));
 
 const HANDLERS = {
   ...LIVE_TOOL_HANDLERS,
@@ -29,12 +27,16 @@ const HANDLERS = {
   ...FREE_TOOL_HANDLERS,
   ...FIELD_TOOL_HANDLERS,
   ...MONEY_TOOL_HANDLERS,
+  ...CODING_TOOL_HANDLERS,
   ...DOERTOUGH_INTELLIGENCE_HANDLERS,
 };
 
-export function getRealtimeToolHandler(name, userId) {
-  if (OWNER_ONLY_TOOLS.has(name)) return null;
-  return reminderHandlerFor(name, userId) || HANDLERS[name] || null;
+export function getRealtimeToolHandler(name, user) {
+  if (OWNER_ONLY_TOOLS.has(name)) {
+    if (!user?.id || !user?.isOwner) return null;
+    return HANDLERS[name] || null;
+  }
+  return reminderHandlerFor(name, user?.id) || HANDLERS[name] || null;
 }
 
 export function isRealtimeToolAllowed(name) {
