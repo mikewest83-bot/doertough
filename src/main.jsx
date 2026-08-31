@@ -103,7 +103,7 @@ function App() {
       dataChannel.onerror = (event) => { console.error('[voice] data channel error:', event); };
       dataChannel.onclose = () => { if (conversationRef.current?.dataChannel === dataChannel) setStatus('ready'); };
       pc.ontrack = (event) => { audio.srcObject = event.streams[0]; audio.play().catch(() => {}); };
-      pc.onconnectionstatechange = () => { const state = pc.connectionState; if (state === 'connected') { setConversation(true); setStatus('listening'); setError(''); } else if (state === 'failed') { setError('Mike lost the realtime voice connection. Tap Talk to Mike and try again.'); setConversation(false); setStatus('ready'); } else if (state === 'disconnected' || state === 'closed') { setConversation(false); setStatus('ready'); } };
+      pc.onconnectionstatechange = () => { const state = pc.connectionState; if (state === 'connected') { setConversation(true); setStatus('listening'); setError(''); } else if (state === 'failed') { settleVoiceSession(); setError('Mike lost the realtime voice connection. Tap Talk to Mike and try again.'); setConversation(false); setStatus('ready'); } else if (state === 'disconnected' || state === 'closed') { settleVoiceSession(); setConversation(false); setStatus('ready'); } };
       const offer = await pc.createOffer({ offerToReceiveAudio: true });
       await pc.setLocalDescription(offer); await waitForIceComplete(pc);
       const form = new FormData(); form.append('sdp', new Blob([pc.localDescription.sdp], { type: 'application/sdp' }));

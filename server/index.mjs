@@ -386,8 +386,8 @@ app.delete('/api/memory/:id', authRequired, async (req, res) => {
 // ===== Block sensitive paths =====
 app.use((req, res, next) => {
   if (
-    /(^|\/)\.(env|git|svn|hg)(?:$|\/)/i.test(req.path) ||
-    /^(?:\/)(?:config\.json|wp-admin|wp-login\.php|phpmyadmin|server-status|actuator|telescope|trace\.axd)/i.test(req.path)
+    /(^|\/)\.(env|git|svn|hg|aws|ssh|npmrc|htpasswd|s3cfg|travis|circleci|vscode|idea|DS_Store)(?:$|\/|\.)/i.test(req.path) ||
+    /^\/(?:config\.json|secrets?\.json|credentials(?:\.json)?|aws[-_]credentials|aws\.json|appsettings(?:\.[\w-]+)?\.json|serviceaccountkey\.json|service[-_]account(?:\.json)?|firebase\.json|google-services\.json|web\.config|docker-compose\.ya?ml|dockerfile|wp-admin|wp-login\.php|phpmyadmin|server-status|actuator|telescope|trace\.axd)/i.test(req.path)
   ) return res.status(404).end();
   next();
 });
