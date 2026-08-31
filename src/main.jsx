@@ -143,11 +143,11 @@ function App() {
       const data = await fetchJson('/api/vision/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ image: { dataUrl, mediaType: file.type.toLowerCase() }, prompt: 'What do you see in this photo? Describe the important details clearly and naturally.' })
+        body: JSON.stringify({ image: { dataUrl, mediaType: file.type.toLowerCase() }, mode: 'appraise', prompt: 'What is this? Describe it briefly — brand, model number, type of item, and any visible wear or damage. Two or three sentences.' })
       }, 60000);
       const text = String(data.text || '').trim();
       if (!text) throw new Error('Mike could not get an answer from the photo.');
-      setMessages((prev) => [...prev, { role: 'user', text: '📷 Asked Mike about a photo' }, { role: 'mike', text }]);
+      setMessages((prev) => [...prev, { role: 'user', text: '📷 Asked Mike what a photo is worth' }, { role: 'mike', text }]);
     } catch (err) {
       if (err?.status === 401) { setAuthMode('login'); setAuthError('Sign in to use Mike Vision.'); setAuthOpen(true); }
       else setError(err?.message || 'Mike could not analyze that photo.');

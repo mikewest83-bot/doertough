@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { analyzeDeal } from './free-tools.mjs';
 
 const ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const MAX_DATA_URL_CHARS = 7_000_000;
@@ -44,9 +45,136 @@ export async function analyzeVisionImage(req, res) {
     });
     const text = String(response.output_text || '').trim();
     if (!text) return res.status(502).json({ error: 'vision_empty', message: 'Mike could not get an answer from the image.' });
+
+    // Opt-in second pass. Callers that do not ask for it get exactly the
+    // response they got before, so nothing else that posts here changes.
+    if (String(req.body?.mode || '').trim().toLowerCase() === 'appraise') {
+      const appraisal = await appraiseImage(image);
+      return res.json({
+        text: `${text}\n\n${appraisal.text}`,
+        description: text,
+        identified: appraisal.identified,
+        valuation: appraisal.valuation,
+      });
+    }
+
     return res.json({ text });
   } catch (error) {
     console.error('[vision] analyze failed:', error?.message || error);
     return res.status(error?.status || 502).json({ error: 'vision_failed', message: error?.message || 'Mike could not analyze that photo.' });
   }
+}
+
+// ===== Photo-only appraisal =====
+// A second, structured pass over the same image. The free-text description is
+// what a person wants to read; this is what the pricing pipeline needs, and it
+// has to come back as data rather than prose or nothing downstream can use it.
+const DEAL_CATEGORIES = ['vehicle', 'electronics', 'tools', 'furniture', 'outdoor_equipment'];
+const DEAL_CONDITIONS = ['new', 'like_new', 'good', 'fair', 'poor', 'unknown'];
+
+const IDENTIFY_PROMPT = [
+  'Identify the item in this photo well enough to search for it on a resale marketplace.',
+  'Reply with ONLY a JSON object, no prose and no code fences, in this exact shape:',
+  '{"category":"vehicle|electronics|tools|furniture|outdoor_equipment|null",',
+  ' "title":"brand, model number and item type as a person would type it into a search box",',
+  ' "condition":"new|like_new|good|fair|poor|unknown",',
+  ' "identifiers":"any model or serial numbers, badges or labels you can actually read",',
+  ' "confidence":"high|medium|low"}',
+  '',
+  'Rules that matter:',
+  '- title: only what you can genuinely see. A readable model number is worth more than adjectives.',
+  '  Write "DeWalt DCD771 20V cordless drill", not "a red cordless power drill".',
+  '- category: null if the item does not fit one of the five listed categories.',
+  '- condition: judge only visible cosmetic condition. You cannot see mechanical condition,',
+  '  battery health or hours, so use "unknown" unless wear or damage is plainly visible.',
+  '- confidence: "high" only when brand AND model are legible. "low" when you are guessing',
+  '  the model from shape or colour alone. Guessing a specific model you cannot read is the',
+  '  one thing never to do - say low and let the person tell us.',
+].join('\n');
+
+function parseIdentification(raw) {
+  const cleaned = String(raw || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+  let parsed;
+  try { parsed = JSON.parse(cleaned); } catch { return null; }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const category = String(parsed.category || '').trim().toLowerCase();
+  const condition = String(parsed.condition || '').trim().toLowerCase();
+  const confidence = String(parsed.confidence || '').trim().toLowerCase();
+  return {
+    category: DEAL_CATEGORIES.includes(category) ? category : null,
+    title: String(parsed.title || '').trim().slice(0, 160),
+    condition: DEAL_CONDITIONS.includes(condition) ? condition : 'unknown',
+    identifiers: String(parsed.identifiers || '').trim().slice(0, 200),
+    confidence: ['high', 'medium', 'low'].includes(confidence) ? confidence : 'low',
+  };
+}
+
+export async function identifyItemFromImage(image) {
+  if (!openai || !image) return null;
+  try {
+    const response = await openai.responses.create({
+      model: VISION_MODEL,
+      input: [{ role: 'user', content: visionContent(IDENTIFY_PROMPT, image) }],
+      max_output_tokens: 400,
+    });
+    return parseIdentification(response.output_text);
+  } catch (error) {
+    console.error('[vision] identify failed:', error?.message || error);
+    return null;
+  }
+}
+
+const money = (value) => `$${Math.round(Number(value)).toLocaleString('en-US')}`;
+
+// Turns the identification plus whatever DealTough returned into one honest
+// paragraph. Every branch that cannot price the item says so plainly and asks
+// for the one detail that would fix it, rather than reaching for a number.
+export function appraisalText(identified, valuation) {
+  if (!identified || !identified.title) {
+    return "I can see the photo, but not clearly enough to identify what this is. A straight-on shot with the brand name or model number in frame would let me price it.";
+  }
+  const item = identified.title;
+  if (!identified.category) {
+    return `That looks like ${item}. I can only price vehicles, electronics, tools, furniture and outdoor equipment right now, so I can't put a market value on this one.`;
+  }
+  if (identified.confidence === 'low') {
+    return `My best read is ${item}, but I'm not confident enough in that to price it — I'd just be guessing at the model. Tell me the brand and model, or send a photo of the nameplate, and I'll get you a real number.`;
+  }
+  if (!valuation || valuation.error) {
+    return `I make that ${item}. I couldn't reach the pricing data just now, so I'm not going to guess at a value. Try again in a minute.`;
+  }
+  const fmv = Number(valuation.fairMarketValue);
+  if (!Number.isFinite(fmv) || fmv <= 0 || valuation.valuationBasis === 'unknown') {
+    return `I make that ${item}, but there aren't enough comparable listings out there to put an honest value on it. If you know the exact model, tell me and I'll try again.`;
+  }
+  const used = Number(valuation.comparablesUsed) || 0;
+  const confidence = Number(valuation.confidencePercent);
+  const parts = [`I make that ${item}${identified.identifiers ? ` (${identified.identifiers})` : ''}.`];
+  parts.push(`Market value looks like about ${money(fmv)}, from ${used} comparable listing${used === 1 ? '' : 's'}${Number.isFinite(confidence) ? ` — confidence ${Math.round(confidence)}%` : ''}.`);
+  if (identified.condition === 'unknown') {
+    parts.push("That's on looks alone — I can't judge mechanical condition from a photo, so treat it as a starting point.");
+  }
+  parts.push("If I've got the item wrong, tell me what it actually is and I'll re-price it.");
+  return parts.join(' ');
+}
+
+// One call: describe the photo, identify the item, and price it when the
+// identification is solid enough to be worth searching on.
+export async function appraiseImage(image) {
+  const identified = await identifyItemFromImage(image);
+  let valuation = null;
+  if (identified?.category && identified.title && identified.confidence !== 'low') {
+    try {
+      valuation = await analyzeDeal({
+        category: identified.category,
+        title: identified.title,
+        condition: identified.condition,
+        description: identified.identifiers || undefined,
+      });
+    } catch (error) {
+      console.error('[vision] appraisal pricing failed:', error?.message || error);
+      valuation = { error: 'pricing_unavailable' };
+    }
+  }
+  return { identified, valuation, text: appraisalText(identified, valuation) };
 }
