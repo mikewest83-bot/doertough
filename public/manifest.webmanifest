@@ -1,1 +1,25 @@
-{"name":"Mike AI — Doer Tough","short_name":"Mike AI","start_url":"/?source=homescreen","display":"standalone","background_color":"#090909","theme_color":"#090909","description":"Mike AI — your Doer Tough everyday copilot.","icons":[{"src":"/mike-icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}
+{
+  "id": "/",
+  "name": "Mike AI — Doer Tough",
+  "short_name": "Mike AI",
+  "start_url": "/?source=homescreen",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#090909",
+  "theme_color": "#090909",
+  "description": "Mike AI — your Doer Tough everyday copilot.",
+  "icons": [
+    {
+      "src": "/mike-icon.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/mike-icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
