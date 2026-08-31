@@ -38,6 +38,23 @@ export async function analyzeVisionImage(req, res) {
     const image = normalizeVisionImage(req.body?.image);
     const prompt = String(req.body?.prompt || 'What do you see in this photo?').trim().slice(0, 4000);
     if (!image) return res.status(400).json({ error: 'image_required', message: 'Mike needs a photo to look at.' });
+
+    // Appraisal mode answers the person AND identifies the item in a single
+    // model call. Callers that do not ask for it fall through to the plain
+    // description below, unchanged.
+    if (String(req.body?.mode || '').trim().toLowerCase() === 'appraise') {
+      const appraisal = await appraiseImage(image);
+      if (!appraisal.description && !appraisal.identified) {
+        return res.status(502).json({ error: 'vision_empty', message: 'Mike could not get an answer from the image.' });
+      }
+      return res.json({
+        text: appraisal.description ? `${appraisal.description}\n\n${appraisal.text}` : appraisal.text,
+        description: appraisal.description,
+        identified: appraisal.identified,
+        valuation: appraisal.valuation,
+      });
+    }
+
     const response = await openai.responses.create({
       model: VISION_MODEL,
       input: [{ role: 'user', content: visionContent(prompt, image) }],
@@ -45,18 +62,6 @@ export async function analyzeVisionImage(req, res) {
     });
     const text = String(response.output_text || '').trim();
     if (!text) return res.status(502).json({ error: 'vision_empty', message: 'Mike could not get an answer from the image.' });
-
-    // Opt-in second pass. Callers that do not ask for it get exactly the
-    // response they got before, so nothing else that posts here changes.
-    if (String(req.body?.mode || '').trim().toLowerCase() === 'appraise') {
-      const appraisal = await appraiseImage(image);
-      return res.json({
-        text: `${text}\n\n${appraisal.text}`,
-        description: text,
-        identified: appraisal.identified,
-        valuation: appraisal.valuation,
-      });
-    }
 
     return res.json({ text });
   } catch (error) {
@@ -66,16 +71,17 @@ export async function analyzeVisionImage(req, res) {
 }
 
 // ===== Photo-only appraisal =====
-// A second, structured pass over the same image. The free-text description is
-// what a person wants to read; this is what the pricing pipeline needs, and it
-// has to come back as data rather than prose or nothing downstream can use it.
+// ONE model call does both jobs: the sentence a person reads, and the fields
+// the pricing pipeline needs. Asking for the description INSIDE the JSON keeps
+// it to a single parse - no delimiter to go missing, and half the vision spend
+// and latency of describing and identifying separately.
 const DEAL_CATEGORIES = ['vehicle', 'electronics', 'tools', 'furniture', 'outdoor_equipment'];
 const DEAL_CONDITIONS = ['new', 'like_new', 'good', 'fair', 'poor', 'unknown'];
 
-const IDENTIFY_PROMPT = [
-  'Identify the item in this photo well enough to search for it on a resale marketplace.',
-  'Reply with ONLY a JSON object, no prose and no code fences, in this exact shape:',
-  '{"category":"vehicle|electronics|tools|furniture|outdoor_equipment|null",',
+const APPRAISE_PROMPT = [
+  'Look at this photo and reply with ONLY a JSON object - no prose outside it, no code fences:',
+  '{"description":"two or three plain sentences telling the person what this is and what shape it looks to be in",',
+  ' "category":"vehicle|electronics|tools|furniture|outdoor_equipment|null",',
   ' "title":"brand, model number and item type as a person would type it into a search box",',
   ' "condition":"new|like_new|good|fair|poor|unknown",',
   ' "identifiers":"any model or serial numbers, badges or labels you can actually read",',
@@ -92,7 +98,7 @@ const IDENTIFY_PROMPT = [
   '  one thing never to do - say low and let the person tell us.',
 ].join('\n');
 
-function parseIdentification(raw) {
+function parseAppraisal(raw) {
   const cleaned = String(raw || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
   let parsed;
   try { parsed = JSON.parse(cleaned); } catch { return null; }
@@ -101,27 +107,13 @@ function parseIdentification(raw) {
   const condition = String(parsed.condition || '').trim().toLowerCase();
   const confidence = String(parsed.confidence || '').trim().toLowerCase();
   return {
+    description: String(parsed.description || '').trim().slice(0, 900),
     category: DEAL_CATEGORIES.includes(category) ? category : null,
     title: String(parsed.title || '').trim().slice(0, 160),
     condition: DEAL_CONDITIONS.includes(condition) ? condition : 'unknown',
     identifiers: String(parsed.identifiers || '').trim().slice(0, 200),
     confidence: ['high', 'medium', 'low'].includes(confidence) ? confidence : 'low',
   };
-}
-
-export async function identifyItemFromImage(image) {
-  if (!openai || !image) return null;
-  try {
-    const response = await openai.responses.create({
-      model: VISION_MODEL,
-      input: [{ role: 'user', content: visionContent(IDENTIFY_PROMPT, image) }],
-      max_output_tokens: 400,
-    });
-    return parseIdentification(response.output_text);
-  } catch (error) {
-    console.error('[vision] identify failed:', error?.message || error);
-    return null;
-  }
 }
 
 const money = (value) => `$${Math.round(Number(value)).toLocaleString('en-US')}`;
@@ -158,12 +150,34 @@ export function appraisalText(identified, valuation) {
   return parts.join(' ');
 }
 
-// One call: describe the photo, identify the item, and price it when the
-// identification is solid enough to be worth searching on.
 export async function appraiseImage(image) {
-  const identified = await identifyItemFromImage(image);
+  if (!openai || !image) return { description: '', identified: null, valuation: null, text: appraisalText(null, null) };
+
+  let raw = '';
+  try {
+    const response = await openai.responses.create({
+      model: VISION_MODEL,
+      input: [{ role: 'user', content: visionContent(APPRAISE_PROMPT, image) }],
+      max_output_tokens: 700,
+    });
+    raw = String(response.output_text || '').trim();
+  } catch (error) {
+    console.error('[vision] appraise call failed:', error?.message || error);
+    return { description: '', identified: null, valuation: null, text: appraisalText(null, null) };
+  }
+
+  const parsed = parseAppraisal(raw);
+  // If the model answered in prose instead of JSON, keep what it said for the
+  // person and fall through to the honest "could not identify" branch rather
+  // than throwing the whole response away.
+  if (!parsed) {
+    const description = raw.slice(0, 900);
+    return { description, identified: null, valuation: null, text: appraisalText(null, null) };
+  }
+
+  const { description, ...identified } = parsed;
   let valuation = null;
-  if (identified?.category && identified.title && identified.confidence !== 'low') {
+  if (identified.category && identified.title && identified.confidence !== 'low') {
     try {
       valuation = await analyzeDeal({
         category: identified.category,
@@ -176,5 +190,5 @@ export async function appraiseImage(image) {
       valuation = { error: 'pricing_unavailable' };
     }
   }
-  return { identified, valuation, text: appraisalText(identified, valuation) };
+  return { description, identified, valuation, text: appraisalText(identified, valuation) };
 }
