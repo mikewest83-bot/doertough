@@ -6,6 +6,9 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
+const stripComments = (source) => source
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/(^|\s)\/\/.*$/gm, '$1');
 
 const MUST_CONTAIN = [
   ['src/main.jsx', "window.addEventListener('mike-game-start'", 'game cards wired to Mike'],
@@ -19,6 +22,9 @@ const MUST_CONTAIN = [
   ['server/index.mjs', "app.post('/api/vision/analyze'", 'Vision route registered'],
 ];
 
+// These checks intentionally operate on executable source with comments removed.
+// The preserved deal-alert module and cleanup-script comments may mention the
+// disabled feature, but executable Deal Alert wiring must not survive the build.
 const MUST_NOT_CONTAIN = [
   ['src/main.jsx', "modalities: ['audio', 'text']", 'removed Realtime response.modalities field'],
   ['src/main.jsx', 'Watch It for Me', 'Watch It for Me UI disabled'],
@@ -32,18 +38,19 @@ const MUST_BE_ORDERED = [
   ['server/index.mjs', 'installGuards(app);', "app.post('/api/vision/analyze'", 'Vision route behind guard stack'],
 ];
 
+const sourceFor = (file) => stripComments(read(file));
 const failures = [];
 for (const [file, needle, label] of MUST_CONTAIN) {
-  try { if (!read(file).includes(needle)) failures.push(`${label} — "${needle}" missing from ${file}`); }
+  try { if (!sourceFor(file).includes(needle)) failures.push(`${label} — "${needle}" missing from ${file}`); }
   catch (error) { failures.push(`${label} — could not read ${file}: ${error.message}`); }
 }
 for (const [file, needle, label] of MUST_NOT_CONTAIN) {
-  try { if (read(file).includes(needle)) failures.push(`${label} — "${needle}" still present in ${file}`); }
+  try { if (sourceFor(file).includes(needle)) failures.push(`${label} — "${needle}" still present in executable source of ${file}`); }
   catch (error) { failures.push(`${label} — could not read ${file}: ${error.message}`); }
 }
 for (const [file, first, second, label] of MUST_BE_ORDERED) {
   try {
-    const source = read(file);
+    const source = sourceFor(file);
     const a = source.indexOf(first), b = source.indexOf(second);
     if (a === -1) failures.push(`${label} — "${first}" not found in ${file}`);
     else if (b === -1) failures.push(`${label} — "${second}" not found in ${file}`);
