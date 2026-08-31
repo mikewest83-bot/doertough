@@ -10,16 +10,22 @@
   "description": "Mike AI — your Doer Tough everyday copilot.",
   "icons": [
     {
-      "src": "/mike-icon.svg",
+      "src": "/mike-icon-192.svg",
       "sizes": "192x192",
       "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "purpose": "any"
     },
     {
-      "src": "/mike-icon.svg",
+      "src": "/mike-icon-512.svg",
       "sizes": "512x512",
       "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/mike-icon-maskable-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
     }
   ]
 }
