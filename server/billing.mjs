@@ -68,7 +68,22 @@ export async function createCheckoutSession(user) {
     allow_promotion_codes: 'true',
     'subscription_data[metadata][mike_user_id]': String(user.id),
   };
-  if (TRIAL_DAYS > 0) params['subscription_data[trial_period_days]'] = TRIAL_DAYS;
+  if (TRIAL_DAYS > 0) {
+    params['subscription_data[trial_period_days]'] = TRIAL_DAYS;
+    // Card-free trial. Stripe only accepts 'if_required' when the session
+    // needs no payment up front, which is exactly the trial case, so this
+    // stays inside the TRIAL_DAYS guard - a no-trial checkout still collects
+    // a card as before.
+    params.payment_method_collection = 'if_required';
+    // With no card on file, Stripe has to be told what to do when the trial
+    // ends. 'cancel' ends the subscription cleanly: the webhook's
+    // subscription.deleted branch drops the account to free, and a returning
+    // customer starts a fresh checkout. The alternatives are worse here -
+    // 'create_invoice' bills someone who never entered a card, and 'pause'
+    // leaves a subscription id attached that would let a second subscription
+    // be created alongside it.
+    params['subscription_data[trial_settings][end_behavior][missing_payment_method]'] = 'cancel';
+  }
   if (user.stripe_customer_id) params.customer = user.stripe_customer_id;
   else params.customer_email = user.email;
 

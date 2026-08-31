@@ -28,12 +28,13 @@ const hardenedRoute = `app.get('/api/speech/token', async (req, res) => {
   try {
     if (!req.user) return res.status(401).json({ error: 'sign_in_required', message: 'Sign in to talk with Mike.' });
     const paidAccess = hasPaidAccess(req.user);
-    const sessionLimit = paidAccess ? PAID_SESSION_LIMIT : FREE_SESSION_LIMIT;
-    const minuteLimit = paidAccess ? PAID_MINUTE_LIMIT : FREE_MINUTE_LIMIT;
+    const trialAccess = paidAccess && isTrialSubscriber(req.user);
+    const sessionLimit = trialAccess ? TRIAL_SESSION_LIMIT : paidAccess ? PAID_SESSION_LIMIT : FREE_SESSION_LIMIT;
+    const minuteLimit = trialAccess ? TRIAL_MINUTE_LIMIT : paidAccess ? PAID_MINUTE_LIMIT : FREE_MINUTE_LIMIT;
     const ownerVoiceQa = isOwner(req.user);
     const outOfBudget = () => res.status(402).json({
       error: paidAccess ? 'voice_allowance_reached' : 'upgrade_required',
-      message: paidAccess ? "You've used this month's voice time. It resets on a rolling 30-day window." : 'Start your free trial to talk with Mike.',
+      message: trialAccess ? "That's the voice time included in your free trial. Subscribe for the full monthly allowance." : paidAccess ? "You've used this month's voice time. It resets on a rolling 30-day window." : 'Start your free trial to talk with Mike.',
     });
 
     const secondsAllowance = minuteLimit * 60;

@@ -27,7 +27,7 @@ import {
   countVoiceSeconds,
   countVoiceSecondsGlobal,
 } from './db.mjs';
-import { hasPaidAccess } from './entitlements.mjs';
+import { hasPaidAccess, isTrialSubscriber } from './entitlements.mjs';
 import {
   createCheckoutSession,
   createPortalSession,
@@ -173,14 +173,17 @@ const FREE_SESSION_LIMIT = Number(process.env.VOICE_SESSIONS_FREE || 1);
 const GLOBAL_SESSION_LIMIT = Number(process.env.VOICE_SESSIONS_GLOBAL || 120);
 const PAID_MINUTE_LIMIT = Number(process.env.VOICE_MINUTES_PRO || 200);
 const FREE_MINUTE_LIMIT = Number(process.env.VOICE_MINUTES_FREE || 10);
+const TRIAL_SESSION_LIMIT = Number(process.env.VOICE_SESSIONS_TRIAL || 10);
+const TRIAL_MINUTE_LIMIT = Number(process.env.VOICE_MINUTES_TRIAL || 40);
 const GLOBAL_MINUTE_LIMIT = Number(process.env.VOICE_MINUTES_GLOBAL || 5000);
 
 app.get('/api/speech/token', async (req, res) => {
   try {
     if (!req.user) return res.status(401).json({ error: 'sign_in_required', message: 'Sign in to talk with Mike.' });
     const paidAccess = hasPaidAccess(req.user);
-    const sessionLimit = paidAccess ? PAID_SESSION_LIMIT : FREE_SESSION_LIMIT;
-    const minuteLimit = paidAccess ? PAID_MINUTE_LIMIT : FREE_MINUTE_LIMIT;
+    const trialAccess = paidAccess && isTrialSubscriber(req.user);
+    const sessionLimit = trialAccess ? TRIAL_SESSION_LIMIT : paidAccess ? PAID_SESSION_LIMIT : FREE_SESSION_LIMIT;
+    const minuteLimit = trialAccess ? TRIAL_MINUTE_LIMIT : paidAccess ? PAID_MINUTE_LIMIT : FREE_MINUTE_LIMIT;
     const outOfBudget = () => res.status(402).json({
       error: paidAccess ? 'voice_allowance_reached' : 'upgrade_required',
       message: paidAccess ? "You've used this month's voice time. It resets on a rolling 30-day window." : 'Start your free trial to talk with Mike.',
@@ -273,6 +276,8 @@ app.get('/api/health', (req, res) => {
     voiceBudget: {
       maxSessionSeconds: MAX_SESSION_SECONDS,
       paidMinutes: PAID_MINUTE_LIMIT,
+      trialMinutes: TRIAL_MINUTE_LIMIT,
+      trialSessions: TRIAL_SESSION_LIMIT,
       freeMinutes: FREE_MINUTE_LIMIT,
       globalMinutes: GLOBAL_MINUTE_LIMIT,
       paidSessions: PAID_SESSION_LIMIT,

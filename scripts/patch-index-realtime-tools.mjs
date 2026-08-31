@@ -81,7 +81,7 @@ source = source.replace(/\nmigrate\(\)\.then\(async \(\) => \{ await ensureRbacS
 source = source.replace(/\nmigrate\(\)\.catch\(\(error\) => console\.error\('\[db\] migrate threw:', error\.message \|\| error\)\);\r?\n?/g, '\n');
 
 if (!source.includes('// OWNER VOICE QA BYPASS')) {
-  const anchor = "    const minuteLimit = paidAccess ? PAID_MINUTE_LIMIT : FREE_MINUTE_LIMIT;";
+  const anchor = "    const minuteLimit = trialAccess ? TRIAL_MINUTE_LIMIT : paidAccess ? PAID_MINUTE_LIMIT : FREE_MINUTE_LIMIT;";
   if (!source.includes(anchor)) throw new Error('Voice budget patch anchor not found');
   source = source.replace(anchor, `${anchor}\n    // OWNER VOICE QA BYPASS\n    const ownerVoiceQa = isOwner(req.user);`);
   source = source.replace("    if (usedSessions >= sessionLimit) return outOfBudget();", "    if (!ownerVoiceQa && usedSessions >= sessionLimit) return outOfBudget();");

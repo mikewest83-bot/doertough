@@ -32,6 +32,18 @@ export function isTester(user) {
   return !!email && TESTER_EMAILS.has(email);
 }
 
+// A trial granted by Stripe is paid access, but it is not a paying customer.
+// The voice allowance is the expensive part of the product, so trials get
+// their own smaller budget: an account is only "trialing" here if its access
+// comes from a Stripe trial, never the owner or an allowlisted tester, who
+// keep the full paid allowance.
+export function isTrialSubscriber(user) {
+  if (!user) return false;
+  if (OWNER_USER_ID && String(user.id) === OWNER_USER_ID) return false;
+  if (isTester(user)) return false;
+  return String(user.subscription_status || '') === 'trialing';
+}
+
 export function hasPaidAccess(user) {
   if (!user) return false;
   if (OWNER_USER_ID && String(user.id) === OWNER_USER_ID) return true;
