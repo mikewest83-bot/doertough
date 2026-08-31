@@ -5,7 +5,6 @@
 import { migrate } from './db.mjs';
 import { ensureRbacSchema } from './rbac.mjs';
 import { ensureReminderSchema } from './reminders.mjs';
-import { ensureDealAlertSchema } from './deal-alerts.mjs';
 import { startVoiceCleanup } from './voice-cleanup.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -32,7 +31,6 @@ if (!smokeTest) {
 
   await ensureRbacSchema();
   await ensureReminderSchema();
-  await ensureDealAlertSchema();
 }
 
 await import('./index.mjs');
