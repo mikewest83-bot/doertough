@@ -25,13 +25,23 @@ if (!source.includes(ownerImport)) {
 // Remove any legacy Deal Alert wiring that may have been present before this
 // patch ran. The preserved deal-alert module is intentionally not part of the
 // active text/voice tool surface.
-source = source.replace(/^import \{ DEAL_ALERT_TOOLS, dealAlertHandlerFor, startDealAlertScheduler \} from '\.\/deal-alerts\.mjs';\r?\n/m, '');
-source = source.replace(/^import \{ DEAL_ALERT_TOOLS, dealAlertHandlerFor \} from '\.\/deal-alerts\.mjs';\r?\n/m, '');
-source = source.replace(/^\s*\.\.\.DEAL_ALERT_TOOLS,\r?\n/gm, '');
-source = source.replace(/^\s*\.\.\.DEAL_ALERT_HANDLERS,\r?\n/gm, '');
-source = source.replace(/^\s*DEAL_ALERT_HANDLERS,\r?\n/gm, '');
-source = source.replace(/^\s*startDealAlertScheduler\(\);\r?\n?/gm, '');
+const legacyDealAlertImport = "import { DEAL_ALERT_TOOLS, dealAlertHandlerFor, startDealAlertScheduler } from './deal-alerts.mjs';";
+const legacyDealAlertImportShort = "import { DEAL_ALERT_TOOLS, dealAlertHandlerFor } from './deal-alerts.mjs';";
+source = source.replace(legacyDealAlertImport + '\n', '');
+source = source.replace(legacyDealAlertImportShort + '\n', '');
+source = source.replace(/^[ \t]*\.\.\.DEAL_ALERT_TOOLS,\r?\n/gm, '');
+source = source.replace(/^[ \t]*\.\.\.DEAL_ALERT_HANDLERS,\r?\n/gm, '');
+source = source.replace(/^[ \t]*DEAL_ALERT_HANDLERS,\r?\n/gm, '');
+source = source.replace(/^[ \t]*startDealAlertScheduler\(\);\r?\n?/gm, '');
+source = source.replace(/\n[ \t]*\.\.\.DEAL_ALERT_TOOLS\.map\(\(tool\) => \[[\s\S]*?\n[ \t]*\]\),\r?\n/g, '\n');
 source = source.replace(/\nconst DEAL_ALERT_HANDLERS = Object\.fromEntries\(DEAL_ALERT_TOOLS\.map\(\(tool\) => \[[\s\S]*?\]\)\);\r?\n/g, '\n');
+
+// Final safety sweep: the active server source must not contain the disabled
+// registry symbol at all. This is intentionally narrow so reminder wiring is
+// preserved.
+source = source.replace(/^[ \t]*import \{[^\n]*DEAL_ALERT_TOOLS[^\n]*\}\s+from\s+'\.\/deal-alerts\.mjs';\r?\n?/gm, '');
+source = source.replace(/^[ \t]*\.\.\.DEAL_ALERT_TOOLS,?\r?\n/gm, '');
+source = source.replace(/^[ \t]*DEAL_ALERT_HANDLERS,?\r?\n/gm, '');
 
 if (!source.includes("app.post('/api/realtime/tool'")) {
   const marker = '// ===== Billing =====';
