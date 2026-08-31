@@ -46,3 +46,22 @@ form{display:flex;gap:8px;position:sticky;bottom:10px;z-index:25;padding:8px;bac
 .voice-box .voice-orb .orb-core:after{bottom:12%!important;font-size:25px!important}
 @media(max-width:760px){.voice-box .voice-orb .orb-core{padding-top:14%!important;background-position:50% 68%!important;background-size:64% 10px!important}.voice-box .voice-orb .orb-core>span,.voice-box .voice-orb .orb-core>em{font-size:64px!important}.voice-box .voice-orb .orb-core:after{font-size:18px!important;bottom:10%!important}}
 @media(max-width:390px){.voice-box .voice-orb .orb-core{padding-top:13%!important;background-position:50% 67%!important;background-size:64% 9px!important}.voice-box .voice-orb .orb-core>span,.voice-box .voice-orb .orb-core>em{font-size:58px!important}.voice-box .voice-orb .orb-core:after{font-size:16px!important;bottom:10%!important}}
+
+
+/* Mike AI subscription block */
+.checkout-notice{width:min(620px,92%);margin:16px auto 0;padding:12px 18px;border:1px solid #4ade8055;border-radius:12px;background:#0d1a12;color:#d7ead9;font-size:14.5px;line-height:1.5;text-align:center}
+.pricing{width:min(620px,92%);margin:26px auto 0;padding:26px 26px 24px;border:1px solid #27a9ff33;border-radius:18px;background:linear-gradient(180deg,#0c151d 0%,#080d13 100%);box-shadow:0 0 0 1px #27a9ff10,0 18px 44px #0009;text-align:center;scroll-margin-top:24px}
+.pricing-kicker{display:block;font-size:11px;font-weight:800;letter-spacing:.22em;color:#27a9ff;margin-bottom:10px}
+.pricing-price{display:flex;align-items:baseline;justify-content:center;gap:6px;color:#f5f7f9}
+.pricing-price strong{font-size:44px;font-weight:800;letter-spacing:-.02em;line-height:1}
+.pricing-price span{font-size:15px;color:#8b959f}
+.pricing-trial{margin:8px 0 18px;font-size:15.5px;font-weight:650;color:#f26b21}
+.pricing-list{list-style:none;margin:0 0 22px;padding:0;text-align:left;display:flex;flex-direction:column;gap:9px}
+.pricing-list li{position:relative;padding-left:24px;font-size:14.5px;line-height:1.5;color:#c3ccd4}
+.pricing-list li::before{content:"";position:absolute;left:4px;top:8px;width:8px;height:8px;border-radius:2px;background:#27a9ff}
+.pricing-cta{width:100%;min-height:54px;padding:14px 20px;border:0;border-radius:999px;background:#f26b21;color:#0a0a0a;font-size:15.5px;font-weight:800;letter-spacing:.02em;cursor:pointer;box-shadow:0 10px 26px #f26b2133}
+.pricing-cta:hover{background:#ff7f39}
+.pricing-cta:disabled{opacity:.5;cursor:default}
+.pricing-cta:focus-visible{outline:2px solid #27a9ff;outline-offset:3px}
+.pricing-fine{display:block;margin-top:11px;font-size:12.5px;color:#73777c;line-height:1.5}
+@media(max-width:760px){.pricing{width:calc(100% - 32px);padding:22px 20px 20px}.pricing-price strong{font-size:38px}}

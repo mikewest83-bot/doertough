@@ -41,6 +41,8 @@ function App() {
   const [resetToken, setResetToken] = useState('');
   const [accountsOn, setAccountsOn] = useState(false);
   const [showTranscript, setShowTranscript] = useState(readShowTranscript);
+  const [billingBusy, setBillingBusy] = useState(false);
+  const [checkoutNotice, setCheckoutNotice] = useState('');
 
   const conversationRef = useRef(null);
   const conversationModeRef = useRef(false);
@@ -116,7 +118,8 @@ function App() {
       try { active?.dataChannel?.close(); } catch {} try { active?.localStream?.getTracks().forEach((track) => track.stop()); } catch {} try { active?.pc?.close(); } catch {}
       settleVoiceSession(); setConversation(false); setStatus('ready');
       if (err?.status === 401 || String(err?.message || '').includes('sign_in_required')) { setAuthMode('login'); setAuthError('Sign in to talk with Mike.'); setAuthOpen(true); }
-      else if (err?.status === 402 || String(err?.message || '').includes('upgrade_required') || String(err?.message || '').includes('voice_allowance_reached')) setError('Your available Mike voice time has been used. Try again when your voice access resets.');
+      else if (String(err?.message || '').includes('upgrade_required')) { setError(''); setCheckoutNotice("That's the voice time a free account gets. Start your 7 days free below — no card needed."); document.getElementById('pricing')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+      else if (err?.status === 402 || String(err?.message || '').includes('voice_allowance_reached')) setError('Your available Mike voice time has been used. Try again when your voice access resets.');
       else if (err?.status === 503) setError('Mike voice is temporarily at capacity. Try again in a moment.');
       else setError(err?.message || 'Mike could not start the realtime voice connection. Check microphone access and try again.');
     } finally { voiceTransitionRef.current = false; }
@@ -154,11 +157,42 @@ function App() {
     } finally { setBusy(false); }
   };
 
+  // One button for both cases: the server hands back a Stripe Checkout URL for
+  // a new subscriber and a Billing Portal URL for an existing one, so the
+  // browser never has to know which it is asking for.
+  const startCheckout = async () => {
+    if (billingBusy) return;
+    if (!readToken()) { setAuthMode('register'); setAuthError('Make an account first — it takes a second, and the trial needs no card.'); setAuthNotice(''); setAuthOpen(true); return; }
+    setBillingBusy(true); setError(''); setCheckoutNotice('');
+    try {
+      const data = await fetchJson('/api/billing/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: '{}' }, 20000);
+      if (data.url) { window.location.href = data.url; return; }
+      setError('Could not open checkout. Try again in a minute.');
+    } catch (err) {
+      if (err?.status === 401) { setAuthMode('login'); setAuthError('Sign in to start your trial.'); setAuthOpen(true); }
+      else if (String(err?.message || '').includes('billing_not_configured')) setError('Subscriptions are not switched on yet.');
+      else if (String(err?.message || '').includes('no_subscription')) setError('There is no subscription on this account to manage.');
+      else setError('Could not open checkout. Try again in a minute.');
+    } finally { setBillingBusy(false); }
+  };
+
   const ask = async (raw) => { const text = (raw || '').trim(); if (!text || busy || conversationModeRef.current || conversationRef.current) return; setInput(''); setBusy(true); setError(''); const history = messages.slice(-10); setMessages((prev) => [...prev, { role: 'user', text }]); try { const data = await fetchJson('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ message: text, history }) }, 55000); setMessages((prev) => [...prev, { role: 'mike', text: data.text }]); setBusy(false); } catch (err) { const msg = err.name === 'AbortError' ? 'Mike is taking too long to respond. Try that again.' : err.message || 'Mike AI is unavailable right now.'; setError(msg); setMessages((prev) => [...prev, { role: 'mike', text: msg }]); setBusy(false); } };
   const switchAuthMode = (mode) => { setAuthMode(mode); setAuthError(''); setAuthNotice(''); };
   const submitAuth = async (e) => { e?.preventDefault?.(); if (authBusy) return; setAuthBusy(true); setAuthError(''); setAuthNotice(''); try { if (authMode === 'forgot') { const data = await fetchJson('/api/auth/forgot-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: authForm.email }) }, 20000); setAuthNotice(data.message || 'If that email has an account, a reset link is on its way.'); return; } if (authMode === 'reset') { const data = await fetchJson('/api/auth/reset-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: resetToken, password: authForm.password }) }, 20000); writeToken(data.token); setUser(data.user); setAuthOpen(false); setResetToken(''); setAuthForm({ name: '', email: '', password: '' }); return; } const path = authMode === 'login' ? '/api/auth/login' : '/api/auth/register'; const body = authMode === 'login' ? { email: authForm.email, password: authForm.password } : authForm; const data = await fetchJson(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 20000); writeToken(data.token); setUser(data.user); setAuthOpen(false); setAuthForm({ name: '', email: '', password: '' }); } catch (err) { setAuthError(err.message || 'That did not work. Try again.'); } finally { setAuthBusy(false); } };
   const signOut = async () => { await stopRealtimeConversation(); writeToken(''); setUser(null); setMessages([{ role: 'mike', text: "Signed out. I'm still here if you want to talk." }]); };
   useEffect(() => { let cancelled = false; (async () => { try { const health = await fetchJson('/api/health', {}, 10000); if (!cancelled) setAccountsOn(!!health.accountsConfigured); } catch {} if (!readToken()) return; try { const data = await fetchJson('/api/auth/me', { headers: authHeaders() }, 10000); if (!cancelled) setUser(data.user); } catch { writeToken(''); } })(); return () => { cancelled = true; }; }, []);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const checkout = params.get('checkout');
+    if (!checkout) return;
+    setCheckoutNotice(checkout === 'success'
+      ? "You're in. Your 7 days start now — tap Talk to Mike whenever you're ready."
+      : 'Checkout cancelled. Nothing was charged.');
+    window.history.replaceState({}, '', window.location.pathname);
+    if (checkout === 'success' && readToken()) {
+      fetchJson('/api/auth/me', { headers: authHeaders() }, 10000).then((data) => setUser(data.user)).catch(() => {});
+    }
+  }, []);
   useEffect(() => { const params = new URLSearchParams(window.location.search); const token = params.get('reset'); if (!token) return; setResetToken(token); setAuthMode('reset'); setAuthOpen(true); window.history.replaceState({}, '', window.location.pathname); }, []);
   useEffect(() => { const onUnload = () => settleVoiceSession(); window.addEventListener('beforeunload', onUnload); window.addEventListener('pagehide', onUnload); return () => { window.removeEventListener('beforeunload', onUnload); window.removeEventListener('pagehide', onUnload); }; }, []);
   useEffect(() => () => { stopRealtimeConversation(); }, []);
@@ -183,6 +217,22 @@ function App() {
       <input ref={photoInputRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePhotoChange} style={{ display: 'none' }} aria-hidden="true" />
       <button type="button" className="vision-photo-button" onClick={openPhotoPicker} disabled={busy} aria-label="Ask Mike about a photo">📷 Ask Mike about a photo</button>
       <form onSubmit={(e) => { e.preventDefault(); ask(input); }}><input id="input" value={input} onChange={(e) => setInput(e.target.value)} placeholder="What's on your mind?" autoComplete="off" disabled={conversationMode} /><button disabled={!input.trim() || busy || conversationMode} aria-label="Send"><Send size={18} /></button></form>
+      {checkoutNotice && <div className="checkout-notice" role="status">{checkoutNotice}</div>}
+      <section className="pricing" id="pricing">
+        <span className="pricing-kicker">MIKE AI</span>
+        <div className="pricing-price"><strong>$24.99</strong><span>/month</span></div>
+        <p className="pricing-trial">7 days free. No card to start.</p>
+        <ul className="pricing-list">
+          <li>Voice and text, any hour of the day</li>
+          <li>200 minutes of talking with Mike a month</li>
+          <li>He remembers your work between conversations</li>
+          <li>Cancel anytime — and nothing to cancel during the trial</li>
+        </ul>
+        <button className="pricing-cta" onClick={startCheckout} disabled={billingBusy}>
+          {billingBusy ? 'One second…' : user?.paid ? 'Manage billing' : 'Start 7 days free'}
+        </button>
+        <small className="pricing-fine">{user?.paid ? 'Your subscription is active.' : 'We only ask for a card if you decide to stay after the seven days.'}</small>
+      </section>
       <p className="fine">Mike is a Doer Tough AI assistant. Current facts and changing information should be verified before important decisions.</p>
     </main>
   );

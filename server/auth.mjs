@@ -16,6 +16,7 @@ import {
 } from './db.mjs';
 import { sendPasswordReset } from './mailer.mjs';
 import { publicRole } from './rbac.mjs';
+import { hasPaidAccess, isTrialSubscriber } from './entitlements.mjs';
 
 const JWT_SECRET = process.env.JWT_SECRET || '';
 const TOKEN_TTL = '90d';
@@ -41,6 +42,11 @@ export const publicUser = (u) => ({
   email: u.email,
   role: publicRole(u, isOwner),
   isOwner: isOwner(u),
+  // The browser needs to know whether to offer a subscription or a billing
+  // link. Derived server-side from the same entitlement the API enforces, so
+  // it can never disagree with what the account can actually do.
+  paid: hasPaidAccess(u),
+  trialing: isTrialSubscriber(u),
 });
 
 export function isOwner(user) {
