@@ -14,8 +14,27 @@ import { hasPro } from './db.mjs';
 // VOICE_OWNER_USER_ID.
 const OWNER_USER_ID = String(process.env.VOICE_OWNER_USER_ID || '1').trim();
 
+// Testing group. Accounts whose email is listed in TESTER_EMAILS (comma
+// separated) are granted the same access as a paid account, server-side, with
+// no Stripe subscription and no trial - so a test group can use the full
+// product without entering a card. This is read only from the environment;
+// nothing the browser sends can add an account to it. With TESTER_EMAILS
+// unset the set is empty and behaviour is exactly as before.
+const TESTER_EMAILS = new Set(
+  String(process.env.TESTER_EMAILS || '')
+    .split(',')
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean)
+);
+
+export function isTester(user) {
+  const email = String(user?.email || '').trim().toLowerCase();
+  return !!email && TESTER_EMAILS.has(email);
+}
+
 export function hasPaidAccess(user) {
   if (!user) return false;
   if (OWNER_USER_ID && String(user.id) === OWNER_USER_ID) return true;
+  if (isTester(user)) return true;
   return hasPro(user);
 }
