@@ -9,6 +9,10 @@ async function fetchJson(url, opts = {}) {
 }
 
 const DEALTOUGH_URL = process.env.DEALTOUGH_API_URL || 'https://dealtoughai.com';
+// Shared secret for DealTough's market-value route. Unset, no header is sent
+// and DealTough falls back to its open behaviour, so either side can deploy
+// first without breaking the other.
+const DEALTOUGH_TOKEN = String(process.env.DEALTOUGH_SERVICE_TOKEN || '').trim();
 const DEAL_CATEGORIES = ['vehicle', 'electronics', 'tools', 'furniture', 'outdoor_equipment'];
 const DEAL_CONDITIONS = ['new', 'like_new', 'good', 'fair', 'poor', 'unknown'];
 
@@ -35,7 +39,7 @@ export async function analyzeDeal({ category, title, askingPrice, condition, loc
     try {
       const res = await fetch(`${DEALTOUGH_URL}/api/v1/market-value`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(DEALTOUGH_TOKEN ? { 'x-dealtough-token': DEALTOUGH_TOKEN } : {}) },
         body: JSON.stringify({
           category: cat,
           title: String(title),
