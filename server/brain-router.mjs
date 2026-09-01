@@ -238,10 +238,16 @@ function toAnthropicTools(tools = []) {
   return unique;
 }
 
+// The app speaks OpenAI's Responses shape everywhere: user turns are
+// `input_text` blocks and assistant turns are `output_text`. Matching only
+// 'text' dropped every message, so Anthropic received an empty conversation
+// and could never answer. Accept all three.
+const TEXT_BLOCK_TYPES = new Set(['text', 'input_text', 'output_text']);
+
 function textFromContent(content) {
   if (Array.isArray(content)) {
     return content
-      .filter((block) => block?.type === 'text')
+      .filter((block) => TEXT_BLOCK_TYPES.has(block?.type))
       .map((block) => String(block.text || ''))
       .join('')
       .trim();
@@ -306,6 +312,16 @@ async function callClaude({ instructions, input, tools }) {
     error.status = 503;
     throw error;
   }
+
+  // Anthropic rejects an empty messages array. If the conversion ever yields
+  // nothing, fail with a name that says which side is wrong rather than an
+  // opaque 400 from the API.
+  const messages = openAiInputToAnthropic(input);
+  if (!messages.length) {
+    const error = new Error('anthropic_empty_conversation');
+    error.status = 500;
+    throw error;
+  }
   const response = await fetch(ANTHROPIC_URL, {
     method: 'POST',
     headers: {
@@ -317,7 +333,7 @@ async function callClaude({ instructions, input, tools }) {
       model: CLAUDE_MODEL,
       max_tokens: Number(process.env.MIKE_OPUS_MAX_TOKENS || 8192),
       system: instructions,
-      messages: openAiInputToAnthropic(input),
+      messages,
       tools: toAnthropicTools(tools),
     }),
   });
@@ -350,8 +366,11 @@ const runBrain = ({ brain, instructions, input, tools, client }) => (brain === '
 
 const modelName = (brain) => (brain === 'opus' ? CLAUDE_MODEL : OPENAI_MODELS[brain]);
 
-export async function generateBrainResponse({ client, instructions, input, tools, message = '' } = {}) {
-  const mode = normalizeBrain(process.env.MIKE_BRAIN || 'auto');
+export async function generateBrainResponse({ client, instructions, input, tools, message = '', brain: forced } = {}) {
+  // `forced` lets a caller demand a tier outright - the voice hand-off uses it,
+  // because by then the decision to think harder has already been made and
+  // re-scoring the text would only second-guess it.
+  const mode = forced ? normalizeBrain(forced) : normalizeBrain(process.env.MIKE_BRAIN || 'auto');
   const { brain: wanted, score } = mode === 'auto' ? pickBrain(message) : { brain: mode, score: null };
   const first = availableBrain(wanted);
   if (first !== wanted) {
