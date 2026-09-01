@@ -8,8 +8,13 @@ let source = fs.readFileSync(target, 'utf8');
 
 const importLine = "import { RESALE_ALERT_TOOLS, resaleAlertHandlerFor, startResaleWatchScheduler } from './resale-alerts.mjs';";
 if (!source.includes(importLine)) {
-  const anchor = "import { REMINDER_TOOLS, reminderHandlerFor, startReminderScheduler } from './reminders.mjs';";
-  if (!source.includes(anchor)) throw new Error('[patch-resale-alerts] reminder import anchor not found');
+  const anchors = [
+    "import { reminderHandlerFor, startReminderScheduler } from './reminders.mjs';",
+    "import { REMINDER_TOOLS, setReminderTool, listRemindersTool, cancelReminderTool, ensureReminderSchema } from './reminders.mjs';",
+    "import { REMINDER_TOOLS, reminderHandlerFor, startReminderScheduler } from './reminders.mjs';",
+  ];
+  const anchor = anchors.find((candidate) => source.includes(candidate));
+  if (!anchor) throw new Error('[patch-resale-alerts] reminder import anchor not found');
   source = source.replace(anchor, `${anchor}\n${importLine}`);
 }
 
@@ -26,12 +31,11 @@ if (!source.includes('resaleAlertHandlerFor(tool.name')) {
   source = source.replace(handlerAnchor, resaleHandlerBlock);
 }
 
-const schedulerAnchor = `    console.log('[mike-ai] reminder scheduler ready');`;
-const schedulerBlock = `${schedulerAnchor}\n  } catch (error) {\n    console.error('[mike-ai] reminder scheduler initialization failed:', error.message || error);\n  }\n  try {\n    startResaleWatchScheduler();\n    console.log('[mike-ai] resale deal scanner ready');`;
+const schedulerBlock = `  try {\n    startReminderScheduler();\n    console.log('[mike-ai] reminder scheduler ready');\n  } catch (error) {\n    console.error('[mike-ai] reminder scheduler initialization failed:', error.message || error);\n  }`;
 if (!source.includes('[mike-ai] resale deal scanner ready')) {
   const schedulerRe = /  try \{\n    startReminderScheduler\(\);\n    console\.log\('\[mike-ai\] reminder scheduler ready'\);\n  \} catch \(error\) \{\n    console\.error\('\[mike-ai\] reminder scheduler initialization failed:', error\.message \|\| error\);\n  \}/;
   if (!schedulerRe.test(source)) throw new Error('[patch-resale-alerts] scheduler block not found');
-  source = source.replace(schedulerRe, schedulerBlock + `\n  } catch (error) {\n    console.error('[mike-ai] resale deal scanner initialization failed:', error.message || error);\n  }`);
+  source = source.replace(schedulerRe, `${schedulerBlock}\n  try {\n    startResaleWatchScheduler();\n    console.log('[mike-ai] resale deal scanner ready');\n  } catch (error) {\n    console.error('[mike-ai] resale deal scanner initialization failed:', error.message || error);\n  }`);
 }
 
 fs.writeFileSync(target, source);
