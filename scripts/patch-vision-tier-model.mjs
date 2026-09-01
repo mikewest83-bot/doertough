@@ -1,14 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 
 // ---- server/vision.mjs: a second, better model reserved for Deal Analysis ----
-// MIKE_VISION_MODEL stays the cheap "More Info" model (gpt-4o-mini).
-// MIKE_VISION_MODEL_DEAL is a separate Railway variable for the pricing path only,
-// so the extra cost is spent exactly where reading a model number off a nameplate
-// actually matters. Falls back to MIKE_VISION_MODEL if unset - safe either way.
 const visionPath = path.join(root, 'server', 'vision.mjs');
 let vision = fs.readFileSync(visionPath, 'utf8');
 
@@ -19,16 +14,21 @@ if (!vision.includes(modelLine)) {
   vision = vision.replace(modelAnchor, `${modelAnchor}\n${modelLine}`);
 }
 
-// This targets the appraiseImage() call specifically (identified by the
-// APPRAISE_PROMPT + 'high' detail argument added by patch-vision-detail-extraction.mjs,
-// which runs before this script). The plain analyzeVisionImage() describe path is
-// untouched and keeps using the cheap VISION_MODEL.
+// This patch runs before the video-walkaround patch. On a second build, the
+// walkaround code may already have converted appraiseImage() to an images[]
+// request, so the old single-image anchor is no longer present. In that case
+// the presence of DEAL_VISION_MODEL is the idempotent success signal.
 const appraiseCallOld = "      model: VISION_MODEL,\n      input: [{ role: 'user', content: visionContent(APPRAISE_PROMPT, image, 'high') }],";
 const appraiseCallNew = "      model: DEAL_VISION_MODEL,\n      input: [{ role: 'user', content: visionContent(APPRAISE_PROMPT, image, 'high') }],";
 if (vision.includes(appraiseCallOld)) {
   vision = vision.replace(appraiseCallOld, appraiseCallNew);
 } else if (!vision.includes(appraiseCallNew)) {
-  throw new Error('[patch-vision-tier-model] appraiseImage model call anchor not found - check patch-vision-detail-extraction.mjs output shape');
+  const appraiseFunction = vision.indexOf('export async function appraiseImage');
+  const nextFunction = vision.indexOf('\nexport ', appraiseFunction + 10);
+  const appraiseBlock = appraiseFunction >= 0 ? vision.slice(appraiseFunction, nextFunction > appraiseFunction ? nextFunction : undefined) : '';
+  if (!appraiseBlock.includes('DEAL_VISION_MODEL')) {
+    throw new Error('[patch-vision-tier-model] appraiseImage model call anchor not found - check vision patch order');
+  }
 }
 
 fs.writeFileSync(visionPath, vision);
@@ -59,10 +59,6 @@ const pushNew = "      setMessages((prev) => [...prev, { role: 'user', text: use
 if (main.includes(pushOld)) main = main.replace(pushOld, pushNew);
 else if (!main.includes(pushNew)) throw new Error('[patch-vision-tier-model] photo message push anchor not found');
 
-// The old single bottom button was removed by patch-remove-duplicate-photo-button.mjs
-// earlier in the build chain (confirmed live 2026-09-01 - the production build currently
-// has NO visible photo trigger at all, chip and button both gone). This restores an
-// entry point as two buttons instead of one.
 const inputAnchor = "      <input ref={photoInputRef} type=\"file\" accept=\"image/jpeg,image/png,image/webp\" onChange={handlePhotoChange} style={{ display: 'none' }} aria-hidden=\"true\" />";
 const tabRow = "\n      <div className=\"vision-tab-row\">\n        <button type=\"button\" className=\"vision-tab-btn\" onClick={() => openPhotoPicker('identify')} disabled={busy} aria-label=\"Get more info from a photo\">📷 More Info</button>\n        <button type=\"button\" className=\"vision-tab-btn vision-tab-primary\" onClick={() => openPhotoPicker('appraise')} disabled={busy} aria-label=\"Get a deal analysis from a photo\">💰 Deal Analysis</button>\n      </div>";
 if (!main.includes('vision-tab-row')) {
@@ -72,7 +68,6 @@ if (!main.includes('vision-tab-row')) {
 
 fs.writeFileSync(mainPath, main);
 
-// ---- src/style.css: tab button styling ----
 const stylePath = path.join(root, 'src', 'style.css');
 let styles = fs.readFileSync(stylePath, 'utf8');
 const tabCss = `
