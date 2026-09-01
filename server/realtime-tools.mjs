@@ -6,6 +6,7 @@ import { FREE_TOOLS, FREE_TOOL_HANDLERS } from './free-tools.mjs';
 import { FIELD_TOOLS, FIELD_TOOL_HANDLERS } from './field-tools.mjs';
 import { MONEY_TOOLS, MONEY_TOOL_HANDLERS } from './money.mjs';
 import { REMINDER_TOOLS, reminderHandlerFor } from './reminders.mjs';
+import { DEAL_ALERT_TOOLS, dealAlertHandlerFor } from './deal-alerts.mjs';
 import { DOERTOUGH_INTELLIGENCE_TOOLS, DOERTOUGH_INTELLIGENCE_HANDLERS } from './doertough-intelligence-tools.mjs';
 import { CODING_TOOLS, CODING_TOOL_HANDLERS } from './coding-tools.mjs';
 import { DEAL_FINDER_TOOLS, DEAL_FINDER_HANDLERS } from './deal-finder.mjs';
@@ -20,6 +21,7 @@ export const REALTIME_TOOLS = [
   ...FIELD_TOOLS,
   ...MONEY_TOOLS,
   ...REMINDER_TOOLS,
+  ...DEAL_ALERT_TOOLS,
   ...DOERTOUGH_INTELLIGENCE_TOOLS,
   ...CODING_TOOLS,
   ...DEAL_FINDER_TOOLS,
@@ -40,7 +42,7 @@ const HANDLERS = {
 
 export function getRealtimeToolHandler(name, user) {
   if (OWNER_ONLY_TOOLS.has(name) && !isOwner(user)) return null;
-  return reminderHandlerFor(name, user?.id) || HANDLERS[name] || null;
+  return reminderHandlerFor(name, user?.id) || dealAlertHandlerFor(name, user?.id) || HANDLERS[name] || null;
 }
 
 export function isRealtimeToolAllowed(name) {
