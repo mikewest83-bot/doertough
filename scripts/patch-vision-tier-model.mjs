@@ -7,22 +7,20 @@ const visionPath = path.join(root, 'server', 'vision.mjs');
 let vision = fs.readFileSync(visionPath, 'utf8');
 const modelAnchor = "const VISION_MODEL = process.env.MIKE_VISION_MODEL || 'gpt-4o-mini';";
 const modelLine = "const DEAL_VISION_MODEL = process.env.MIKE_VISION_MODEL_DEAL || VISION_MODEL;";
-// patch-vision-tier-model-default may intentionally replace the RHS with a
-// concrete default. Treat any existing declaration as already patched.
 if (!/const DEAL_VISION_MODEL\s*=/.test(vision)) {
   if (!vision.includes(modelAnchor)) throw new Error('[patch-vision-tier-model] VISION_MODEL anchor not found');
   vision = vision.replace(modelAnchor, `${modelAnchor}\n${modelLine}`);
 }
 
-const appraiseCallOld = "      model: VISION_MODEL,\n      input: [{ role: 'user', content: visionContent(APPRAISE_PROMPT, image, 'high') }],";
-const appraiseCallNew = "      model: DEAL_VISION_MODEL,\n      input: [{ role: 'user', content: visionContent(APPRAISE_PROMPT, image, 'high') }],";
-if (vision.includes(appraiseCallOld)) {
-  vision = vision.replace(appraiseCallOld, appraiseCallNew);
-} else if (!vision.includes(appraiseCallNew)) {
-  const appraiseFunction = vision.indexOf('export async function appraiseImage');
-  const nextFunction = vision.indexOf('\nexport ', appraiseFunction + 10);
-  const appraiseBlock = appraiseFunction >= 0 ? vision.slice(appraiseFunction, nextFunction > appraiseFunction ? nextFunction : undefined) : '';
-  if (!appraiseBlock.includes('DEAL_VISION_MODEL')) throw new Error('[patch-vision-tier-model] appraiseImage model call anchor not found - check vision patch order');
+const appraiseFunction = vision.indexOf('export async function appraiseImage');
+const nextFunction = vision.indexOf('\nexport ', appraiseFunction + 10);
+const appraiseBlock = appraiseFunction >= 0 ? vision.slice(appraiseFunction, nextFunction > appraiseFunction ? nextFunction : undefined) : '';
+if (!appraiseBlock) throw new Error('[patch-vision-tier-model] appraiseImage function not found');
+if (appraiseBlock.includes('model: VISION_MODEL,')) {
+  const updatedBlock = appraiseBlock.replace('model: VISION_MODEL,', 'model: DEAL_VISION_MODEL,');
+  vision = vision.slice(0, appraiseFunction) + updatedBlock + vision.slice(nextFunction > appraiseFunction ? nextFunction : vision.length);
+} else if (!appraiseBlock.includes('model: DEAL_VISION_MODEL,')) {
+  throw new Error('[patch-vision-tier-model] appraiseImage model call anchor not found - check vision patch order');
 }
 fs.writeFileSync(visionPath, vision);
 
