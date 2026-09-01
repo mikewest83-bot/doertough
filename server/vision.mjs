@@ -143,6 +143,14 @@ export function appraisalText(identified, valuation) {
   const confidence = Number(valuation.confidencePercent);
   const parts = [`I make that ${item}${identified.identifiers ? ` (${identified.identifiers})` : ''}.`];
   parts.push(`Market value looks like about ${money(fmv)}, from ${used} comparable listing${used === 1 ? '' : 's'}${Number.isFinite(confidence) ? ` — confidence ${Math.round(confidence)}%` : ''}.`);
+
+  const resale = valuation.resale;
+  if (resale?.available && Number.isFinite(Number(resale.expectedResalePrice)) && Number.isFinite(Number(resale.buyTargetPrice))) {
+    parts.push(`If you're looking to flip it, I'd target buying around ${money(resale.buyTargetPrice)} and reselling around ${money(resale.expectedResalePrice)}. My max-buy line is about ${money(resale.maxBuyPrice)} before any repair, shipping, taxes or selling fees.`);
+  } else {
+    parts.push("I don't have enough comparable evidence to give you a defensible resale buy target, so I'm not going to make one up.");
+  }
+
   if (identified.condition === 'unknown') {
     parts.push("That's on looks alone — I can't judge mechanical condition from a photo, so treat it as a starting point.");
   }
