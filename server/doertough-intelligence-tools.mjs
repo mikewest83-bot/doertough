@@ -53,7 +53,17 @@ export const DOERTOUGH_INTELLIGENCE_TOOLS = [
       type: "object",
       properties: {
         capability: { type: "string", enum: ["safe_to_spend", "purchase_affordability", "spending_summary", "spending_trend", "financial_snapshot"], description: "Money intelligence capability to run." },
-        input: { type: "object", description: "Minimum scenario facts needed for the selected capability." }
+        input: { type: "object", description: [
+          "Scenario facts, in DOLLARS. SIGN RULE, this matters: spending is POSITIVE and income/deposits are NEGATIVE (Plaid's convention). A $3,000 paycheck is -3000; an $85 grocery run is 85. Getting this backwards silently reports income as spending.",
+          "Fields by capability:",
+          "safe_to_spend -> accounts, bills, optional windowDays (default 14).",
+          "purchase_affordability -> accounts, bills, askingPrice, optional deal.",
+          "spending_summary -> transactions.",
+          "spending_trend -> currentTransactions, previousTransactions.",
+          "financial_snapshot -> accounts, bills, transactions, optional budgets, goals.",
+          "Shapes: accounts [{type, availableBalance, currentBalance}]; bills [{name, amount, cadence: WEEKLY|MONTHLY|YEARLY|UNKNOWN, nextDueOn: YYYY-MM-DD, active}]; transactions [{amount, category}]; budgets [{category, monthlyLimit, spent}]; goals [{name, target, current}].",
+          "Use only figures the user gave you. Omit a field rather than guessing it: a wrong number is worse than an unknown one."
+        ].join(" ") }
       },
       required: ["capability"],
       additionalProperties: false
