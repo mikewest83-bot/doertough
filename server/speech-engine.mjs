@@ -41,12 +41,12 @@ export async function getSpeechEngineToken() {
           input: {
             noise_reduction: { type: 'near_field' },
             transcription: { model: 'gpt-4o-mini-transcribe', language: 'en' },
-            turn_detection: { type: 'semantic_vad', eagerness: 'low', create_response: true, interrupt_response: true },
+            turn_detection: { type: 'semantic_vad', eagerness: 'medium', create_response: true, interrupt_response: true },
           },
           output: { voice: REALTIME_VOICE, speed: 1.1 },
         },
         output_modalities: ['audio'],
-        max_output_tokens: 1200,
+        max_output_tokens: 800,
       },
     }),
   });
