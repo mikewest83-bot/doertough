@@ -3,9 +3,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-
-// This patch runs AFTER the existing vision detail/tier patches in package.json.
-// It deliberately targets their final source shape instead of brittle pre-patch text.
 const visionPath = path.join(root, 'server', 'vision.mjs');
 let vision = fs.readFileSync(visionPath, 'utf8');
 
@@ -29,32 +26,58 @@ else if (!vision.includes('const images = normalizeVisionImages(req.body?.images
 vision = vision.replace('const appraisal = await appraiseImage(image);', 'const appraisal = await appraiseImage(images, userNote);');
 vision = vision.replace('content: visionContent(prompt, image)', 'content: visionContent(prompt, images)');
 
-const appraiseStart = 'export async function appraiseImage(image) {';
-const appraiseNewStart = `export async function appraiseImage(images, userNote = '') {\n  const imageList = Array.isArray(images) ? images : (images ? [images] : []);\n  if (!openai || !imageList.length) return { description: '', identified: null, valuation: null, text: appraisalText(null, null) };\n  const extraLines = [];\n  if (imageList.length > 1) extraLines.push(\`\\n\\nThese are \${imageList.length} frames from a walkaround video of ONE item, shown in order. Use all of them together: judge condition, wear, and damage from whichever angle shows it best. If frames disagree, mention the difference.\`);\n  if (userNote) extraLines.push(\`\\n\\nThe person also supplied this note. Treat stated facts such as exact model, age, known issues, and included accessories as user-provided facts, but do not override what the photos plainly show: "\${userNote}"\`);\n  const fullPrompt = APPRAISE_PROMPT + extraLines.join('');\n\n  let raw = '';\n  try {`;
-if (vision.includes(appraiseStart)) {
-  const endMarker = '\n\n  const parsed = parseAppraisal(raw);';
-  const start = vision.indexOf(appraiseStart);
-  const end = vision.indexOf(endMarker, start);
-  if (end < 0) throw new Error('[patch-vision-video-walkaround-v2] appraise function end not found');
-  const oldTail = vision.slice(start, end);
-  const bodyMatch = oldTail.match(/  let raw = '';[\s\S]*?  \}\n\n  const parsed =/);
-  if (!bodyMatch) throw new Error('[patch-vision-video-walkaround-v2] appraise call body not found');
-  const prefix = appraiseNewStart;
-  const replacementBody = `  let raw = '';\n  try {\n    const response = await openai.responses.create({\n      model: DEAL_VISION_MODEL,\n      input: [{ role: 'user', content: visionContent(fullPrompt, imageList, 'high') }],\n      max_output_tokens: 1600,\n    });\n    raw = String(response.output_text || '').trim();\n  } catch (error) {\n    console.error('[vision] appraise call failed:', error?.message || error);\n    return { description: '', identified: null, valuation: null, text: appraisalText(null, null) };\n  }`;
-  vision = vision.slice(0, start) + prefix + replacementBody + vision.slice(end);
+// Replace the complete final appraiseImage declaration. This avoids depending on
+// the exact intermediate body produced by the earlier detail/tier patches.
+const appraiseStart = 'export async function appraiseImage(';
+const start = vision.indexOf(appraiseStart);
+if (start < 0) throw new Error('[patch-vision-video-walkaround-v2] appraiseImage function not found');
+const appraiseFunction = `export async function appraiseImage(images, userNote = '') {
+  const imageList = Array.isArray(images) ? images : (images ? [images] : []);
+  if (!openai || !imageList.length) return { description: '', identified: null, valuation: null, text: appraisalText(null, null) };
+  const extraLines = [];
+  if (imageList.length > 1) extraLines.push(\`\\n\\nThese are \${imageList.length} frames from a walkaround video of ONE item, shown in order. Use all of them together: judge condition, wear, and damage from whichever angle shows it best. If frames disagree, mention the difference.\`);
+  if (userNote) extraLines.push(\`\\n\\nThe person also supplied this note. Treat stated facts such as exact model, age, known issues, and included accessories as user-provided facts, but do not override what the photos plainly show: "\${userNote}"\`);
+  const fullPrompt = APPRAISE_PROMPT + extraLines.join('');
+  let raw = '';
+  try {
+    const response = await openai.responses.create({
+      model: DEAL_VISION_MODEL,
+      input: [{ role: 'user', content: visionContent(fullPrompt, imageList, 'high') }],
+      max_output_tokens: 1600,
+    });
+    raw = String(response.output_text || '').trim();
+  } catch (error) {
+    console.error('[vision] appraise call failed:', error?.message || error);
+    return { description: '', identified: null, valuation: null, text: appraisalText(null, null) };
+  }
+  const parsed = parseAppraisal(raw);
+  if (!parsed) {
+    const description = raw.slice(0, 900);
+    return { description, identified: null, valuation: null, text: appraisalText(null, null) };
+  }
+  const { description, ...identified } = parsed;
+  let valuation = null;
+  if (identified.category && identified.title && identified.confidence !== 'low') {
+    try {
+      valuation = await analyzeDeal({
+        category: identified.category,
+        title: identified.title,
+        condition: identified.condition,
+        description: [userNote, identified.identifiers, identified.details].filter(Boolean).join('; ') || undefined,
+      });
+    } catch (error) {
+      console.error('[vision] appraisal pricing failed:', error?.message || error);
+      valuation = { error: 'pricing_unavailable' };
+    }
+  }
+  return { description, identified, valuation, text: appraisalText(identified, valuation) };
 }
-
-const pricingOld = 'description: [identified.identifiers, identified.details].filter(Boolean).join(\'; \') || undefined,';
-const pricingNew = 'description: [userNote, identified.identifiers, identified.details].filter(Boolean).join(\'; \') || undefined,';
-if (vision.includes(pricingOld)) vision = vision.replace(pricingOld, pricingNew);
-else if (!vision.includes(pricingNew)) throw new Error('[patch-vision-video-walkaround-v2] pricing description anchor not found');
-
+`;
+vision = vision.slice(0, start) + appraiseFunction;
 fs.writeFileSync(visionPath, vision);
 
-// ---- Front end ----
 const mainPath = path.join(root, 'src', 'main.jsx');
 let main = fs.readFileSync(mainPath, 'utf8');
-
 if (!main.includes("const [photoNote, setPhotoNote] = useState('');")) {
   const stateAnchor = "  const [checkoutNotice, setCheckoutNotice] = useState('');";
   if (!main.includes(stateAnchor)) throw new Error('[patch-vision-video-walkaround-v2] checkoutNotice state anchor not found');
@@ -65,8 +88,6 @@ if (!main.includes('const videoInputRef = useRef(null);')) {
   if (!main.includes(refAnchor)) throw new Error('[patch-vision-video-walkaround-v2] photoInputRef anchor not found');
   main = main.replace(refAnchor, `${refAnchor}\n  const videoInputRef = useRef(null);`);
 }
-
-// The tier patch creates the appraise/identify request. Add the optional user note only to appraisal.
 if (!main.includes('description: photoNote')) {
   const appraiseNeedle = "mode: 'appraise', prompt:";
   if (!main.includes(appraiseNeedle)) throw new Error('[patch-vision-video-walkaround-v2] appraise request anchor not found');
@@ -129,7 +150,6 @@ if (!main.includes('Video Walkaround')) {
   if (!rowRe.test(main)) throw new Error('[patch-vision-video-walkaround-v2] vision tab row not found');
   main = main.replace(rowRe, `$1\n        <button type="button" className="vision-tab-btn vision-tab-primary" onClick={() => videoInputRef.current?.click()} disabled={busy} aria-label="Get a deal analysis from a walkaround video">🎥 Video Walkaround</button>$2`);
 }
-
 if (!main.includes('ref={videoInputRef}')) {
   const inputAnchor = "      <input ref={photoInputRef} type=\"file\" accept=\"image/jpeg,image/png,image/webp\" onChange={handlePhotoChange} style={{ display: 'none' }} aria-hidden=\"true\" />";
   if (!main.includes(inputAnchor)) throw new Error('[patch-vision-video-walkaround-v2] photo input anchor not found');
