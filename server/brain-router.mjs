@@ -1,14 +1,20 @@
 const OPENAI_MODELS = {
+  mini: process.env.MIKE_MINI_MODEL || 'gpt-4o-mini',
   terra: 'gpt-5.6-terra',
   sol: 'gpt-5.6-sol',
 };
 const CLAUDE_MODEL = 'claude-opus-5';
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const VALID_REASONING = new Set(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
+const BRAIN_ORDER = ['mini', 'terra', 'sol', 'opus'];
+
+// Only the gpt-5.6 tier accepts a `reasoning` parameter. Sending one to the
+// mini model is a request error, so the floor brain must be called without it.
+const REASONING_BRAINS = new Set(['terra', 'sol']);
 
 const normalizeBrain = (value) => {
   const brain = String(value || '').trim().toLowerCase();
-  return ['terra', 'sol', 'opus', 'auto'].includes(brain) ? brain : 'terra';
+  return [...BRAIN_ORDER, 'auto'].includes(brain) ? brain : 'auto';
 };
 
 const reasoningEffort = () => {
@@ -16,39 +22,98 @@ const reasoningEffort = () => {
   return VALID_REASONING.has(requested) ? requested : 'medium';
 };
 
-const complexityScore = (message = '') => {
-  const text = String(message).toLowerCase();
-  let score = Math.min(3, Math.floor(text.length / 900));
-  const hardSignals = [
-    'analyze', 'strategy', 'architecture', 'debug', 'debugging', 'code', 'coding',
-    'compare', 'research', 'business plan', 'financial model', 'contract', 'legal',
-    'multi-step', 'step by step', 'deep dive', 'audit', 'design', 'technical',
-    'why is', 'root cause', 'optimize', 'optimization', 'negotiate', 'decision',
-  ];
-  for (const signal of hardSignals) if (text.includes(signal)) score += 1;
-  return score;
+// Escalation thresholds, tunable without a code change so they can be moved
+// from real traffic rather than guesswork. Every routing decision logs its
+// score, so the distribution is visible in the deploy log.
+const threshold = (name, fallback) => {
+  const raw = Number(process.env[`MIKE_ESCALATE_${name}`]);
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
 };
+const thresholds = () => ({
+  terra: threshold('TERRA', 4),
+  sol: threshold('SOL', 8),
+  opus: threshold('OPUS', 12),
+});
 
-export function resolveBrain({ message = '', requested = process.env.MIKE_BRAIN || 'terra' } = {}) {
-  const mode = normalizeBrain(requested);
-  if (mode !== 'auto') return mode;
+// The user wants reasoning, not a lookup. "What's this truck worth" is a tool
+// call and belongs on the floor brain; "why is it worth less than that one"
+// is not.
+const REASONING_SIGNALS = [
+  'why', 'explain', 'compare', 'difference between', 'pros and cons', 'trade-off', 'tradeoff',
+  'should i', 'walk me through', 'figure out', 'strategy', 'negotiate', 'root cause',
+  'debug', 'analyze', 'worth it', 'best way', 'how do i', 'help me decide',
+];
+
+// Whole pieces of work rather than questions.
+const DEEP_SIGNALS = [
+  'business plan', 'financial model', 'contract', 'architecture', 'step by step',
+  'deep dive', 'write the code', 'refactor', 'audit', 'lawsuit', 'taxes',
+];
+
+// The user is telling us the previous answer was not good enough. This is the
+// strongest real-world escalation cue there is — a person pushing back has
+// already decided the cheap answer missed.
+const PUSHBACK_SIGNALS = [
+  "that's wrong", 'thats wrong', 'that is wrong', 'not right', 'you missed',
+  "you're missing", 'youre missing', 'try again', 'think harder', 'think about it',
+  'no, actually', 'that makes no sense',
+];
+
+const countHits = (text, signals) => signals.reduce((n, s) => (text.includes(s) ? n + 1 : n), 0);
+
+/**
+ * How much thinking this message plausibly needs. Tuned for speech: people
+ * talk in short sentences, so length counts for little and intent counts for
+ * a lot. The old scoring needed a ~2,700-character message hitting five
+ * keywords before it left the floor, which never happens out loud.
+ */
+export function complexityScore(message = '') {
+  const text = String(message).toLowerCase();
+  const length = Math.min(2, Math.floor(text.length / 350));
+  const reasoning = Math.min(3, countHits(text, REASONING_SIGNALS)) * 2;
+  const deep = Math.min(3, countHits(text, DEEP_SIGNALS)) * 3;
+  // Worth a full tier on its own: if someone says the last answer was wrong,
+  // handing them the same floor brain again is how you lose them.
+  const pushback = countHits(text, PUSHBACK_SIGNALS) > 0 ? 4 : 0;
+  const multiPart = (text.match(/\?/g) || []).length >= 2 ? 1 : 0;
+  return length + reasoning + deep + pushback + multiPart;
+}
+
+const opusReady = () => Boolean(String(process.env.ANTHROPIC_API_KEY || '').trim());
+
+/** Opus without a key degrades to sol rather than throwing chat away. */
+const availableBrain = (desired) => (desired === 'opus' && !opusReady() ? 'sol' : desired);
+
+/** The brain this message asks for, before availability is considered. */
+export function pickBrain(message = '') {
   const score = complexityScore(message);
-  if (score >= 8 && process.env.ANTHROPIC_API_KEY) return 'opus';
-  if (score >= 4) return 'sol';
-  return 'terra';
+  const limit = thresholds();
+  if (score >= limit.opus) return { brain: 'opus', score };
+  if (score >= limit.sol) return { brain: 'sol', score };
+  if (score >= limit.terra) return { brain: 'terra', score };
+  return { brain: 'mini', score };
+}
+
+export function resolveBrain({ message = '', requested = process.env.MIKE_BRAIN || 'auto' } = {}) {
+  const mode = normalizeBrain(requested);
+  if (mode !== 'auto') return availableBrain(mode);
+  return availableBrain(pickBrain(message).brain);
 }
 
 export function getBrainStatus() {
-  const configuredMode = normalizeBrain(process.env.MIKE_BRAIN || 'terra');
+  const configuredMode = normalizeBrain(process.env.MIKE_BRAIN || 'auto');
   return {
     configuredMode,
     reasoningEffort: reasoningEffort(),
+    defaultBrain: 'mini',
+    escalation: thresholds(),
     available: {
+      mini: Boolean(process.env.OPENAI_API_KEY),
       terra: Boolean(process.env.OPENAI_API_KEY),
       sol: Boolean(process.env.OPENAI_API_KEY),
-      opus: Boolean(process.env.ANTHROPIC_API_KEY),
+      opus: opusReady(),
     },
-    models: { terra: OPENAI_MODELS.terra, sol: OPENAI_MODELS.sol, opus: CLAUDE_MODEL },
+    models: { mini: OPENAI_MODELS.mini, terra: OPENAI_MODELS.terra, sol: OPENAI_MODELS.sol, opus: CLAUDE_MODEL },
   };
 }
 
@@ -112,19 +177,15 @@ function openAiInputToAnthropic(input = []) {
   return messages;
 }
 
-async function callOpenAI({ model, instructions, input, tools, client }) {
+async function callOpenAI({ brain, instructions, input, tools, client }) {
   if (!client) {
     const error = new Error('OPENAI_API_KEY_not_configured');
     error.status = 503;
     throw error;
   }
-  return client.responses.create({
-    model,
-    instructions,
-    input,
-    tools,
-    reasoning: { effort: reasoningEffort() },
-  });
+  const request = { model: OPENAI_MODELS[brain], instructions, input, tools };
+  if (REASONING_BRAINS.has(brain)) request.reasoning = { effort: reasoningEffort() };
+  return client.responses.create(request);
 }
 
 async function callClaude({ instructions, input, tools }) {
@@ -173,15 +234,19 @@ async function callClaude({ instructions, input, tools }) {
 }
 
 export async function generateBrainResponse({ client, instructions, input, tools, message = '' } = {}) {
-  const selected = resolveBrain({ message });
-  const started = Date.now();
-  let response;
-  if (selected === 'opus') {
-    response = await callClaude({ instructions, input, tools });
-  } else {
-    response = await callOpenAI({ model: OPENAI_MODELS[selected], instructions, input, tools, client });
+  const mode = normalizeBrain(process.env.MIKE_BRAIN || 'auto');
+  const { brain: wanted, score } = mode === 'auto' ? pickBrain(message) : { brain: mode, score: null };
+  const selected = availableBrain(wanted);
+  if (selected !== wanted) {
+    console.warn(`[brain] ${wanted} unavailable (no ANTHROPIC_API_KEY) - using ${selected}`);
   }
-  console.log(`[brain] ${selected} (${response?._brain || OPENAI_MODELS[selected]}) completed in ${Date.now() - started}ms`);
+  const started = Date.now();
+  const response = selected === 'opus'
+    ? await callClaude({ instructions, input, tools })
+    : await callOpenAI({ brain: selected, instructions, input, tools, client });
+  const model = selected === 'opus' ? CLAUDE_MODEL : OPENAI_MODELS[selected];
+  // score is logged so the thresholds can be tuned from real traffic.
+  console.log(`[brain] ${selected} (${model}) score=${score ?? 'forced'} in ${Date.now() - started}ms`);
   return response;
 }
 
