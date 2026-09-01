@@ -15,6 +15,9 @@ const healthModel = "    model: OPENAI_MODEL,\n    timestamp: new Date().toISOSt
 const healthWithBrain = "    model: OPENAI_MODEL,\n    brain: getBrainStatus(),\n    timestamp: new Date().toISOString(),";
 const directCall = '      const response = await openai.responses.create({ model: OPENAI_MODEL, instructions, input, tools });';
 const routedCall = '      const response = await generateBrainResponse({ client: openai, instructions, input, tools, message });';
+const roundLoop = '    for (let round = 0; round < 4; round += 1) {';
+const boundedRoundLoop = "    const maxToolRounds = Math.max(1, Math.min(4, Number(process.env.MIKE_MAX_TOOL_ROUNDS || 3)));\n    for (let round = 0; round < maxToolRounds; round += 1) {";
+const finalRoundCall = "      const roundTools = round === maxToolRounds - 1 ? [] : tools;\n      const response = await generateBrainResponse({ client: openai, instructions, input, tools: roundTools, message });";
 
 const indexAlreadyCanonical = source.includes(brainImport) && source.includes(targetModel) && source.includes(healthWithBrain) && source.includes(routedCall);
 if (!indexAlreadyCanonical) {
@@ -30,11 +33,23 @@ if (!indexAlreadyCanonical) {
     if (!source.includes(directCall)) throw new Error('[patch-brain-router] direct OpenAI response call not found');
     source = source.replace(directCall, routedCall);
   }
-  fs.writeFileSync(indexFile, source);
-  console.log('[patch-brain-router] chat route wired to brain router');
-} else {
-  console.log('[patch-brain-router] chat route already wired; no index changes');
 }
+
+// Bound tool/model turns so a simple question cannot burn four sequential
+// model calls. The final allowed turn is answer-only: tool results already
+// collected are still in the conversation, but another tool loop cannot start.
+if (!source.includes(boundedRoundLoop)) {
+  if (source.includes(roundLoop)) source = source.replace(roundLoop, boundedRoundLoop);
+  else if (!source.includes('const maxToolRounds = Math.max(1, Math.min(4, Number(process.env.MIKE_MAX_TOOL_ROUNDS || 3)));')) {
+    throw new Error('[patch-brain-router] tool-round loop anchor not found');
+  }
+}
+if (!source.includes(finalRoundCall)) {
+  if (!source.includes(routedCall)) throw new Error('[patch-brain-router] routed brain call not found for final-round guard');
+  source = source.replace(routedCall, finalRoundCall);
+}
+fs.writeFileSync(indexFile, source);
+console.log('[patch-brain-router] chat route wired to brain router with bounded tool rounds');
 
 // The router source is canonical now: automatic requests start on Mini and
 // Mini owns the escalation decision. Keep this build patch as a guard only.
