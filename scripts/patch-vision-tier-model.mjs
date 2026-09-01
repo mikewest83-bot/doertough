@@ -7,7 +7,9 @@ const visionPath = path.join(root, 'server', 'vision.mjs');
 let vision = fs.readFileSync(visionPath, 'utf8');
 const modelAnchor = "const VISION_MODEL = process.env.MIKE_VISION_MODEL || 'gpt-4o-mini';";
 const modelLine = "const DEAL_VISION_MODEL = process.env.MIKE_VISION_MODEL_DEAL || VISION_MODEL;";
-if (!vision.includes(modelLine)) {
+// patch-vision-tier-model-default may intentionally replace the RHS with a
+// concrete default. Treat any existing declaration as already patched.
+if (!/const DEAL_VISION_MODEL\s*=/.test(vision)) {
   if (!vision.includes(modelAnchor)) throw new Error('[patch-vision-tier-model] VISION_MODEL anchor not found');
   vision = vision.replace(modelAnchor, `${modelAnchor}\n${modelLine}`);
 }
@@ -38,9 +40,6 @@ const openNew = "  const openPhotoPicker = (mode = 'appraise') => { photoModeRef
 if (main.includes(openOld)) main = main.replace(openOld, openNew);
 else if (!main.includes(openNew)) throw new Error('[patch-vision-tier-model] openPhotoPicker anchor not found');
 
-// The later video-walkaround patch owns the modern photo handler. The original
-// source does not contain that handler yet, so if its older fetch/push anchors
-// have already disappeared, simply defer to the later patch instead of failing.
 const fetchOld = "      const data = await fetchJson('/api/vision/analyze', {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json', ...authHeaders() },\n        body: JSON.stringify({ image: { dataUrl, mediaType: file.type.toLowerCase() }, mode: 'appraise', prompt: 'What is this? Describe it briefly — brand, model number, type of item, and any visible wear or damage. Two or three sentences.' })\n      }, 60000);";
 const fetchNew = "      const useAppraisal = photoModeRef.current !== 'identify';\n      const data = await fetchJson('/api/vision/analyze', {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json', ...authHeaders() },\n        body: JSON.stringify(useAppraisal\n          ? { image: { dataUrl, mediaType: file.type.toLowerCase() }, mode: 'appraise', prompt: 'What is this? Describe it briefly — brand, model number, type of item, and any visible wear or damage. Two or three sentences.' }\n          : { image: { dataUrl, mediaType: file.type.toLowerCase() }, prompt: 'Identify what is in this photo as precisely as you can. Give the item type, brand, model or model number, condition, and any readable text, labels, or serial numbers. Do not estimate price, value, resale range, or what it is worth. Two or three sentences.' })\n      }, 60000);";
 if (main.includes(fetchOld)) main = main.replace(fetchOld, fetchNew);
