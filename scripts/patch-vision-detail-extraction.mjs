@@ -47,8 +47,16 @@ const oldPricing = "        description: identified.identifiers || undefined,";
 const newPricing = "        description: [identified.identifiers, identified.details].filter(Boolean).join('; ') || undefined,";
 if (source.includes(oldPricing)) source = source.replace(oldPricing, newPricing);
 
+const oldVisionContent = "export function visionContent(message, image) {\n  const content = [{ type: 'input_text', text: String(message || '') }];\n  if (image) content.push({ type: 'input_image', image_url: image.dataUrl, detail: 'auto' });\n  return content;\n}";
+const newVisionContent = "export function visionContent(message, image, detail = 'auto') {\n  const content = [{ type: 'input_text', text: String(message || '') }];\n  if (image) content.push({ type: 'input_image', image_url: image.dataUrl, detail });\n  return content;\n}";
+if (source.includes(oldVisionContent)) source = source.replace(oldVisionContent, newVisionContent);
+
+const oldAppraiseInput = "content: visionContent(APPRAISE_PROMPT, image)";
+const newAppraiseInput = "content: visionContent(APPRAISE_PROMPT, image, 'high')";
+if (source.includes(oldAppraiseInput)) source = source.replace(oldAppraiseInput, newAppraiseInput);
+
 const oldTokens = "      max_output_tokens: 700,\n    });\n    raw = String(response.output_text || '').trim();";
-const newTokens = "      max_output_tokens: 1200,\n    });\n    raw = String(response.output_text || '').trim();";
+const newTokens = "      max_output_tokens: 1600,\n    });\n    raw = String(response.output_text || '').trim();";
 if (source.includes(oldTokens)) source = source.replace(oldTokens, newTokens);
 
 fs.writeFileSync(path, source);
