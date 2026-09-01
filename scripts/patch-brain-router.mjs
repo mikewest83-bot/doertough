@@ -65,7 +65,17 @@ if (router.includes(oldAutoSelection)) {
 } else if (router.includes(newAutoSelection)) {
   console.log('[patch-brain-router] auto mode already starts on mini; no router changes');
 } else {
-  throw new Error('[patch-brain-router] brain-router auto selection block not found');
+  const oldResolve = "  if (mode !== 'auto') return availableBrain(mode);\n  return availableBrain(pickBrain(message).brain);";
+  const newResolve = "  if (mode !== 'auto') return availableBrain(mode);\n  return 'mini';";
+  if (router.includes(oldResolve)) {
+    router = router.replace(oldResolve, newResolve);
+    fs.writeFileSync(routerFile, router);
+    console.log('[patch-brain-router] resolveBrain auto mode now starts on mini');
+  } else if (router.includes(newResolve)) {
+    console.log('[patch-brain-router] resolveBrain already starts on mini; no router changes');
+  } else {
+    throw new Error('[patch-brain-router] brain-router auto selection block not found');
+  }
 }
 
 console.log('[patch-brain-router] canonical brain-router patch complete');
