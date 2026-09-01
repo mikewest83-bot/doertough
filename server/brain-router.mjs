@@ -4,10 +4,16 @@ const OPENAI_MODELS = {
 };
 const CLAUDE_MODEL = 'claude-opus-5';
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+const VALID_REASONING = new Set(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
 
 const normalizeBrain = (value) => {
   const brain = String(value || '').trim().toLowerCase();
   return ['terra', 'sol', 'opus', 'auto'].includes(brain) ? brain : 'terra';
+};
+
+const reasoningEffort = () => {
+  const requested = String(process.env.MIKE_REASONING_EFFORT || 'medium').trim().toLowerCase();
+  return VALID_REASONING.has(requested) ? requested : 'medium';
 };
 
 const complexityScore = (message = '') => {
@@ -33,8 +39,10 @@ export function resolveBrain({ message = '', requested = process.env.MIKE_BRAIN 
 }
 
 export function getBrainStatus() {
+  const configuredMode = normalizeBrain(process.env.MIKE_BRAIN || 'terra');
   return {
-    configuredMode: normalizeBrain(process.env.MIKE_BRAIN || 'terra'),
+    configuredMode,
+    reasoningEffort: reasoningEffort(),
     available: {
       terra: Boolean(process.env.OPENAI_API_KEY),
       sol: Boolean(process.env.OPENAI_API_KEY),
@@ -110,7 +118,13 @@ async function callOpenAI({ model, instructions, input, tools, client }) {
     error.status = 503;
     throw error;
   }
-  return client.responses.create({ model, instructions, input, tools });
+  return client.responses.create({
+    model,
+    instructions,
+    input,
+    tools,
+    reasoning: { effort: reasoningEffort() },
+  });
 }
 
 async function callClaude({ instructions, input, tools }) {
