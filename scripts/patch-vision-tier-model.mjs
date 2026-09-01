@@ -38,20 +38,18 @@ const openNew = "  const openPhotoPicker = (mode = 'appraise') => { photoModeRef
 if (main.includes(openOld)) main = main.replace(openOld, openNew);
 else if (!main.includes(openNew)) throw new Error('[patch-vision-tier-model] openPhotoPicker anchor not found');
 
-// The video-walkaround patch owns the modern photo handler once videoInputRef is present.
-// Do not try to rewrite its array-of-images request back into the old single-photo shape.
-const modernWalkaround = main.includes('videoInputRef') && main.includes('images:');
-if (!modernWalkaround) {
-  const fetchOld = "      const data = await fetchJson('/api/vision/analyze', {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json', ...authHeaders() },\n        body: JSON.stringify({ image: { dataUrl, mediaType: file.type.toLowerCase() }, mode: 'appraise', prompt: 'What is this? Describe it briefly — brand, model number, type of item, and any visible wear or damage. Two or three sentences.' })\n      }, 60000);";
-  const fetchNew = "      const useAppraisal = photoModeRef.current !== 'identify';\n      const data = await fetchJson('/api/vision/analyze', {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json', ...authHeaders() },\n        body: JSON.stringify(useAppraisal\n          ? { image: { dataUrl, mediaType: file.type.toLowerCase() }, mode: 'appraise', prompt: 'What is this? Describe it briefly — brand, model number, type of item, and any visible wear or damage. Two or three sentences.' }\n          : { image: { dataUrl, mediaType: file.type.toLowerCase() }, prompt: 'Identify what is in this photo as precisely as you can. Give the item type, brand, model or model number, condition, and any readable text, labels, or serial numbers. Do not estimate price, value, resale range, or what it is worth. Two or three sentences.' })\n      }, 60000);";
-  if (main.includes(fetchOld)) main = main.replace(fetchOld, fetchNew);
-  else if (!main.includes(fetchNew)) throw new Error('[patch-vision-tier-model] photo fetchJson anchor not found');
+// The later video-walkaround patch owns the modern photo handler. The original
+// source does not contain that handler yet, so if its older fetch/push anchors
+// have already disappeared, simply defer to the later patch instead of failing.
+const fetchOld = "      const data = await fetchJson('/api/vision/analyze', {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json', ...authHeaders() },\n        body: JSON.stringify({ image: { dataUrl, mediaType: file.type.toLowerCase() }, mode: 'appraise', prompt: 'What is this? Describe it briefly — brand, model number, type of item, and any visible wear or damage. Two or three sentences.' })\n      }, 60000);";
+const fetchNew = "      const useAppraisal = photoModeRef.current !== 'identify';\n      const data = await fetchJson('/api/vision/analyze', {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json', ...authHeaders() },\n        body: JSON.stringify(useAppraisal\n          ? { image: { dataUrl, mediaType: file.type.toLowerCase() }, mode: 'appraise', prompt: 'What is this? Describe it briefly — brand, model number, type of item, and any visible wear or damage. Two or three sentences.' }\n          : { image: { dataUrl, mediaType: file.type.toLowerCase() }, prompt: 'Identify what is in this photo as precisely as you can. Give the item type, brand, model or model number, condition, and any readable text, labels, or serial numbers. Do not estimate price, value, resale range, or what it is worth. Two or three sentences.' })\n      }, 60000);";
+if (main.includes(fetchOld)) main = main.replace(fetchOld, fetchNew);
+else if (!main.includes(fetchNew)) console.log('[patch-vision-tier-model] photo fetch anchor deferred to video walkaround patch');
 
-  const pushOld = "      setMessages((prev) => [...prev, { role: 'user', text: '📷 Asked Mike what a photo is worth' }, { role: 'mike', text }]);";
-  const pushNew = "      setMessages((prev) => [...prev, { role: 'user', text: useAppraisal ? '📷 Asked Mike what a photo is worth' : '📷 Asked Mike for more info on a photo' }, { role: 'mike', text }]);";
-  if (main.includes(pushOld)) main = main.replace(pushOld, pushNew);
-  else if (!main.includes(pushNew)) throw new Error('[patch-vision-tier-model] photo message push anchor not found');
-}
+const pushOld = "      setMessages((prev) => [...prev, { role: 'user', text: '📷 Asked Mike what a photo is worth' }, { role: 'mike', text }]);";
+const pushNew = "      setMessages((prev) => [...prev, { role: 'user', text: useAppraisal ? '📷 Asked Mike what a photo is worth' : '📷 Asked Mike for more info on a photo' }, { role: 'mike', text }]);";
+if (main.includes(pushOld)) main = main.replace(pushOld, pushNew);
+else if (!main.includes(pushNew)) console.log('[patch-vision-tier-model] photo message anchor deferred to video walkaround patch');
 
 const inputAnchor = "      <input ref={photoInputRef} type=\"file\" accept=\"image/jpeg,image/png,image/webp\" onChange={handlePhotoChange} style={{ display: 'none' }} aria-hidden=\"true\" />";
 const tabRow = "\n      <div className=\"vision-tab-row\">\n        <button type=\"button\" className=\"vision-tab-btn\" onClick={() => openPhotoPicker('identify')} disabled={busy} aria-label=\"Get more info from a photo\">📷 More Info</button>\n        <button type=\"button\" className=\"vision-tab-btn vision-tab-primary\" onClick={() => openPhotoPicker('appraise')} disabled={busy} aria-label=\"Get a deal analysis from a photo\">💰 Deal Analysis</button>\n      </div>";
