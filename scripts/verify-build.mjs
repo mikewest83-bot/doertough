@@ -20,6 +20,11 @@ const MUST_CONTAIN = [
   ['server/index.mjs', 'DEAL_FINDER_TOOLS', 'Deal Finder tools registered'],
   ['server/index.mjs', 'web_search_preview', 'web search enabled'],
   ['server/index.mjs', "app.post('/api/vision/analyze'", 'Vision route registered'],
+  ['server/index.mjs', "from './brain-router.mjs'", 'Mike brain router imported'],
+  ['server/index.mjs', 'generateBrainResponse({ client: openai', 'Mike chat uses brain router'],
+  ['server/brain-router.mjs', "gpt-5.6-terra", 'Terra brain configured'],
+  ['server/brain-router.mjs', "gpt-5.6-sol", 'Sol brain configured'],
+  ['server/brain-router.mjs', "claude-opus-5", 'Opus brain configured'],
 ];
 
 // These checks intentionally operate on executable source with comments removed.
@@ -32,6 +37,8 @@ const MUST_NOT_CONTAIN = [
   ['server/index.mjs', 'DEAL_ALERT_TOOLS', 'Deal Alert tools removed from active registry'],
   ['server/index.mjs', 'startDealAlertScheduler', 'Deal Alert scheduler disabled'],
   ['server/persona.mjs', 'set_deal_alert', 'persistent deal-alert instructions disabled'],
+  ['server/index.mjs', 'openai.responses.create({ model: OPENAI_MODEL', 'legacy direct model call removed'],
+  ['server/index.mjs', "process.env.OPENAI_MODEL || 'gpt-4o-mini'", 'legacy GPT-4o-mini default removed'],
 ];
 
 const MUST_BE_ORDERED = [
