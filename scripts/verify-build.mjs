@@ -15,9 +15,12 @@ const MUST_CONTAIN = [
   ['src/main.jsx', 'const openPhotoPicker =', 'Vision photo picker'],
   ['src/main.jsx', 'writeToken(data.token)', 'session token persistence'],
   ['src/MikeGames.jsx', 'Endless trivia', 'Beat Mike endless-trivia copy'],
-  ['server/persona.mjs', 'DEAL FINDER - LIVE LOCAL SEARCH', 'Deal Finder persona'],
+  ['server/persona.mjs', 'DEAL FINDER - LIVE LOCAL RESALE SEARCH', 'Deal Finder persona'],
+  ['server/persona.mjs', 'Persistent Deal Alerts are enabled', 'Deal Alert persona'],
   ['server/persona.mjs', 'GAMES - HOSTING RULES', 'game-hosting persona rules'],
   ['server/index.mjs', 'DEAL_FINDER_TOOLS', 'Deal Finder tools registered'],
+  ['server/index.mjs', 'DEAL_ALERT_TOOLS', 'Deal Alert tools registered'],
+  ['server/index.mjs', 'startDealAlertScheduler', 'Deal Alert scheduler registered'],
   ['server/index.mjs', 'web_search_preview', 'web search enabled'],
   ['server/index.mjs', "app.post('/api/vision/analyze'", 'Vision route registered'],
   ['server/index.mjs', "from './brain-router.mjs'", 'Mike brain router imported'],
@@ -27,16 +30,11 @@ const MUST_CONTAIN = [
   ['server/brain-router.mjs', "claude-opus-5", 'Opus brain configured'],
 ];
 
-// These checks intentionally operate on executable source with comments removed.
-// The preserved deal-alert module and cleanup-script comments may mention the
-// disabled feature, but executable Deal Alert wiring must not survive the build.
 const MUST_NOT_CONTAIN = [
   ['src/main.jsx', "modalities: ['audio', 'text']", 'removed Realtime response.modalities field'],
-  ['src/main.jsx', 'Watch It for Me', 'Watch It for Me UI disabled'],
-  ['src/main.jsx', 'Keep watching for me', 'persistent watch CTA disabled'],
-  ['server/index.mjs', 'DEAL_ALERT_TOOLS', 'Deal Alert tools removed from active registry'],
-  ['server/index.mjs', 'startDealAlertScheduler', 'Deal Alert scheduler disabled'],
-  ['server/persona.mjs', 'set_deal_alert', 'persistent deal-alert instructions disabled'],
+  ['src/main.jsx', 'Watch It for Me', 'obsolete Watch It for Me UI copy'],
+  ['src/main.jsx', 'Keep watching for me', 'obsolete persistent watch CTA copy'],
+  ['server/persona.mjs', 'Watch It for Me / persistent deal alerts are currently disabled', 'obsolete disabled Deal Alert instructions'],
   ['server/index.mjs', 'openai.responses.create({ model: OPENAI_MODEL', 'legacy direct model call removed'],
   ['server/index.mjs', "process.env.OPENAI_MODEL || 'gpt-4o-mini'", 'legacy GPT-4o-mini default removed'],
 ];
