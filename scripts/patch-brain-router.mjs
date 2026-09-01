@@ -14,13 +14,15 @@ const healthWithBrain = "    model: OPENAI_MODEL,\n    brain: getBrainStatus(),\
 const directCall = '      const response = await openai.responses.create({ model: OPENAI_MODEL, instructions, input, tools });';
 const routedCall = '      const response = await generateBrainResponse({ client: openai, instructions, input, tools, message });';
 
-// Fast path: if the canonical wiring is already present, make no write at all.
-// This is what guarantees the production build remains byte-for-byte idempotent.
+// Fast path: if the canonical wiring and auto-mode behavior are already present,
+// make no write at all. This keeps repeated production builds idempotent.
+const canonicalAutoMode = "const { brain: wanted, score } = mode === 'auto' ? { brain: 'mini', score: complexityScore(message) } : { brain: mode, score: null };";
 if (
   source.includes(brainImport) &&
   source.includes(targetModel) &&
   source.includes(healthWithBrain) &&
-  source.includes(routedCall)
+  source.includes(routedCall) &&
+  source.includes(canonicalAutoMode)
 ) {
   console.log('[patch-brain-router] canonical wiring already present; no changes');
   process.exit(0);
@@ -55,5 +57,18 @@ if (!source.includes(routedCall)) {
   source = source.replace(directCall, routedCall);
 }
 
+// Auto mode is intentionally a two-stage decision now: Mini always sees the
+// request first, then decides whether it needs a deeper brain. The old version
+// pre-selected Terra/Sol/Opus from keyword scoring, which meant the floor brain
+// never got a chance to judge the actual problem. Keep the score for telemetry
+// only; it must not bypass Mini in automatic mode.
+const oldAutoSelection = "  const { brain: wanted, score } = mode === 'auto' ? pickBrain(message) : { brain: mode, score: null };";
+const newAutoSelection = "  const { brain: wanted, score } = mode === 'auto' ? { brain: 'mini', score: complexityScore(message) } : { brain: mode, score: null };";
+if (source.includes(oldAutoSelection)) {
+  source = source.replace(oldAutoSelection, newAutoSelection);
+} else if (!source.includes(canonicalAutoMode)) {
+  throw new Error('[patch-brain-router] auto brain selection block not found');
+}
+
 fs.writeFileSync(file, source);
-console.log('[patch-brain-router] brain router wired idempotently');
+console.log('[patch-brain-router] brain router wired; auto mode starts on mini');
