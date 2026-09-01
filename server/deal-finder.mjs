@@ -54,7 +54,7 @@ export async function findLocalDeals({ category, location, budget, radiusMiles, 
   const radiusText = Number.isFinite(Number(radiusMiles)) ? `Search within about ${Number(radiusMiles)} miles of ${place}.` : `Favor listings close to ${place}; use a practical local radius.`;
   const constraintText = String(constraints || '').trim() || 'No additional constraints were provided.';
 
-  const prompt = `You are Mike Deal Finder, a local resale-hunting engine.\n${searchTarget}\nLocation: ${place}.\n${budgetText}\n${radiusText}\nOther requirements: ${constraintText}\n\nSearch multiple relevant public marketplaces and local listing sources when practical, including Craigslist and other publicly searchable classifieds. Facebook Marketplace has no public listings API, so do not pretend to have complete Marketplace coverage; use only listings the web search can actually verify.\n\nThe goal is NOT to find something merely cheap. Find items that appear materially underpriced relative to a realistic local resale price. Prefer clean, easy-to-test, easy-to-transport items with strong buyer demand. Penalize missing critical information, obvious damage, title problems, counterfeit risk, high repair cost, bulky/slow inventory, and long driving distance.\n\nFor every candidate that you call a real opportunity, report: item/title, asking price, location, listing date if visible, condition/details, direct listing URL, estimated realistic resale range, estimated gross spread, likely fees/repair/travel costs when relevant, estimated net profit range, ROI estimate, confidence, and the specific reason it may be mispriced. If resale value or a cost cannot be supported by current evidence, mark it unknown instead of guessing.\n\nRank candidates by expected risk-adjusted profit, not by asking price. Return no more than 8 candidates and put the two strongest opportunities first. If there is not enough evidence for a genuine profit opportunity, say that clearly. Never invent a listing, price, resale value, profit, or comparable. Keep the response concise enough for voice.`;
+  const prompt = `You are Mike Deal Finder, a local resale-hunting engine.\n${searchTarget}\nLocation: ${place}.\n${budgetText}\n${radiusText}\nOther requirements: ${constraintText}\n\nSearch multiple relevant public marketplaces and local listing sources when practical. Do not bypass logins, anti-bot controls, paywalls, or marketplace restrictions. Do not claim complete coverage of any marketplace.\n\nThe goal is NOT to find something merely cheap. Find items that appear materially underpriced relative to a realistic local resale price. Prefer clean, easy-to-test, easy-to-transport items with strong buyer demand. Penalize missing critical information, obvious damage, title problems, counterfeit risk, high repair cost, bulky/slow inventory, and long driving distance.\n\nFor every candidate that you call a real opportunity, report: item/title, asking price, location, listing date if visible, condition/details, direct listing URL, estimated realistic resale range, estimated gross spread, likely fees/repair/travel costs when relevant, estimated net profit range, ROI estimate, confidence, and the specific reason it may be mispriced. If resale value or a cost cannot be supported by current evidence, mark it unknown instead of guessing.\n\nRank candidates by expected risk-adjusted profit. Return no more than 8 candidates and put the two strongest opportunities first. If there is not enough evidence for a genuine profit opportunity, say that clearly. Never invent a listing, price, resale value, profit, or comparable. Keep the response concise enough for voice.`;
 
   try {
     const response = await client.responses.create({
@@ -71,6 +71,46 @@ export async function findLocalDeals({ category, location, budget, radiusMiles, 
     };
   } catch (error) {
     console.error('[deal-finder] search failed:', error.message || error);
+    return { error: 'deal_finder_search_failed' };
+  }
+}
+
+function parseJsonArray(text) {
+  const raw = String(text || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : Array.isArray(parsed?.opportunities) ? parsed.opportunities : [];
+  } catch {
+    const match = raw.match(/\[[\s\S]*\]/);
+    if (!match) return [];
+    try { const parsed = JSON.parse(match[0]); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+  }
+}
+
+export async function findResaleDeals({ location, radiusMiles = 25, categories, maxBuy, minProfit = 300, minRoi = 30, constraints } = {}) {
+  if (!client) return { error: 'deal_finder_not_configured' };
+  const place = String(location || '').trim();
+  if (!place) return { error: 'category_and_location_required' };
+  const radius = Math.min(250, Math.max(1, Number(radiusMiles) || 25));
+  const categoryText = String(categories || RESALE_CATEGORIES.join(', ')).slice(0, 600);
+  const maxBuyText = Number.isFinite(Number(maxBuy)) ? `Maximum purchase price: $${Number(maxBuy).toLocaleString('en-US')}.` : 'No maximum purchase price; prioritize realistic, capital-efficient opportunities.';
+  const extra = String(constraints || '').trim().slice(0, 1000) || 'No extra constraints.';
+  const prompt = `You are Mike's automated local resale scanner. Search the current public web for listings near ${place}, within roughly ${radius} miles.\nCategories: ${categoryText}.\n${maxBuyText}\nMinimum target net profit: $${Number(minProfit) || 300}.\nMinimum target ROI: ${Number(minRoi) || 30}%.\nExtra rules: ${extra}\n\nDo not bypass logins, robots, anti-bot controls, paywalls, or site restrictions. Do not use or scrape sources that prohibit automated collection. If a marketplace is inaccessible, skip it rather than pretending you searched it.\n\nFind only plausible buy-low/resell-higher opportunities. Use current public listing evidence and current resale/comparable evidence when available. Account for realistic selling fees, repair reserve, travel/pickup cost, and obvious risk. Do not treat an asking price as a completed sale. Do not call an item profitable when the evidence is too weak.\n\nReturn ONLY valid JSON: an array of up to 8 objects. Each object must have exactly these fields: title, category, askingPrice, resaleLow, resaleExpected, estimatedProfit, roiPercent, location, why, redFlags, confidence, url. Use null when a value cannot be supported. estimatedProfit must be a conservative net estimate, not gross spread. roiPercent is estimatedProfit divided by askingPrice times 100. confidence must be high, medium, or low. URLs must be direct public listing URLs when available.\n\nRank by risk-adjusted profit and freshness. Only include opportunities where estimatedProfit >= ${Number(minProfit) || 300} and roiPercent >= ${Number(minRoi) || 30}. Never invent a listing, URL, price, resale value, fee, repair cost, profit, or comparable.`;
+  try {
+    const response = await client.responses.create({
+      model: MODEL,
+      input: prompt,
+      tools: [{ type: 'web_search_preview' }],
+    });
+    const text = response.output_text?.trim() || '';
+    return {
+      location: place,
+      opportunities: parseJsonArray(text),
+      raw: text,
+      source: 'OpenAI web search over current public web sources',
+    };
+  } catch (error) {
+    console.error('[deal-finder] resale scan failed:', error.message || error);
     return { error: 'deal_finder_search_failed' };
   }
 }
