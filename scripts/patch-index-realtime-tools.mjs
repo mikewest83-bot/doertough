@@ -1,6 +1,5 @@
 // Build-time, idempotent bridge for Realtime public tool execution.
-// Deal Alerts / "Watch It for Me" are intentionally disabled and are never
-// added to the active Realtime registry by this patch.
+// Deal Alerts are intentionally part of the active text/voice tool surface.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,26 +21,22 @@ if (!source.includes(ownerImport)) {
   source = source.replace(anchor, `${anchor}\n${ownerImport}`);
 }
 
-// Remove any legacy Deal Alert wiring that may have been present before this
-// patch ran. The preserved deal-alert module is intentionally not part of the
-// active text/voice tool surface.
-const legacyDealAlertImport = "import { DEAL_ALERT_TOOLS, dealAlertHandlerFor, startDealAlertScheduler } from './deal-alerts.mjs';";
-const legacyDealAlertImportShort = "import { DEAL_ALERT_TOOLS, dealAlertHandlerFor } from './deal-alerts.mjs';";
-source = source.replace(legacyDealAlertImport + '\n', '');
-source = source.replace(legacyDealAlertImportShort + '\n', '');
-source = source.replace(/^[ \t]*\.\.\.DEAL_ALERT_TOOLS,\r?\n/gm, '');
-source = source.replace(/^[ \t]*\.\.\.DEAL_ALERT_HANDLERS,\r?\n/gm, '');
-source = source.replace(/^[ \t]*DEAL_ALERT_HANDLERS,\r?\n/gm, '');
-source = source.replace(/^[ \t]*startDealAlertScheduler\(\);\r?\n?/gm, '');
-source = source.replace(/\n[ \t]*\.\.\.DEAL_ALERT_TOOLS\.map\(\(tool\) => \[[\s\S]*?\n[ \t]*\]\),\r?\n/g, '\n');
-source = source.replace(/\nconst DEAL_ALERT_HANDLERS = Object\.fromEntries\(DEAL_ALERT_TOOLS\.map\(\(tool\) => \[[\s\S]*?\]\)\);\r?\n/g, '\n');
-
-// Final safety sweep: the active server source must not contain the disabled
-// registry symbol at all. This is intentionally narrow so reminder wiring is
-// preserved.
-source = source.replace(/^[ \t]*import \{[^\n]*DEAL_ALERT_TOOLS[^\n]*\}\s+from\s+'\.\/deal-alerts\.mjs';\r?\n?/gm, '');
-source = source.replace(/^[ \t]*\.\.\.DEAL_ALERT_TOOLS,?\r?\n/gm, '');
-source = source.replace(/^[ \t]*DEAL_ALERT_HANDLERS,?\r?\n/gm, '');
+// Restore Deal Alert wiring if an older cleanup pass removed it.
+const dealAlertImport = "import { DEAL_ALERT_TOOLS, dealAlertHandlerFor, startDealAlertScheduler } from './deal-alerts.mjs';";
+if (!source.includes(dealAlertImport)) {
+  const anchor = "import { REMINDER_TOOLS, reminderHandlerFor, startReminderScheduler } from './reminders.mjs';";
+  if (!source.includes(anchor)) throw new Error('Deal Alert restore reminder import anchor not found');
+  source = source.replace(anchor, `${anchor}\n${dealAlertImport}`);
+}
+if (!source.includes('  ...DEAL_ALERT_TOOLS,') && source.includes('  ...REMINDER_TOOLS,')) {
+  source = source.replace('  ...REMINDER_TOOLS,\n];', '  ...REMINDER_TOOLS,\n  ...DEAL_ALERT_TOOLS,\n];');
+}
+if (!source.includes('  ...DEAL_ALERT_TOOLS.map((tool) => [') && source.includes('  ...REMINDER_TOOLS.map((tool) => [')) {
+  const anchor = "  ...REMINDER_TOOLS.map((tool) => [\n    tool.name,\n    (args = {}) => reminderHandlerFor(tool.name, args?.user?.id)?.(args),\n  ]),";
+  const addition = `${anchor}\n  ...DEAL_ALERT_TOOLS.map((tool) => [\n    tool.name,\n    (args = {}) => dealAlertHandlerFor(tool.name, args?.user?.id)?.(args),\n  ]),`;
+  if (!source.includes(anchor)) throw new Error('Deal Alert handler anchor not found');
+  source = source.replace(anchor, addition);
+}
 
 if (!source.includes("app.post('/api/realtime/tool'")) {
   const marker = '// ===== Billing =====';
@@ -89,5 +84,13 @@ if (!source.includes('// OWNER VOICE QA BYPASS')) {
   source = source.replace("    if (\n      globalUsedSessions >= GLOBAL_SESSION_LIMIT ||\n      globalUsedSeconds >= GLOBAL_MINUTE_LIMIT * 60\n    ) {", "    if (!ownerVoiceQa && (\n      globalUsedSessions >= GLOBAL_SESSION_LIMIT ||\n      globalUsedSeconds >= GLOBAL_MINUTE_LIMIT * 60\n    )) {");
 }
 
+// Start the persistent scanner once after the database is ready.
+if (!source.includes('startDealAlertScheduler();')) {
+  const anchor = "    console.log('[mike-ai] reminder scheduler ready');";
+  if (!source.includes(anchor)) throw new Error('Deal Alert scheduler startup anchor not found');
+  const block = `${anchor}\n    startDealAlertScheduler();\n    console.log('[mike-ai] deal alerts scheduler ready');`;
+  source = source.replace(anchor, block);
+}
+
 fs.writeFileSync(target, source);
-console.log('[build] Realtime tools wired; Deal Alerts / Watch It for Me excluded; owner voice QA bypass enabled; startup migrations disabled');
+console.log('[build] Realtime tools wired; Deal Alerts enabled; owner voice QA bypass enabled; startup migrations disabled');
