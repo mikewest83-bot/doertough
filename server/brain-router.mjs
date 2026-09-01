@@ -61,6 +61,71 @@ const PUSHBACK_SIGNALS = [
 
 const countHits = (text, signals) => signals.reduce((n, s) => (text.includes(s) ? n + 1 : n), 0);
 
+// Keyword scoring guesses at difficulty from the words used. That misreads
+// speech badly: "should I lease or finance a skid steer" is a genuinely hard
+// question carried by eight plain words, and scores almost nothing. So the
+// floor brain also gets a way to raise its own hand. Mike judges the question
+// it can actually see, which is what keyword matching can only approximate.
+const ESCALATION_TOOL_NAME = 'escalate_to_deep_reasoning';
+const escalationEnabled = () => String(process.env.MIKE_ESCALATION_TOOL || '1').trim() !== '0';
+const LEVEL_TO_BRAIN = { deep: 'sol', deepest: 'opus' };
+
+const ESCALATION_TOOL = {
+  type: 'function',
+  name: ESCALATION_TOOL_NAME,
+  description: [
+    'Hand this question to a stronger model instead of answering it yourself.',
+    'Call this ONLY when answering well needs sustained reasoning you cannot do here:',
+    'several constraints that interact, a long document to weigh, a costly decision',
+    'where the obvious answer is probably wrong, or a plan whose steps depend on each other.',
+    'Do NOT call it for a lookup, a definition, a price check, arithmetic, or anything',
+    'another tool already answers. A short question can still be a hard one - judge the',
+    'problem, not the number of words. If you call this, do not also answer: the stronger',
+    'model receives the whole conversation and takes it from there.',
+  ].join(' '),
+  parameters: {
+    type: 'object',
+    properties: {
+      level: {
+        type: 'string',
+        enum: ['deep', 'deepest'],
+        description: "'deep' for a hard multi-step question. 'deepest' when several constraints interact and being wrong is expensive.",
+      },
+      reason: { type: 'string', description: 'One short sentence naming what makes this too hard to answer directly.' },
+    },
+    required: ['level', 'reason'],
+    additionalProperties: false,
+  },
+};
+
+const rank = (brain) => BRAIN_ORDER.indexOf(brain);
+
+/** Highest tier that can actually answer right now. */
+const topAvailable = () => (opusReady() ? 'opus' : 'sol');
+
+/** Did the model ask to be relieved? Returns the request, or null. */
+function findEscalation(response) {
+  for (const item of response?.output || []) {
+    if (item?.type === 'function_call' && item.name === ESCALATION_TOOL_NAME) {
+      let args = {};
+      try { args = item.arguments ? JSON.parse(item.arguments) : {}; } catch {}
+      return { level: String(args.level || 'deep'), reason: String(args.reason || 'no reason given') };
+    }
+  }
+  return null;
+}
+
+/**
+ * The escalation tool is ours, not the app's. index.mjs has no handler for it,
+ * so it must never survive into the response we hand back - including the case
+ * where a model invents the call without being offered the tool.
+ */
+function stripEscalationCalls(response) {
+  if (!Array.isArray(response?.output)) return response;
+  const output = response.output.filter((item) => !(item?.type === 'function_call' && item.name === ESCALATION_TOOL_NAME));
+  return output.length === response.output.length ? response : { ...response, output };
+}
+
 /**
  * How much thinking this message plausibly needs. Tuned for speech: people
  * talk in short sentences, so length counts for little and intent counts for
@@ -233,21 +298,44 @@ async function callClaude({ instructions, input, tools }) {
   return { output, output_text: outputText.trim(), usage: payload.usage, _brain: 'opus' };
 }
 
+const runBrain = ({ brain, instructions, input, tools, client }) => (brain === 'opus'
+  ? callClaude({ instructions, input, tools })
+  : callOpenAI({ brain, instructions, input, tools, client }));
+
+const modelName = (brain) => (brain === 'opus' ? CLAUDE_MODEL : OPENAI_MODELS[brain]);
+
 export async function generateBrainResponse({ client, instructions, input, tools, message = '' } = {}) {
   const mode = normalizeBrain(process.env.MIKE_BRAIN || 'auto');
   const { brain: wanted, score } = mode === 'auto' ? pickBrain(message) : { brain: mode, score: null };
-  const selected = availableBrain(wanted);
-  if (selected !== wanted) {
-    console.warn(`[brain] ${wanted} unavailable (no ANTHROPIC_API_KEY) - using ${selected}`);
+  const first = availableBrain(wanted);
+  if (first !== wanted) {
+    console.warn(`[brain] ${wanted} unavailable (no ANTHROPIC_API_KEY) - using ${first}`);
   }
+
+  // Offer the hand-raise only when there is somewhere better to go, and only
+  // when we picked the tier ourselves. A forced MIKE_BRAIN means the operator
+  // decided; do not spend a second call overriding them.
+  const canEscalate = mode === 'auto' && escalationEnabled() && rank(first) < rank(topAvailable());
+  const firstTools = canEscalate ? [...(tools || []), ESCALATION_TOOL] : tools;
+
   const started = Date.now();
-  const response = selected === 'opus'
-    ? await callClaude({ instructions, input, tools })
-    : await callOpenAI({ brain: selected, instructions, input, tools, client });
-  const model = selected === 'opus' ? CLAUDE_MODEL : OPENAI_MODELS[selected];
-  // score is logged so the thresholds can be tuned from real traffic.
-  console.log(`[brain] ${selected} (${model}) score=${score ?? 'forced'} in ${Date.now() - started}ms`);
-  return response;
+  const firstResponse = await runBrain({ brain: first, instructions, input, tools: firstTools, client });
+  console.log(`[brain] ${first} (${modelName(first)}) score=${score ?? 'forced'} in ${Date.now() - started}ms`);
+
+  const ask = canEscalate ? findEscalation(firstResponse) : null;
+  if (!ask) return stripEscalationCalls(firstResponse);
+
+  // Never sideways or downward, and never past what is actually available.
+  const requested = availableBrain(LEVEL_TO_BRAIN[ask.level] || 'sol');
+  const next = rank(requested) > rank(first) ? requested : topAvailable();
+  if (rank(next) <= rank(first)) return stripEscalationCalls(firstResponse);
+
+  console.log(`[brain] ${first} -> ${next} (${modelName(next)}) escalated: ${ask.reason}`);
+  const escalatedAt = Date.now();
+  // The retry deliberately omits ESCALATION_TOOL: one hop per turn, no loops.
+  const escalated = await runBrain({ brain: next, instructions, input, tools, client });
+  console.log(`[brain] ${next} (${modelName(next)}) answered escalation in ${Date.now() - escalatedAt}ms`);
+  return stripEscalationCalls(escalated);
 }
 
 export const BRAIN_MODELS = { ...OPENAI_MODELS, opus: CLAUDE_MODEL };
