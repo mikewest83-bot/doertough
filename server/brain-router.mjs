@@ -50,6 +50,22 @@ const countHits = (text, signals) => signals.reduce((n, s) => (text.includes(s) 
 
 const ESCALATION_TOOL_NAME = 'escalate_to_deep_reasoning';
 const escalationEnabled = () => String(process.env.MIKE_ESCALATION_TOOL || '1').trim() !== '0';
+// Cost policy: auto mode starts cheap and may escalate only within a score-based ceiling.
+// Explicit brain selection remains authoritative; cost policy never overrides a deliberate choice.
+const costMode = () => {
+  const mode = String(process.env.MIKE_COST_MODE || 'balanced').trim().toLowerCase();
+  return ['economy', 'balanced', 'premium'].includes(mode) ? mode : 'balanced';
+};
+const costCeiling = (score) => {
+  const mode = costMode();
+  if (mode === 'economy') return 'terra';
+  if (mode === 'premium') return 'opus';
+  const limit = thresholds();
+  if (score >= limit.opus) return 'opus';
+  if (score >= limit.sol) return 'sol';
+  return 'terra';
+};
+
 // One hop at a time: Mini -> Terra -> Sol. Opus is reserved for the deepest work.
 const LEVEL_TO_BRAIN = { deep: 'terra', deepest: 'opus' };
 const ESCALATION_TOOL = {
@@ -130,6 +146,7 @@ export function getBrainStatus() {
   const configuredMode = normalizeBrain(process.env.MIKE_BRAIN || 'auto');
   return {
     configuredMode,
+    costMode: costMode(),
     reasoningEffort: { terra: reasoningEffort('terra'), sol: reasoningEffort('sol') },
     defaultBrain: 'mini',
     escalation: thresholds(),
@@ -261,9 +278,12 @@ export async function generateBrainResponse({ client, instructions, input, tools
   if (!ask) return stripEscalationCalls(firstResponse);
 
   const requested = availableBrain(LEVEL_TO_BRAIN[ask.level] || 'terra');
-  const next = rank(requested) > rank(first) ? requested : topAvailable();
+  const ceiling = availableBrain(costCeiling(score ?? 0));
+  const capped = rank(requested) > rank(ceiling) ? ceiling : requested;
+  const next = rank(capped) > rank(first) ? capped : topAvailable();
   if (rank(next) <= rank(first)) return stripEscalationCalls(firstResponse);
 
+  if (next !== requested) console.log(`[brain] cost cap: requested=${requested} ceiling=${ceiling} mode=${costMode()} score=${score ?? 0}`);
   console.log(`[brain] ${first} -> ${next} (${modelName(next)}) escalated: ${ask.reason}`);
   const escalatedAt = Date.now();
   const escalated = await runBrain({ brain: next, instructions, input, tools, client });
