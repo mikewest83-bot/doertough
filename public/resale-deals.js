@@ -33,7 +33,7 @@
   const askMike = async (location) => {
     const auth = token();
     if (!auth) throw new Error('sign_in_required');
-    const message = `Start my local resale deal scan. Search for current public listings within 25 miles of ${location.value}. I want items I can buy and resell for profit. Use "resale opportunities" as the category, prioritize risk-adjusted profit, and keep checking every 15 minutes. Do not invent listings, prices, resale values, or profit.`;
+    const message = `Create my local resale deal watch using my current location: ${location.value}. Search current public listings within 25 miles. I want items I can buy and resell for profit. Create a persistent resale watch that scans every 15 minutes, uses a minimum estimated net profit of $300 and minimum ROI of 30%, prioritizes risk-adjusted profit, and only alerts me to new credible opportunities. Do not invent listings, prices, resale values, or profit. Do not automate access to marketplaces that prohibit automated collection or require login.`;
     const res = await fetch('/api/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth}` },
@@ -63,13 +63,13 @@
       let location = savedLocation();
       if (!location?.value) location = await locate();
       const result = await askMike(location);
-      show(button, `Resale scan — ${location.value}`, result);
+      show(button, `Resale watch — ${location.value}`, result);
       button.textContent = '💰 Resale Deals';
     } catch (error) {
       const code = String(error?.message || error);
       if (code === 'sign_in_required') show(button, 'Sign in required', 'Sign in to Mike first so the scan can be saved to your account.');
       else if (code.includes('denied') || code.includes('location')) show(button, 'Location needed', 'Allow location access so Mike can search the area around you.');
-      else show(button, 'Resale scan failed', code);
+      else show(button, 'Resale watch failed', code);
       button.textContent = old;
     } finally { button.disabled = false; }
   };
