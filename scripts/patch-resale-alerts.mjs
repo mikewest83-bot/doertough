@@ -29,7 +29,7 @@ if (!source.includes('resaleAlertHandlerFor(tool.name')) {
 const schedulerAnchor = `    console.log('[mike-ai] reminder scheduler ready');`;
 const schedulerBlock = `${schedulerAnchor}\n  } catch (error) {\n    console.error('[mike-ai] reminder scheduler initialization failed:', error.message || error);\n  }\n  try {\n    startResaleWatchScheduler();\n    console.log('[mike-ai] resale deal scanner ready');`;
 if (!source.includes('[mike-ai] resale deal scanner ready')) {
-  const schedulerRe = /    try \{\n    startReminderScheduler\(\);\n    console\.log\('\[mike-ai\] reminder scheduler ready'\);\n  \} catch \(error\) \{\n    console\.error\('\[mike-ai\] reminder scheduler initialization failed:', error\.message \|\| error\);\n  \}/;
+  const schedulerRe = /  try \{\n    startReminderScheduler\(\);\n    console\.log\('\[mike-ai\] reminder scheduler ready'\);\n  \} catch \(error\) \{\n    console\.error\('\[mike-ai\] reminder scheduler initialization failed:', error\.message \|\| error\);\n  \}/;
   if (!schedulerRe.test(source)) throw new Error('[patch-resale-alerts] scheduler block not found');
   source = source.replace(schedulerRe, schedulerBlock + `\n  } catch (error) {\n    console.error('[mike-ai] resale deal scanner initialization failed:', error.message || error);\n  }`);
 }
