@@ -3,10 +3,8 @@ import path from 'node:path';
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 
-// ---- server/vision.mjs: a second, better model reserved for Deal Analysis ----
 const visionPath = path.join(root, 'server', 'vision.mjs');
 let vision = fs.readFileSync(visionPath, 'utf8');
-
 const modelAnchor = "const VISION_MODEL = process.env.MIKE_VISION_MODEL || 'gpt-4o-mini';";
 const modelLine = "const DEAL_VISION_MODEL = process.env.MIKE_VISION_MODEL_DEAL || VISION_MODEL;";
 if (!vision.includes(modelLine)) {
@@ -14,10 +12,6 @@ if (!vision.includes(modelLine)) {
   vision = vision.replace(modelAnchor, `${modelAnchor}\n${modelLine}`);
 }
 
-// This patch runs before the video-walkaround patch. On a second build, the
-// walkaround code may already have converted appraiseImage() to an images[]
-// request, so the old single-image anchor is no longer present. In that case
-// the presence of DEAL_VISION_MODEL is the idempotent success signal.
 const appraiseCallOld = "      model: VISION_MODEL,\n      input: [{ role: 'user', content: visionContent(APPRAISE_PROMPT, image, 'high') }],";
 const appraiseCallNew = "      model: DEAL_VISION_MODEL,\n      input: [{ role: 'user', content: visionContent(APPRAISE_PROMPT, image, 'high') }],";
 if (vision.includes(appraiseCallOld)) {
@@ -26,17 +20,12 @@ if (vision.includes(appraiseCallOld)) {
   const appraiseFunction = vision.indexOf('export async function appraiseImage');
   const nextFunction = vision.indexOf('\nexport ', appraiseFunction + 10);
   const appraiseBlock = appraiseFunction >= 0 ? vision.slice(appraiseFunction, nextFunction > appraiseFunction ? nextFunction : undefined) : '';
-  if (!appraiseBlock.includes('DEAL_VISION_MODEL')) {
-    throw new Error('[patch-vision-tier-model] appraiseImage model call anchor not found - check vision patch order');
-  }
+  if (!appraiseBlock.includes('DEAL_VISION_MODEL')) throw new Error('[patch-vision-tier-model] appraiseImage model call anchor not found - check vision patch order');
 }
-
 fs.writeFileSync(visionPath, vision);
 
-// ---- src/main.jsx: two clickable tabs - More Info (cheap ID) vs Deal Analysis (priced) ----
 const mainPath = path.join(root, 'src', 'main.jsx');
 let main = fs.readFileSync(mainPath, 'utf8');
-
 const refAnchor = "  const photoInputRef = useRef(null);";
 const refLine = "  const photoModeRef = useRef('appraise');";
 if (!main.includes(refLine)) {
@@ -49,15 +38,20 @@ const openNew = "  const openPhotoPicker = (mode = 'appraise') => { photoModeRef
 if (main.includes(openOld)) main = main.replace(openOld, openNew);
 else if (!main.includes(openNew)) throw new Error('[patch-vision-tier-model] openPhotoPicker anchor not found');
 
-const fetchOld = "      const data = await fetchJson('/api/vision/analyze', {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json', ...authHeaders() },\n        body: JSON.stringify({ image: { dataUrl, mediaType: file.type.toLowerCase() }, mode: 'appraise', prompt: 'What is this? Describe it briefly — brand, model number, type of item, and any visible wear or damage. Two or three sentences.' })\n      }, 60000);";
-const fetchNew = "      const useAppraisal = photoModeRef.current !== 'identify';\n      const data = await fetchJson('/api/vision/analyze', {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json', ...authHeaders() },\n        body: JSON.stringify(useAppraisal\n          ? { image: { dataUrl, mediaType: file.type.toLowerCase() }, mode: 'appraise', prompt: 'What is this? Describe it briefly — brand, model number, type of item, and any visible wear or damage. Two or three sentences.' }\n          : { image: { dataUrl, mediaType: file.type.toLowerCase() }, prompt: 'Identify what is in this photo as precisely as you can. Give the item type, brand, model or model number, condition, and any readable text, labels, or serial numbers. Do not estimate price, value, resale range, or what it is worth. Two or three sentences.' })\n      }, 60000);";
-if (main.includes(fetchOld)) main = main.replace(fetchOld, fetchNew);
-else if (!main.includes(fetchNew)) throw new Error('[patch-vision-tier-model] photo fetchJson anchor not found');
+// The video-walkaround patch owns the modern photo handler once videoInputRef is present.
+// Do not try to rewrite its array-of-images request back into the old single-photo shape.
+const modernWalkaround = main.includes('videoInputRef') && main.includes('images:');
+if (!modernWalkaround) {
+  const fetchOld = "      const data = await fetchJson('/api/vision/analyze', {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json', ...authHeaders() },\n        body: JSON.stringify({ image: { dataUrl, mediaType: file.type.toLowerCase() }, mode: 'appraise', prompt: 'What is this? Describe it briefly — brand, model number, type of item, and any visible wear or damage. Two or three sentences.' })\n      }, 60000);";
+  const fetchNew = "      const useAppraisal = photoModeRef.current !== 'identify';\n      const data = await fetchJson('/api/vision/analyze', {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json', ...authHeaders() },\n        body: JSON.stringify(useAppraisal\n          ? { image: { dataUrl, mediaType: file.type.toLowerCase() }, mode: 'appraise', prompt: 'What is this? Describe it briefly — brand, model number, type of item, and any visible wear or damage. Two or three sentences.' }\n          : { image: { dataUrl, mediaType: file.type.toLowerCase() }, prompt: 'Identify what is in this photo as precisely as you can. Give the item type, brand, model or model number, condition, and any readable text, labels, or serial numbers. Do not estimate price, value, resale range, or what it is worth. Two or three sentences.' })\n      }, 60000);";
+  if (main.includes(fetchOld)) main = main.replace(fetchOld, fetchNew);
+  else if (!main.includes(fetchNew)) throw new Error('[patch-vision-tier-model] photo fetchJson anchor not found');
 
-const pushOld = "      setMessages((prev) => [...prev, { role: 'user', text: '📷 Asked Mike what a photo is worth' }, { role: 'mike', text }]);";
-const pushNew = "      setMessages((prev) => [...prev, { role: 'user', text: useAppraisal ? '📷 Asked Mike what a photo is worth' : '📷 Asked Mike for more info on a photo' }, { role: 'mike', text }]);";
-if (main.includes(pushOld)) main = main.replace(pushOld, pushNew);
-else if (!main.includes(pushNew)) throw new Error('[patch-vision-tier-model] photo message push anchor not found');
+  const pushOld = "      setMessages((prev) => [...prev, { role: 'user', text: '📷 Asked Mike what a photo is worth' }, { role: 'mike', text }]);";
+  const pushNew = "      setMessages((prev) => [...prev, { role: 'user', text: useAppraisal ? '📷 Asked Mike what a photo is worth' : '📷 Asked Mike for more info on a photo' }, { role: 'mike', text }]);";
+  if (main.includes(pushOld)) main = main.replace(pushOld, pushNew);
+  else if (!main.includes(pushNew)) throw new Error('[patch-vision-tier-model] photo message push anchor not found');
+}
 
 const inputAnchor = "      <input ref={photoInputRef} type=\"file\" accept=\"image/jpeg,image/png,image/webp\" onChange={handlePhotoChange} style={{ display: 'none' }} aria-hidden=\"true\" />";
 const tabRow = "\n      <div className=\"vision-tab-row\">\n        <button type=\"button\" className=\"vision-tab-btn\" onClick={() => openPhotoPicker('identify')} disabled={busy} aria-label=\"Get more info from a photo\">📷 More Info</button>\n        <button type=\"button\" className=\"vision-tab-btn vision-tab-primary\" onClick={() => openPhotoPicker('appraise')} disabled={busy} aria-label=\"Get a deal analysis from a photo\">💰 Deal Analysis</button>\n      </div>";
@@ -65,7 +59,6 @@ if (!main.includes('vision-tab-row')) {
   if (!main.includes(inputAnchor)) throw new Error('[patch-vision-tier-model] photo input anchor not found');
   main = main.replace(inputAnchor, inputAnchor + tabRow);
 }
-
 fs.writeFileSync(mainPath, main);
 
 const stylePath = path.join(root, 'src', 'style.css');
@@ -84,5 +77,4 @@ if (!styles.includes('/* Mike Vision tier buttons')) {
   styles += tabCss;
   fs.writeFileSync(stylePath, styles);
 }
-
 console.log('[patch-vision-tier-model] Deal Analysis uses MIKE_VISION_MODEL_DEAL (falls back to MIKE_VISION_MODEL); More Info + Deal Analysis tabs wired');
