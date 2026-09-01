@@ -23,6 +23,27 @@ function waitForIceComplete(pc, timeout = 8000) {
   });
 }
 
+// A single line held for thirty seconds reads as broken. Escalated questions
+// legitimately take that long (a reasoning tier plus, sometimes, a second call
+// to a bigger model), so say so instead of leaving a static string sitting
+// there. Purely cosmetic - it never blocks or cancels the request.
+const THINKING_LINES = [
+  { after: 0, text: "Give me a second. I'm thinking\u2026" },
+  { after: 7000, text: 'Still with you \u2014 this one has some moving parts.' },
+  { after: 18000, text: 'Working it through. Hang with me.' },
+];
+
+function ThinkingBubble() {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const started = Date.now();
+    const id = setInterval(() => setElapsed(Date.now() - started), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const line = THINKING_LINES.filter((l) => elapsed >= l.after).pop() || THINKING_LINES[0];
+  return <div className="bubble mike">{line.text}</div>;
+}
+
 function App() {
   const [messages, setMessages] = useState([{ role: 'mike', text: "What's up? I'm Mike. Tell me what you're trying to figure out. We'll figure it out." }]);
   const [input, setInput] = useState('');
@@ -212,7 +233,7 @@ function App() {
         <div className={'voice-box ' + (listening ? 'is-listening' : speaking ? 'is-speaking' : '')} onClick={toggleConversation} role="button" tabIndex={0} aria-label={conversationMode ? 'Stop talking with Mike' : 'Start talking with Mike'} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleConversation(); }}><div className="voice-orb" aria-hidden="true"><span className="orb-core"><span>D</span><em>T</em></span></div><div className="voice-state"><span className="state-dot" /><strong>{statusText}</strong></div><div className="wave" aria-hidden="true">{Array.from({ length: 17 }, (_, i) => <i key={i} style={{ '--delay': `${i * 55}ms`, '--height': `${18 + ((i * 17) % 44)}px` }} />)}</div><p className="voice-hint">{conversationMode ? (listening ? 'Go ahead. Mike is listening.' : speaking ? 'Mike is talking.' : 'Conversation mode is on.') : 'Tap the mic below when you are ready.'}</p><button className={'voice-puck ' + (conversationMode ? 'active' : '')} onClick={(e) => { e.stopPropagation(); toggleConversation(); }} disabled={voiceTransitionRef.current || busy}><span className="voice-puck-icon"><Mic size={23} strokeWidth={2.3} /></span><span className="voice-puck-copy"><strong>{voiceControlLabel}</strong><small>{conversationMode ? 'Mike is connected' : 'Press and start talking'}</small></span><ArrowRight className="voice-puck-arrow" size={18} /></button></div>
       </section>
       {hasVoiceMessages && (<button type="button" className="transcript-toggle" onClick={toggleTranscript} aria-pressed={showTranscript} style={{ alignSelf: 'center', margin: '4px auto 0', padding: '6px 14px', fontSize: '12px', letterSpacing: '0.04em', textTransform: 'uppercase', background: 'transparent', border: '1px solid currentColor', borderRadius: '999px', color: 'inherit', opacity: 0.6, cursor: 'pointer' }}>{showTranscript ? 'Hide voice transcript' : 'Show voice transcript'}</button>)}
-      <section className="chat" aria-live="polite">{visibleMessages.map((m, i) => <div key={i} className={'bubble ' + m.role}>{m.text}</div>)}{busy && <div className="bubble mike">Give me a second. I'm thinking…</div>}</section>
+      <section className="chat" aria-live="polite">{visibleMessages.map((m, i) => <div key={i} className={'bubble ' + m.role}>{m.text}</div>)}{busy && <ThinkingBubble />}</section>
       {error && <div className="error" role="alert">{error}</div>}
       <input ref={photoInputRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePhotoChange} style={{ display: 'none' }} aria-hidden="true" />
       <button type="button" className="vision-photo-button" onClick={openPhotoPicker} disabled={busy} aria-label="Ask Mike about a photo">📷 Ask Mike about a photo</button>

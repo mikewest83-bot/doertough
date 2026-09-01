@@ -17,9 +17,26 @@ const normalizeBrain = (value) => {
   return [...BRAIN_ORDER, 'auto'].includes(brain) ? brain : 'auto';
 };
 
-const reasoningEffort = () => {
-  const requested = String(process.env.MIKE_REASONING_EFFORT || 'medium').trim().toLowerCase();
-  return VALID_REASONING.has(requested) ? requested : 'medium';
+// Effort per tier, not one global setting. Terra is the FIRST escalation and
+// catches merely-mild questions, so it runs lean; sol was reached because the
+// question is genuinely hard, so it keeps thinking. A single global value made
+// the common case slow (27.8s measured on terra) to protect the rare case.
+const TIER_EFFORT_DEFAULT = { terra: 'low', sol: 'medium' };
+
+const validEffort = (value, fallback) => {
+  const v = String(value || '').trim().toLowerCase();
+  return VALID_REASONING.has(v) ? v : fallback;
+};
+
+const reasoningEffort = (brain) => {
+  const perTier = process.env[`MIKE_REASONING_EFFORT_${String(brain || '').toUpperCase()}`];
+  if (perTier) return validEffort(perTier, TIER_EFFORT_DEFAULT[brain] || 'medium');
+  // A global MIKE_REASONING_EFFORT still overrides every tier, so one variable
+  // can turn the whole thing up when it matters.
+  if (process.env.MIKE_REASONING_EFFORT) {
+    return validEffort(process.env.MIKE_REASONING_EFFORT, TIER_EFFORT_DEFAULT[brain] || 'medium');
+  }
+  return TIER_EFFORT_DEFAULT[brain] || 'medium';
 };
 
 // Escalation thresholds, tunable without a code change so they can be moved
@@ -153,10 +170,18 @@ const availableBrain = (desired) => (desired === 'opus' && !opusReady() ? 'sol' 
 export function pickBrain(message = '') {
   const score = complexityScore(message);
   const limit = thresholds();
-  if (score >= limit.opus) return { brain: 'opus', score };
-  if (score >= limit.sol) return { brain: 'sol', score };
-  if (score >= limit.terra) return { brain: 'terra', score };
-  return { brain: 'mini', score };
+  let brain = 'mini';
+  if (score >= limit.opus) brain = 'opus';
+  else if (score >= limit.sol) brain = 'sol';
+  else if (score >= limit.terra) brain = 'terra';
+
+  // Someone saying the last answer was wrong has already proved the cheaper
+  // tier failed them. Sending that back to a lean-effort tier risks repeating
+  // the same miss, so pushback sets a floor rather than just adding points.
+  if (countHits(String(message).toLowerCase(), PUSHBACK_SIGNALS) > 0 && rank(brain) < rank('sol')) {
+    return { brain: 'sol', score };
+  }
+  return { brain, score };
 }
 
 export function resolveBrain({ message = '', requested = process.env.MIKE_BRAIN || 'auto' } = {}) {
@@ -169,7 +194,7 @@ export function getBrainStatus() {
   const configuredMode = normalizeBrain(process.env.MIKE_BRAIN || 'auto');
   return {
     configuredMode,
-    reasoningEffort: reasoningEffort(),
+    reasoningEffort: { terra: reasoningEffort('terra'), sol: reasoningEffort('sol') },
     defaultBrain: 'mini',
     escalation: thresholds(),
     available: {
@@ -270,7 +295,7 @@ async function callOpenAI({ brain, instructions, input, tools, client }) {
     throw error;
   }
   const request = { model: OPENAI_MODELS[brain], instructions, input, tools };
-  if (REASONING_BRAINS.has(brain)) request.reasoning = { effort: reasoningEffort() };
+  if (REASONING_BRAINS.has(brain)) request.reasoning = { effort: reasoningEffort(brain) };
   return client.responses.create(request);
 }
 
