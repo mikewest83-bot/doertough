@@ -182,14 +182,35 @@ export function getBrainStatus() {
   };
 }
 
+/**
+ * Anthropic rejects the whole request with "tools: Tool names must be unique."
+ * if two tools share a name; OpenAI accepts it silently. Mike's tool list is
+ * assembled from nine separate arrays, so a collision there took opus from
+ * "expensive" to "returns 400 every time" while the OpenAI tiers kept working.
+ *
+ * Deduping here keeps the first definition of each name. That is a guess when
+ * the two definitions differ - LIVE_TOOL_HANDLERS is an object literal, so the
+ * LAST handler of a duplicated name is the one that actually runs. The warning
+ * below names the offender so the real fix can happen in the tool arrays.
+ */
 function toAnthropicTools(tools = []) {
-  return tools
-    .filter((tool) => tool?.type === 'function' && tool.name)
-    .map((tool) => ({
+  const seen = new Set();
+  const unique = [];
+  const duplicates = new Set();
+  for (const tool of tools) {
+    if (tool?.type !== 'function' || !tool.name) continue;
+    if (seen.has(tool.name)) { duplicates.add(tool.name); continue; }
+    seen.add(tool.name);
+    unique.push({
       name: tool.name,
       description: tool.description || '',
       input_schema: tool.parameters || { type: 'object', properties: {} },
-    }));
+    });
+  }
+  if (duplicates.size) {
+    console.warn(`[brain] duplicate tool name(s) dropped before Anthropic: ${[...duplicates].join(', ')} - fix the source arrays`);
+  }
+  return unique;
 }
 
 function textFromContent(content) {
