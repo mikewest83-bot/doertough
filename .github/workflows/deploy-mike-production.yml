@@ -45,11 +45,16 @@ jobs:
           git diff --binary > /tmp/mike-ai-build-1.diff
           npm run build
           git diff --binary > /tmp/mike-ai-build-2.diff
-          cmp -s /tmp/mike-ai-build-1.diff /tmp/mike-ai-build-2.diff || {
+          if ! cmp -s /tmp/mike-ai-build-1.diff /tmp/mike-ai-build-2.diff; then
             echo 'Build is not idempotent.'
+            echo '--- first build diff ---'
+            cat /tmp/mike-ai-build-1.diff || true
+            echo '--- second build diff ---'
+            cat /tmp/mike-ai-build-2.diff || true
+            echo '--- diff between build diffs ---'
             diff -u /tmp/mike-ai-build-1.diff /tmp/mike-ai-build-2.diff || true
             exit 1
-          }
+          fi
 
       - name: Test
         run: npm test
