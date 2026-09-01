@@ -13,7 +13,7 @@ if (!vision.includes('export function normalizeVisionImages')) {
   vision = vision.replace(marker, fn + marker);
 }
 
-const contentRe = /export function visionContent\(message, image, detail = 'auto'\) \{[\s\S]*?\n\}/;
+const contentRe = /export function visionContent\(message, image(?:, detail = 'auto')?\) \{[\s\S]*?\n\}/;
 const contentNew = `export function visionContent(message, images, detail = 'auto') {\n  const list = Array.isArray(images) ? images : (images ? [images] : []);\n  const content = [{ type: 'input_text', text: String(message || '') }];\n  for (const img of list) content.push({ type: 'input_image', image_url: img.dataUrl, detail });\n  return content;\n}`;
 if (contentRe.test(vision)) vision = vision.replace(contentRe, contentNew);
 else if (!vision.includes(contentNew)) throw new Error('[patch-vision-video-walkaround-v2] visionContent shape not found');
@@ -26,8 +26,6 @@ else if (!vision.includes('const images = normalizeVisionImages(req.body?.images
 vision = vision.replace('const appraisal = await appraiseImage(image);', 'const appraisal = await appraiseImage(images, userNote);');
 vision = vision.replace('content: visionContent(prompt, image)', 'content: visionContent(prompt, images)');
 
-// Replace the complete final appraiseImage declaration. This avoids depending on
-// the exact intermediate body produced by the earlier detail/tier patches.
 const appraiseStart = 'export async function appraiseImage(';
 const start = vision.indexOf(appraiseStart);
 if (start < 0) throw new Error('[patch-vision-video-walkaround-v2] appraiseImage function not found');
