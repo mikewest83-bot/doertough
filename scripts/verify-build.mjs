@@ -36,6 +36,17 @@ const MUST_CONTAIN = [
   ['server/brain-router.mjs', "gpt-5.6-terra", 'Terra brain configured'],
   ['server/brain-router.mjs', "gpt-5.6-sol", 'Sol brain configured'],
   ['server/brain-router.mjs', "claude-opus-5", 'Opus brain configured'],
+  ['src/main.jsx', "mikeTelemetry('landing_view')", 'funnel landing telemetry'],
+  ['src/main.jsx', "mikeTelemetry('prompt_submitted')", 'funnel prompt telemetry'],
+  ['src/main.jsx', "mikeTelemetry('first_response')", 'funnel first-response telemetry'],
+  ['src/main.jsx', "mikeTelemetry('second_message')", 'funnel second-message telemetry'],
+  ['src/main.jsx', "mikeTelemetry('account_created')", 'funnel account-created telemetry'],
+  ['src/main.jsx', "mikeTelemetry('voice_started')", 'funnel voice telemetry'],
+  ['src/main.jsx', "mikeTelemetry('abandoned')", 'funnel abandonment telemetry'],
+  ['src/main.jsx', 'telemetryRef.current.responses += 1', 'funnel response counter'],
+  ['server/index.mjs', 'const SPA_ROUTES = new Set', 'known SPA route allowlist'],
+  ['server/index.mjs', 'const isKnownSpaRoute =', 'SPA route validation'],
+  ['server/index.mjs', "res.status(404).json({ error: 'not_found' })", 'real 404 fallback'],
 ];
 
 const MUST_NOT_CONTAIN = [
