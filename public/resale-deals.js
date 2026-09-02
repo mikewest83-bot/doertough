@@ -19,25 +19,40 @@
     } catch { return ''; }
   };
 
-  const locate = () => new Promise((resolve, reject) => {
+  const saveLocation = (value, latitude, longitude, source = 'gps') => {
+    const location = { value, latitude, longitude, source, updatedAt: Date.now() };
+    try { localStorage.setItem(LOCATION_KEY, JSON.stringify(location)); } catch {}
+    return location;
+  };
+
+  const locateGps = () => new Promise((resolve, reject) => {
     if (!navigator.geolocation) return reject(new Error('location_unavailable'));
     navigator.geolocation.getCurrentPosition(async ({ coords }) => {
       const { latitude, longitude } = coords;
       const value = await reverseGeocode(latitude, longitude) || `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
-      const location = { value, latitude, longitude, updatedAt: Date.now() };
-      try { localStorage.setItem(LOCATION_KEY, JSON.stringify(location)); } catch {}
-      resolve(location);
-    }, reject, { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 });
+      resolve(saveLocation(value, latitude, longitude, 'gps'));
+    }, reject, { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 });
   });
+
+  const locateByIp = async () => {
+    const res = await fetch('https://ipapi.co/json/', { headers: { Accept: 'application/json' } });
+    if (!res.ok) throw new Error('ip_location_failed');
+    const data = await res.json();
+    const latitude = Number(data.latitude);
+    const longitude = Number(data.longitude);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) throw new Error('ip_location_failed');
+    const value = [data.city, data.region, data.postal].filter(Boolean).join(', ') || `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
+    return saveLocation(value, latitude, longitude, 'ip');
+  };
 
   const getCurrentLocation = async () => {
     try {
-      // Always prefer a fresh browser location so a saved location can never silently become stale.
-      return await locate();
-    } catch (error) {
-      const fallback = savedLocation();
-      if (fallback?.value) return fallback;
-      throw error;
+      // GPS is always the primary source and is forced fresh; never silently use stale saved coordinates.
+      return await locateGps();
+    } catch (gpsError) {
+      // If iOS/Chrome blocks GPS permission or the device cannot acquire it, use a coarse IP location
+      // so the feature still works instead of dead-ending on "Location needed".
+      try { return await locateByIp(); } catch { throw gpsError; }
     }
   };
 
@@ -45,7 +60,8 @@
     const auth = token();
     if (!auth) throw new Error('sign_in_required');
     const cadence = Number(frequencyMinutes) === 60 ? 'every hour' : `every ${frequencyMinutes} minutes`;
-    const message = `Create my local resale deal watch using my current location: ${location.value} (latitude ${location.latitude}, longitude ${location.longitude}). Search current public listings within 25 miles of those coordinates. I want items I can buy and resell for profit. Create a persistent resale watch that scans ${cadence}, uses a minimum estimated net profit of $300 and minimum ROI of 30%, prioritizes risk-adjusted profit, and only alerts me to new credible opportunities. Do not invent listings, prices, resale values, or profit. Do not automate access to marketplaces that prohibit automated collection or require login.`;
+    const precision = location.source === 'gps' ? 'device GPS' : 'coarse IP-based location';
+    const message = `Create my local resale deal watch using my current location from ${precision}: ${location.value} (latitude ${location.latitude}, longitude ${location.longitude}). Search current public listings within 25 miles of those coordinates. I want items I can buy and resell for profit. Create a persistent resale watch that scans ${cadence}, uses a minimum estimated net profit of $300 and minimum ROI of 30%, prioritizes risk-adjusted profit, and only alerts me to new credible opportunities. Do not invent listings, prices, resale values, or profit. Do not automate access to marketplaces that prohibit automated collection or require login.`;
     const res = await fetch('/api/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth}` },
@@ -76,7 +92,8 @@
     }
     panel.style.cssText = 'position:fixed;right:14px;bottom:70px;width:min(420px,calc(100vw - 28px));padding:16px;border:1px solid rgba(255,255,255,.16);border-radius:16px;background:#111;color:#fff;box-shadow:0 12px 40px rgba(0,0,0,.45);z-index:10000;font:14px/1.45 system-ui,sans-serif;';
     const safeLocation = String(location.value).replace(/[&<>]/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;' }[c]));
-    panel.innerHTML = `<strong>How often should Mike alert you?</strong><br><br><span>Scanning your current location: ${safeLocation}</span><div style="display:grid;gap:8px;margin-top:14px"><button data-freq="15" style="padding:11px;border-radius:10px;border:1px solid #444;background:#222;color:#fff">Every 15 minutes</button><button data-freq="30" style="padding:11px;border-radius:10px;border:1px solid #444;background:#222;color:#fff">Every 30 minutes</button><button data-freq="60" style="padding:11px;border-radius:10px;border:1px solid #444;background:#222;color:#fff">Hourly</button></div>`;
+    const sourceLabel = location.source === 'gps' ? 'current device location' : 'approximate current location';
+    panel.innerHTML = `<strong>How often should Mike alert you?</strong><br><br><span>Scanning your ${sourceLabel}: ${safeLocation}</span><div style="display:grid;gap:8px;margin-top:14px"><button data-freq="15" style="padding:11px;border-radius:10px;border:1px solid #444;background:#222;color:#fff">Every 15 minutes</button><button data-freq="30" style="padding:11px;border-radius:10px;border:1px solid #444;background:#222;color:#fff">Every 30 minutes</button><button data-freq="60" style="padding:11px;border-radius:10px;border:1px solid #444;background:#222;color:#fff">Hourly</button></div>`;
     panel.querySelectorAll('[data-freq]').forEach((choice) => choice.addEventListener('click', () => resolve(Number(choice.dataset.freq)), { once: true }));
   });
 
@@ -94,10 +111,21 @@
     } catch (error) {
       const code = String(error?.message || error);
       if (code === 'sign_in_required') show(button, 'Sign in required', 'Sign in to Mike first so the scan can be saved to your account.');
-      else if (code.includes('denied') || code.includes('location')) show(button, 'Location needed', 'Allow location access so Mike can search the area around you.');
+      else if (code.includes('denied') || code.includes('location')) show(button, 'Location unavailable', 'Mike could not get a device GPS location. Check Chrome/Safari location permission for doertoughmikeai.com and try again.');
       else show(button, 'Resale watch failed', code);
       button.textContent = old;
     } finally { button.disabled = false; }
+  };
+
+  const warmCurrentLocation = async () => {
+    try {
+      if (!navigator.permissions?.query) return;
+      const permission = await navigator.permissions.query({ name: 'geolocation' });
+      if (permission.state === 'granted') await locateGps();
+      permission.onchange = async () => {
+        if (permission.state === 'granted') { try { await locateGps(); } catch {} }
+      };
+    } catch {}
   };
 
   const boot = () => {
@@ -111,6 +139,7 @@
     button.style.cssText = 'position:fixed;right:14px;bottom:14px;margin:0;padding:10px 14px;border:1px solid rgba(255,255,255,.18);border-radius:999px;background:#1677ff;color:#fff;font:700 13px system-ui,sans-serif;cursor:pointer;z-index:10001;box-shadow:0 8px 24px rgba(0,0,0,.3);';
     button.addEventListener('click', () => run(button));
     document.body.appendChild(button);
+    warmCurrentLocation();
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true }); else boot();
