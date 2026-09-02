@@ -127,6 +127,36 @@ export async function noteSubscriptionForReferral(userId, subscription) {
   return rows[0] || null;
 }
 
+export async function rejectReferralBySubscription(subscriptionId, reason = 'subscription_canceled_during_refund_window') {
+  if (!subscriptionId) return 0;
+  const { rowCount } = await query(
+    `UPDATE referrals
+        SET status = 'rejected', rejected_reason = $2
+      WHERE subscription_id = $1
+        AND status IN ('pending','subscribed')
+        AND refund_eligible_at IS NOT NULL
+        AND refund_eligible_at > now()`,
+    [String(subscriptionId), reason]
+  );
+  if (rowCount) console.log(`[mike-months] rejected referral for subscription ${subscriptionId}: ${reason}`);
+  return rowCount;
+}
+
+export async function rejectReferralByCustomer(customerId, reason = 'refund_during_refund_window') {
+  if (!customerId) return 0;
+  const { rowCount } = await query(
+    `UPDATE referrals
+        SET status = 'rejected', rejected_reason = $2
+      WHERE stripe_customer_id = $1
+        AND status IN ('pending','subscribed')
+        AND refund_eligible_at IS NOT NULL
+        AND refund_eligible_at > now()`,
+    [String(customerId), reason]
+  );
+  if (rowCount) console.log(`[mike-months] rejected referral for customer ${customerId}: ${reason}`);
+  return rowCount;
+}
+
 async function awardReferral(referralId) {
   if (!pool) throw new Error('database_not_configured');
   const client = await pool.connect();
