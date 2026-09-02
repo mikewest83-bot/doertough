@@ -6,6 +6,20 @@
   const token = () => { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; } };
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 
+  // Resale deal watches (and their alerts) are owner-only. Keep the opt-in
+  // button hidden from everyone else so testers don't chase a flow that
+  // will never have anything to notify them about.
+  async function isOwner() {
+    try {
+      const auth = token();
+      if (!auth) return false;
+      const res = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${auth}` } });
+      if (!res.ok) return false;
+      const data = await res.json().catch(() => ({}));
+      return !!data?.user?.isOwner;
+    } catch { return false; }
+  }
+
   async function authedFetch(url, options = {}) {
     const auth = token();
     if (!auth) throw new Error('sign_in_required');
@@ -193,7 +207,10 @@
   }
 
   async function boot() {
-    try { installButton(); }
+    try {
+      if (!(await isOwner())) return;
+      installButton();
+    }
     catch (error) { console.warn('[sms] unavailable:', error?.message || error); }
   }
 
