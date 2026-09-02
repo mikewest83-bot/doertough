@@ -1,44 +1,61 @@
-/* Mike AI - homepage visual polish pass (conversion-focused, first-visit).
-   Additive only: new depth/spacing/hover treatments on existing elements.
-   No JSX/markup touched, no continuous animation added (keeps the existing
-   "no continuous animation on the home screen" stability rule). */
+/* Mike AI — conversion visual pass v2.
+   Additive, CSS-only. Keeps the existing no-continuous-animation rule.
+   Goal: make the value proposition, free trial, and primary actions feel
+   more obvious without making the page look like an ad. */
 
-/* Ambient depth behind the whole page instead of flat black. */
-body{background:
-  radial-gradient(1100px 560px at 50% -8%, #f26b2112, transparent 60%),
-  radial-gradient(900px 520px at 88% 10%, #27a9ff0e, transparent 55%),
-  #050608 !important;
+:root{
+  --mike-orange:#f26b21;
+  --mike-orange-soft:#f26b2118;
+  --mike-blue:#27a9ff;
+  --mike-green:#4ade80;
 }
 
-/* Header gets a touch of separation once content scrolls under it. */
-header{backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid #ffffff0a}
-.auth-btn{border-color:#ffffff26 !important;transition:border-color .18s ease,background .18s ease,box-shadow .18s ease}
-.auth-btn:hover{border-color:#f26b21 !important;background:#f26b2114 !important;box-shadow:0 6px 18px #f26b2122}
+body{background:
+  radial-gradient(1100px 560px at 50% -8%,#f26b2117,transparent 60%),
+  radial-gradient(900px 520px at 88% 10%,#27a9ff10,transparent 55%),
+  radial-gradient(700px 420px at 5% 62%,#f26b2109,transparent 60%),
+  #050608 !important;}
 
-/* Hero: a little more depth and separation from the page. */
-.copy label{text-shadow:0 0 18px #27a9ff4d}
-.copy h1{text-shadow:0 10px 34px #00000080}
-.copy p{text-shadow:0 2px 10px #00000060}
+header{backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid #ffffff0c}
+.auth-btn{border-color:#ffffff2b !important;transition:border-color .18s ease,background .18s ease,box-shadow .18s ease,transform .18s ease}
+.auth-btn:hover{border-color:var(--mike-orange) !important;background:var(--mike-orange-soft) !important;box-shadow:0 8px 24px #f26b2126;transform:translateY(-1px)}
 
-/* Trust row reads as badges instead of a plain bulleted list. */
-.trust-row{gap:10px 10px !important}
-.trust-row li{background:#ffffff07;border:1px solid #ffffff14;border-radius:999px;padding:7px 14px 7px 24px !important;line-height:1.5}
+/* Hero value hierarchy. */
+.copy label{display:inline-flex;align-items:center;gap:7px;text-shadow:0 0 20px #27a9ff55}
+.copy h1{text-shadow:0 10px 34px #00000090;letter-spacing:-.025em}
+.copy p{max-width:680px;text-shadow:0 2px 10px #00000070}
+
+/* Trust row becomes a compact proof strip. */
+.trust-row{gap:9px 10px !important;margin-top:20px !important}
+.trust-row li{background:#ffffff08;border:1px solid #ffffff16;border-radius:999px;padding:7px 14px 7px 24px !important;line-height:1.45;box-shadow:inset 0 1px #ffffff08}
 .trust-row li:before{left:11px !important}
 
-/* Start With Mike cards: clearer hierarchy and hover feedback. */
-.action-starters{margin-top:30px !important;border-color:#ffffff16 !important}
-.action-starters-grid .action-starter:hover{box-shadow:0 12px 28px #00000066,0 0 0 1px #f26b2130}
+/* Starter cards: make the "what can Mike do for me?" answer scannable. */
+.action-starters{margin-top:30px !important;border-color:#ffffff19 !important;background:linear-gradient(180deg,#ffffff07,#ffffff03) !important;box-shadow:0 18px 50px #00000035}
+.action-starters-grid{gap:12px !important}
+.action-starters-grid .action-starter{transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease,background .18s ease}
+.action-starters-grid .action-starter:hover{transform:translateY(-2px);border-color:#f26b2145 !important;background:#f26b2109 !important;box-shadow:0 14px 32px #00000070,0 0 0 1px #f26b2120}
 
-/* Pricing card: a small "start free" flag and clearer included-items. */
-.pricing{position:relative;margin-top:40px !important;overflow:visible}
-.pricing:before{content:"START FREE - NO CARD";position:absolute;top:-15px;left:50%;transform:translateX(-50%);white-space:nowrap;background:#f26b21;color:#0a0a0a;font-size:10.5px;font-weight:900;letter-spacing:.12em;padding:7px 16px;border-radius:999px;box-shadow:0 8px 20px #f26b2144}
-.pricing-price strong{text-shadow:0 0 34px #27a9ff33}
-.pricing-list li:before{background:#4ade80 !important;border-radius:50% !important;box-shadow:0 0 8px #4ade8088}
-.pricing-cta{transition:transform .15s ease,box-shadow .15s ease}
-.pricing-cta:hover{transform:translateY(-2px);box-shadow:0 16px 36px #f26b2144}
+/* Pricing becomes the visual conversion anchor. */
+.pricing{position:relative;margin-top:48px !important;overflow:visible;border:1px solid #ffffff1c !important;background:linear-gradient(145deg,#ffffff0a,#ffffff03) !important;box-shadow:0 24px 70px #00000055,0 0 0 1px #f26b2108}
+.pricing:before{content:"7 DAYS FREE • NO CARD";position:absolute;top:-16px;left:50%;transform:translateX(-50%);white-space:nowrap;background:var(--mike-orange);color:#090909;font-size:10px;font-weight:950;letter-spacing:.12em;padding:8px 17px;border-radius:999px;box-shadow:0 9px 24px #f26b2148}
+.pricing:after{content:"Try Mike. See what he can do before you pay.";display:block;margin:18px auto 0;text-align:center;color:#ffffffa8;font-size:13px;line-height:1.45}
+.pricing-price strong{text-shadow:0 0 36px #27a9ff38}
+.pricing-list{margin-top:18px !important}
+.pricing-list li{padding-top:3px !important;padding-bottom:3px !important}
+.pricing-list li:before{background:var(--mike-green) !important;border-radius:50% !important;box-shadow:0 0 9px #4ade8088}
+.pricing-cta{transition:transform .15s ease,box-shadow .15s ease,filter .15s ease}
+.pricing-cta:hover{transform:translateY(-2px);filter:brightness(1.04);box-shadow:0 18px 42px #f26b2148}
+
+/* Reduce competing visual weight below the conversion point. */
+footer{opacity:.9}
 
 @media(max-width:760px){
-  .pricing:before{font-size:9.5px;padding:6px 13px}
+  .copy h1{letter-spacing:-.018em}
+  .trust-row{margin-top:16px !important}
   .action-starters{margin-top:22px !important}
-  .pricing{margin-top:30px !important}
+  .action-starters-grid{gap:9px !important}
+  .pricing{margin-top:38px !important}
+  .pricing:before{font-size:9px;padding:7px 13px;letter-spacing:.1em}
+  .pricing:after{font-size:12px;margin-top:15px;padding:0 12px}
 }
