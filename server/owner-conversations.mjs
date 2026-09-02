@@ -107,6 +107,80 @@ export async function getConversation(id, { limit = 300 } = {}) {
   };
 }
 
+// ── Activity summary: the numbers over the directory ─────
+
+// A cheap top-line read for the owner's dashboard. Everything here already
+// lives in the tables the app writes on its own; nothing new is collected.
+export async function getActivitySummary() {
+  const [users, msgs, convos, voice] = await Promise.all([
+    query(`SELECT
+      COUNT(*)::int                                                       AS total,
+      COUNT(*) FILTER (WHERE last_seen_at >= now() - interval '1 day')::int  AS active_today,
+      COUNT(*) FILTER (WHERE last_seen_at >= now() - ($1 || ' seconds')::interval)::int AS live
+      FROM users`, [String(LIVE_WINDOW_SECONDS)]),
+    query(`SELECT
+      COUNT(*)::int                                                       AS total,
+      COUNT(*) FILTER (WHERE created_at >= now() - interval '1 day')::int    AS today,
+      COUNT(*) FILTER (WHERE role = 'user' AND created_at >= now() - interval '1 day')::int AS user_today
+      FROM messages`),
+    query('SELECT COUNT(*)::int AS total FROM conversations'),
+    query(`SELECT COUNT(*)::int AS sessions FROM voice_sessions WHERE started_at >= now() - interval '30 days'`).catch(() => ({ rows: [{ sessions: null }] })),
+  ]);
+  return {
+    users: users.rows[0]?.total || 0,
+    activeToday: users.rows[0]?.active_today || 0,
+    liveNow: users.rows[0]?.live || 0,
+    messagesToday: msgs.rows[0]?.today || 0,
+    userMessagesToday: msgs.rows[0]?.user_today || 0,
+    messagesTotal: msgs.rows[0]?.total || 0,
+    conversations: convos.rows[0]?.total || 0,
+    voiceSessions30d: voice.rows[0]?.sessions ?? null,
+  };
+}
+
+// ── Search: find the conversation behind a phrase ────────
+
+// Owner-only full-text-ish search over stored messages. Case-insensitive
+// substring, newest first, one row per conversation with the matching
+// snippet and who it belongs to. Reads only what the viewer already exposes.
+export async function searchConversations(term, { limit = 40 } = {}) {
+  const q = String(term || '').trim();
+  if (q.length < 2) return { term: q, tooShort: true, results: [] };
+  const max = clamp(limit, 40, 1, 100);
+  // ILIKE with the term escaped so %/_ in user text are literal, not wildcards.
+  const pattern = '%' + q.replace(/([%_\\])/g, '\\$1') + '%';
+  const { rows } = await query(`
+    WITH hits AS (
+      SELECT m.conversation_id,
+             MAX(m.created_at)                                            AS last_hit,
+             COUNT(*)::int                                               AS matches,
+             (ARRAY_AGG(m.content ORDER BY m.created_at DESC))[1]        AS snippet,
+             (ARRAY_AGG(m.role    ORDER BY m.created_at DESC))[1]        AS snippet_role
+        FROM messages m
+       WHERE m.content ILIKE $1 ESCAPE '\\'
+       GROUP BY m.conversation_id
+    )
+    SELECT h.conversation_id AS id, h.matches, h.snippet, h.snippet_role, h.last_hit,
+           c.user_id, u.name, u.email
+      FROM hits h
+      JOIN conversations c ON c.id = h.conversation_id
+      JOIN users u ON u.id = c.user_id
+     ORDER BY h.last_hit DESC
+     LIMIT $2
+  `, [pattern, max]);
+  return {
+    term: q,
+    results: rows.map((row) => ({
+      id: Number(row.id),
+      user: { id: Number(row.user_id), name: row.name || null, email: row.email || null },
+      matches: row.matches || 0,
+      at: row.last_hit,
+      snippetRole: row.snippet_role || null,
+      snippet: row.snippet ? String(row.snippet).slice(0, 200) : null,
+    })),
+  };
+}
+
 // ── User directory: who to check on ──────────────────────
 
 // The owner's list of users, most-recently-active first: who they are, how

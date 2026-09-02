@@ -16,7 +16,7 @@ const target = path.join(root, 'server', 'index.mjs');
 let source = fs.readFileSync(target, 'utf8');
 
 try {
-  const importLine = "import { listConversations, getConversation, listVoiceCalls, getVoiceCall, recordVoiceTurn, voiceTranscriptsEnabled, listUsers, getUserConversations } from './owner-conversations.mjs';";
+  const importLine = "import { listConversations, getConversation, listVoiceCalls, getVoiceCall, recordVoiceTurn, voiceTranscriptsEnabled, listUsers, getUserConversations, getActivitySummary, searchConversations } from './owner-conversations.mjs';";
   if (!source.includes('owner-conversations.mjs')) {
     const anchor = "import { getOwnerMetrics } from './owner-metrics.mjs';";
     if (!source.includes(anchor)) throw new Error('owner conversations import anchor not found (run after patch-owner-metrics)');
@@ -51,6 +51,26 @@ try {
       '  } catch (error) {',
       "    console.error('[owner-conversations] users failed:', error.message || error);",
       "    res.status(500).json({ error: 'owner_users_unavailable' });",
+      '  }',
+      '});',
+      '',
+      "app.get('/api/owner/activity', authRequired, async (req, res) => {",
+      "  if (!isOwner(req.user)) return res.status(403).json({ error: 'forbidden' });",
+      '  try {',
+      '    res.json(await getActivitySummary());',
+      '  } catch (error) {',
+      "    console.error('[owner-conversations] activity failed:', error.message || error);",
+      "    res.status(500).json({ error: 'owner_activity_unavailable' });",
+      '  }',
+      '});',
+      '',
+      "app.get('/api/owner/search', authRequired, async (req, res) => {",
+      "  if (!isOwner(req.user)) return res.status(403).json({ error: 'forbidden' });",
+      '  try {',
+      '    res.json(await searchConversations(req.query.q, { limit: Number(req.query.limit) || 40 }));',
+      '  } catch (error) {',
+      "    console.error('[owner-conversations] search failed:', error.message || error);",
+      "    res.status(500).json({ error: 'owner_search_unavailable' });",
       '  }',
       '});',
       '',
