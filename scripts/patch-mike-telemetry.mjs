@@ -48,9 +48,19 @@ if (!main.includes("mikeTelemetry('account_created')") && main.includes(tokenAnc
   main = main.replace(tokenAnchor, tokenAnchor + " if (authMode === 'register' && !telemetryRef.current.accountCreated) { telemetryRef.current.accountCreated = true; mikeTelemetry('account_created'); }");
 }
 
-if (!main.includes("mikeTelemetry('abandoned')") && main.includes('  return (')) {
+// Anchoring note: main.jsx defines a small ThinkingBubble() helper component
+// ABOVE App(), and it also contains the literal substring '  return (' in its
+// own useEffect cleanup ("    return () => clearInterval(id);"). A plain
+// main.includes('  return (') / main.replace('  return (', ...) matches
+// ThinkingBubble's cleanup first, not App's JSX return - which silently
+// wires this effect (and its `messages` dependency) into a component that
+// has no `messages` in scope at all, throwing "ReferenceError: messages is
+// not defined" on every ThinkingBubble render. Anchor on App's actual
+// `return (\n    <main>` instead, which only appears once in the file.
+const appReturnAnchor = '  return (\n    <main>';
+if (!main.includes("mikeTelemetry('abandoned')") && main.includes(appReturnAnchor)) {
   const abandonment = `  useEffect(() => {\n    const onHide = () => { if (document.visibilityState === 'hidden' && messages.length <= 1) mikeTelemetry('abandoned'); };\n    document.addEventListener('visibilitychange', onHide);\n    return () => document.removeEventListener('visibilitychange', onHide);\n  }, [messages.length]);\n\n`;
-  main = main.replace('  return (', abandonment + '  return (');
+  main = main.replace(appReturnAnchor, abandonment + appReturnAnchor);
 }
 
 fs.writeFileSync(mainPath, main);
