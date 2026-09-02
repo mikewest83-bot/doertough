@@ -5,9 +5,7 @@
   const ZIP_KEY = 'mike_resale_zip';
 
   const token = () => { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; } };
-  const savedLocation = () => { try { return JSON.parse(localStorage.getItem(LOCATION_KEY) || 'null'); } catch { return null; } };
   const savedZip = () => { try { return localStorage.getItem(ZIP_KEY) || ''; } catch { return ''; } };
-
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 
   const reverseGeocode = async (latitude, longitude) => {
@@ -48,7 +46,6 @@
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) throw new Error('ip_location_failed');
     const zip = String(data.postal || '').trim();
     const value = [data.city, data.region, zip].filter(Boolean).join(', ') || `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
-    resolve;
     return saveLocation(value, latitude, longitude, 'ip', zip);
   };
 
@@ -104,15 +101,15 @@
 
   const openPanel = (panel) => requestAnimationFrame(() => { panel.style.opacity = '1'; panel.style.transform = 'translateY(0)'; });
 
-  const closePanel = () => {
+  const closePanel = () => new Promise((resolve) => {
     const panel = document.getElementById(`${BUTTON_ID}-panel`);
-    if (!panel) return;
+    if (!panel) return resolve();
     panel.style.opacity = '0';
     panel.style.transform = 'translateY(14px)';
-    window.setTimeout(() => panel.remove(), 220);
-  };
+    window.setTimeout(() => { panel.remove(); resolve(); }, 230);
+  });
 
-  const show = (button, title, text, location = null) => {
+  const show = (title, text, location = null) => {
     const panel = ensurePanel();
     const locationLine = location ? `<div style="margin-top:10px;color:#aaa;font-size:13px">Scanning <strong style="color:#ddd">${escapeHtml(location.value)}</strong> · 25-mile radius</div>` : '';
     panel.innerHTML = `<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px"><div><div style="font-size:18px;font-weight:800">${escapeHtml(title)}</div>${locationLine}</div><button type="button" data-close style="flex:0 0 auto;border:0;background:transparent;color:#aaa;font-size:24px;line-height:1;padding:0;cursor:pointer" aria-label="Close">×</button></div><div style="margin-top:18px;white-space:pre-wrap">${escapeHtml(text)}</div>`;
@@ -120,14 +117,13 @@
     openPanel(panel);
   };
 
-  const chooseFrequency = async (location) => {
+  const chooseFrequency = (location) => {
     const panel = ensurePanel();
     const currentZip = location.zip || savedZip() || '';
-    const sourceLabel = location.source === 'gps' ? 'your current device location' : 'your approximate location';
-    panel.innerHTML = `<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px"><div><div style="font-size:18px;font-weight:800">Set up Resale Deals</div><div style="margin-top:5px;color:#aaa">Mike will scan for credible opportunities within 25 miles.</div></div><button type="button" data-close style="flex:0 0 auto;border:0;background:transparent;color:#aaa;font-size:24px;line-height:1;padding:0;cursor:pointer" aria-label="Close">×</button></div><div style="margin-top:18px"><label for="mike-resale-zip" style="display:block;font-weight:700;margin-bottom:7px">Search ZIP code</label><input id="mike-resale-zip" inputmode="numeric" autocomplete="postal-code" maxlength="5" placeholder="Use current location" value="${escapeHtml(currentZip)}" style="box-sizing:border-box;width:100%;padding:12px 13px;border-radius:12px;border:1px solid #444;background:#222;color:#fff;font:inherit;outline:none"/><div style="margin-top:7px;color:#888;font-size:12px">Current GPS: ${escapeHtml(location.value)}${sourceLabel ? ` · ${sourceLabel}` : ''}</div></div><div style="margin-top:18px;font-weight:700">How often should Mike alert you?</div><div style="display:grid;gap:9px;margin-top:10px"><button data-freq="15" style="padding:13px;border-radius:12px;border:1px solid #444;background:#222;color:#fff;font:600 15px system-ui,sans-serif">Every 15 minutes</button><button data-freq="30" style="padding:13px;border-radius:12px;border:1px solid #444;background:#222;color:#fff;font:600 15px system-ui,sans-serif">Every 30 minutes</button><button data-freq="60" style="padding:13px;border-radius:12px;border:1px solid #444;background:#222;color:#fff;font:600 15px system-ui,sans-serif">Hourly</button></div>`;
+    panel.innerHTML = `<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px"><div><div style="font-size:18px;font-weight:800">Set up Resale Deals</div><div style="margin-top:5px;color:#aaa">Mike will scan for credible opportunities within 25 miles.</div></div><button type="button" data-close style="flex:0 0 auto;border:0;background:transparent;color:#aaa;font-size:24px;line-height:1;padding:0;cursor:pointer" aria-label="Close">×</button></div><div style="margin-top:18px"><label for="mike-resale-zip" style="display:block;font-weight:700;margin-bottom:7px">Search ZIP code</label><input id="mike-resale-zip" inputmode="numeric" autocomplete="postal-code" maxlength="5" placeholder="Use current location" value="${escapeHtml(currentZip)}" style="box-sizing:border-box;width:100%;padding:12px 13px;border-radius:12px;border:1px solid #444;background:#222;color:#fff;font:inherit;outline:none"/><div style="margin-top:7px;color:#888;font-size:12px">GPS found: ${escapeHtml(location.value)}</div></div><div style="margin-top:18px;font-weight:700">How often should Mike alert you?</div><div style="display:grid;gap:9px;margin-top:10px"><button data-freq="15" style="padding:13px;border-radius:12px;border:1px solid #444;background:#222;color:#fff;font:600 15px system-ui,sans-serif">Every 15 minutes</button><button data-freq="30" style="padding:13px;border-radius:12px;border:1px solid #444;background:#222;color:#fff;font:600 15px system-ui,sans-serif">Every 30 minutes</button><button data-freq="60" style="padding:13px;border-radius:12px;border:1px solid #444;background:#222;color:#fff;font:600 15px system-ui,sans-serif">Hourly</button></div>`;
     panel.querySelector('[data-close]').addEventListener('click', closePanel, { once: true });
     openPanel(panel);
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       let settled = false;
       const finish = (value) => { if (settled) return; settled = true; resolve(value); };
       panel.querySelectorAll('[data-freq]').forEach((choice) => choice.addEventListener('click', async () => {
@@ -146,12 +142,11 @@
           choice.disabled = false;
           choice.textContent = Number(choice.dataset.freq) === 60 ? 'Hourly' : `Every ${choice.dataset.freq} minutes`;
           const code = String(error?.message || error);
-          const message = code === 'invalid_zip' ? 'Enter a valid 5-digit ZIP code.' : 'That ZIP code could not be located. Try again or leave it blank to use GPS.';
-          panel.querySelector('[data-error]')?.remove();
           const errorEl = document.createElement('div');
-          errorEl.dataset.error = '1';
           errorEl.style.cssText = 'margin-top:10px;color:#ff9d6c;font-size:13px';
-          errorEl.textContent = message;
+          errorEl.textContent = code === 'invalid_zip' ? 'Enter a valid 5-digit ZIP code.' : 'That ZIP code could not be located. Try again or leave it blank to use GPS.';
+          panel.querySelector('[data-error]')?.remove();
+          errorEl.dataset.error = '1';
           panel.querySelector('#mike-resale-zip').after(errorEl);
         }
       }));
@@ -166,17 +161,16 @@
     try {
       const gpsLocation = await getCurrentLocation();
       const selection = await chooseFrequency(gpsLocation);
-      closePanel();
-      await new Promise((resolve) => window.setTimeout(resolve, 180));
+      await closePanel();
       button.textContent = selection.frequency === 60 ? '⏰ Setting hourly watch…' : `⏰ Setting ${selection.frequency}-minute watch…`;
       const result = await askMike(selection.location, selection.frequency);
-      show(button, 'Resale watch is active', result, selection.location);
+      show('Resale watch is active', result, selection.location);
       button.textContent = '💰 Resale Deals';
     } catch (error) {
       const code = String(error?.message || error);
-      if (code === 'sign_in_required') show(button, 'Sign in required', 'Sign in to Mike first so the scan can be saved to your account.');
-      else if (code.includes('denied') || code.includes('location')) show(button, 'Location unavailable', 'Mike could not get a device GPS location. Check Chrome/Safari location permission for doertoughmikeai.com and try again.');
-      else show(button, 'Resale watch failed', code);
+      if (code === 'sign_in_required') show('Sign in required', 'Sign in to Mike first so the scan can be saved to your account.');
+      else if (code.includes('denied') || code.includes('location')) show('Location unavailable', 'Mike could not get a device GPS location. Check Chrome/Safari location permission for doertoughmikeai.com and try again.');
+      else show('Resale watch failed', code);
       button.textContent = old;
     } finally { button.disabled = false; }
   };
@@ -186,9 +180,7 @@
       if (!navigator.permissions?.query) return;
       const permission = await navigator.permissions.query({ name: 'geolocation' });
       if (permission.state === 'granted') await locateGps();
-      permission.onchange = async () => {
-        if (permission.state === 'granted') { try { await locateGps(); } catch {} }
-      };
+      permission.onchange = async () => { if (permission.state === 'granted') { try { await locateGps(); } catch {} } };
     } catch {}
   };
 
