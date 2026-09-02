@@ -1,4 +1,4 @@
-/* Mike AI — homepage visual polish pass (conversion-focused, first-visit).
+/* Mike AI - homepage visual polish pass (conversion-focused, first-visit).
    Additive only: new depth/spacing/hover treatments on existing elements.
    No JSX/markup touched, no continuous animation added (keeps the existing
    "no continuous animation on the home screen" stability rule). */
@@ -25,17 +25,13 @@ header{backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bott
 .trust-row li{background:#ffffff07;border:1px solid #ffffff14;border-radius:999px;padding:7px 14px 7px 24px !important;line-height:1.5}
 .trust-row li:before{left:11px !important}
 
-/* Start With Mike cards: clearer hierarchy + a small icon per action. */
+/* Start With Mike cards: clearer hierarchy and hover feedback. */
 .action-starters{margin-top:30px !important;border-color:#ffffff16 !important}
 .action-starters-grid .action-starter:hover{box-shadow:0 12px 28px #00000066,0 0 0 1px #f26b2130}
-.action-starters-grid .action-starter span:before{margin-right:10px;font-size:17px}
-.action-starters-grid .action-starter:nth-child(1) span:before{content:"💰"}
-.action-starters-grid .action-starter:nth-child(2) span:before{content:"💵"}
-.action-starters-grid .action-starter:nth-child(3) span:before{content:"🤔"}
 
 /* Pricing card: a small "start free" flag and clearer included-items. */
 .pricing{position:relative;margin-top:40px !important;overflow:visible}
-.pricing:before{content:"START FREE — NO CARD";position:absolute;top:-15px;left:50%;transform:translateX(-50%);white-space:nowrap;background:#f26b21;color:#0a0a0a;font-size:10.5px;font-weight:900;letter-spacing:.12em;padding:7px 16px;border-radius:999px;box-shadow:0 8px 20px #f26b2144}
+.pricing:before{content:"START FREE - NO CARD";position:absolute;top:-15px;left:50%;transform:translateX(-50%);white-space:nowrap;background:#f26b21;color:#0a0a0a;font-size:10.5px;font-weight:900;letter-spacing:.12em;padding:7px 16px;border-radius:999px;box-shadow:0 8px 20px #f26b2144}
 .pricing-price strong{text-shadow:0 0 34px #27a9ff33}
 .pricing-list li:before{background:#4ade80 !important;border-radius:50% !important;box-shadow:0 0 8px #4ade8088}
 .pricing-cta{transition:transform .15s ease,box-shadow .15s ease}
