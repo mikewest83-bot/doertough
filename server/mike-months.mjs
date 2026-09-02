@@ -4,6 +4,8 @@ import { query, pool, getUserById } from './db.mjs';
 const REFUND_WINDOW_DAYS = Math.max(7, Number(process.env.MIKE_MONTHS_REFUND_DAYS || 7));
 const SCHEDULER_INTERVAL_MS = Math.max(60 * 60 * 1000, Number(process.env.MIKE_MONTHS_INTERVAL_MS || 60 * 60 * 1000));
 const APP_URL = String(process.env.PUBLIC_APP_URL || 'https://doertoughmikeai.com').replace(/\/+$/, '');
+const OWNER_EMAIL = String(process.env.OWNER_EMAIL || '').trim().toLowerCase();
+const TESTER_EMAILS = new Set(String(process.env.TESTER_EMAILS || '').split(',').map((email) => email.trim().toLowerCase()).filter(Boolean));
 
 function makeCode() {
   return crypto.randomBytes(6).toString('base64url').replace(/[-_]/g, '').slice(0, 10).toUpperCase();
@@ -15,6 +17,11 @@ function monthLater(date) {
   d.setUTCMonth(d.getUTCMonth() + 1);
   if (d.getUTCDate() < originalDay) d.setUTCDate(0);
   return d;
+}
+
+function excludedEmail(email) {
+  const clean = String(email || '').trim().toLowerCase();
+  return !!clean && (clean === OWNER_EMAIL || TESTER_EMAILS.has(clean));
 }
 
 export async function migrateMikeMonths() {
@@ -83,19 +90,21 @@ export async function attributeReferral(referredUserId, referralCode) {
   const code = String(referralCode || '').trim().toUpperCase();
   if (!code) return null;
   try {
-    const { rows } = await query('SELECT user_id FROM referral_codes WHERE code = $1', [code]);
-    const referrerId = rows[0]?.user_id;
-    if (!referrerId || String(referrerId) === String(referredUserId)) return null;
+    const { rows } = await query(
+      `SELECT u.id, u.email FROM referral_codes rc JOIN users u ON u.id = rc.user_id WHERE rc.code = $1`,
+      [code]
+    );
+    const referrer = rows[0];
+    if (!referrer || String(referrer.id) === String(referredUserId) || excludedEmail(referrer.email)) return null;
     const referred = await getUserById(referredUserId);
-    if (!referred) return null;
+    if (!referred || excludedEmail(referred.email)) return null;
     const result = await query(
       `INSERT INTO referrals (referrer_user_id, referred_user_id, referral_code)
        VALUES ($1, $2, $3) ON CONFLICT (referred_user_id) DO NOTHING RETURNING *`,
-      [referrerId, referredUserId, code]
+      [referrer.id, referredUserId, code]
     );
     return result.rows[0] || null;
   } catch (error) {
-    // Referral attribution must never make an otherwise valid signup fail.
     console.error('[mike-months] attribution failed:', error.message || error);
     return null;
   }
@@ -108,15 +117,11 @@ export async function noteSubscriptionForReferral(userId, subscription) {
   const refundEligibleAt = new Date(startedAt.getTime() + REFUND_WINDOW_DAYS * 24 * 60 * 60 * 1000);
   const { rows } = await query(
     `UPDATE referrals
-        SET subscription_id = $2,
-            stripe_customer_id = $3,
-            subscription_started_at = $4,
-            refund_eligible_at = $5,
+        SET subscription_id = $2, stripe_customer_id = $3,
+            subscription_started_at = $4, refund_eligible_at = $5,
             status = CASE WHEN status = 'pending' THEN 'subscribed' ELSE status END
-      WHERE referred_user_id = $1
-        AND subscription_id IS NULL
-        AND status IN ('pending','subscribed')
-      RETURNING *`,
+      WHERE referred_user_id = $1 AND subscription_id IS NULL
+        AND status IN ('pending','subscribed') RETURNING *`,
     [userId, String(subscription.id), subscription.customer ? String(subscription.customer) : null, startedAt, refundEligibleAt]
   );
   return rows[0] || null;
@@ -250,7 +255,7 @@ export async function startMikeMonthsScheduler() {
       console.error('[mike-months] scheduler failed:', error.message || error);
     }
   };
-  await run();
+  setTimeout(run, 2500).unref?.();
   const timer = setInterval(run, SCHEDULER_INTERVAL_MS);
   timer.unref?.();
 }
