@@ -30,11 +30,22 @@
     }, reject, { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 });
   });
 
+  const getCurrentLocation = async () => {
+    try {
+      // Always prefer a fresh browser location so a saved location can never silently become stale.
+      return await locate();
+    } catch (error) {
+      const fallback = savedLocation();
+      if (fallback?.value) return fallback;
+      throw error;
+    }
+  };
+
   const askMike = async (location, frequencyMinutes) => {
     const auth = token();
     if (!auth) throw new Error('sign_in_required');
     const cadence = Number(frequencyMinutes) === 60 ? 'every hour' : `every ${frequencyMinutes} minutes`;
-    const message = `Create my local resale deal watch using my current location: ${location.value}. Search current public listings within 25 miles. I want items I can buy and resell for profit. Create a persistent resale watch that scans ${cadence}, uses a minimum estimated net profit of $300 and minimum ROI of 30%, prioritizes risk-adjusted profit, and only alerts me to new credible opportunities. Do not invent listings, prices, resale values, or profit. Do not automate access to marketplaces that prohibit automated collection or require login.`;
+    const message = `Create my local resale deal watch using my current location: ${location.value} (latitude ${location.latitude}, longitude ${location.longitude}). Search current public listings within 25 miles of those coordinates. I want items I can buy and resell for profit. Create a persistent resale watch that scans ${cadence}, uses a minimum estimated net profit of $300 and minimum ROI of 30%, prioritizes risk-adjusted profit, and only alerts me to new credible opportunities. Do not invent listings, prices, resale values, or profit. Do not automate access to marketplaces that prohibit automated collection or require login.`;
     const res = await fetch('/api/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth}` },
@@ -65,17 +76,16 @@
     }
     panel.style.cssText = 'position:fixed;right:14px;bottom:70px;width:min(420px,calc(100vw - 28px));padding:16px;border:1px solid rgba(255,255,255,.16);border-radius:16px;background:#111;color:#fff;box-shadow:0 12px 40px rgba(0,0,0,.45);z-index:10000;font:14px/1.45 system-ui,sans-serif;';
     const safeLocation = String(location.value).replace(/[&<>]/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;' }[c]));
-    panel.innerHTML = `<strong>How often should Mike alert you?</strong><br><br><span>Scanning ${safeLocation}</span><div style="display:grid;gap:8px;margin-top:14px"><button data-freq="15" style="padding:11px;border-radius:10px;border:1px solid #444;background:#222;color:#fff">Every 15 minutes</button><button data-freq="30" style="padding:11px;border-radius:10px;border:1px solid #444;background:#222;color:#fff">Every 30 minutes</button><button data-freq="60" style="padding:11px;border-radius:10px;border:1px solid #444;background:#222;color:#fff">Hourly</button></div>`;
+    panel.innerHTML = `<strong>How often should Mike alert you?</strong><br><br><span>Scanning your current location: ${safeLocation}</span><div style="display:grid;gap:8px;margin-top:14px"><button data-freq="15" style="padding:11px;border-radius:10px;border:1px solid #444;background:#222;color:#fff">Every 15 minutes</button><button data-freq="30" style="padding:11px;border-radius:10px;border:1px solid #444;background:#222;color:#fff">Every 30 minutes</button><button data-freq="60" style="padding:11px;border-radius:10px;border:1px solid #444;background:#222;color:#fff">Hourly</button></div>`;
     panel.querySelectorAll('[data-freq]').forEach((choice) => choice.addEventListener('click', () => resolve(Number(choice.dataset.freq)), { once: true }));
   });
 
   const run = async (button) => {
     button.disabled = true;
     const old = button.textContent;
-    button.textContent = '🔎 Finding deals…';
+    button.textContent = '📍 Getting your current location…';
     try {
-      let location = savedLocation();
-      if (!location?.value) location = await locate();
+      const location = await getCurrentLocation();
       const frequency = await chooseFrequency(location);
       button.textContent = frequency === 60 ? '⏰ Setting hourly watch…' : `⏰ Setting ${frequency}-minute watch…`;
       const result = await askMike(location, frequency);
