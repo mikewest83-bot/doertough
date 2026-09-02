@@ -24,7 +24,6 @@ export async function migrateMikeMonths() {
       code TEXT NOT NULL UNIQUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
-
     CREATE TABLE IF NOT EXISTS referrals (
       id BIGSERIAL PRIMARY KEY,
       referrer_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -41,11 +40,9 @@ export async function migrateMikeMonths() {
       rejected_reason TEXT,
       CHECK (status IN ('pending','subscribed','qualified','rejected'))
     );
-
     CREATE INDEX IF NOT EXISTS referrals_referrer_idx ON referrals(referrer_user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS referrals_due_idx ON referrals(status, refund_eligible_at);
     CREATE UNIQUE INDEX IF NOT EXISTS referrals_subscription_idx ON referrals(subscription_id) WHERE subscription_id IS NOT NULL;
-
     CREATE TABLE IF NOT EXISTS mike_months_ledger (
       id BIGSERIAL PRIMARY KEY,
       user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -55,7 +52,6 @@ export async function migrateMikeMonths() {
       redeemed_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
-
     CREATE INDEX IF NOT EXISTS mike_months_ledger_user_idx ON mike_months_ledger(user_id, redeemed_at, earned_at);
     ALTER TABLE users ADD COLUMN IF NOT EXISTS mike_months_covered_until TIMESTAMPTZ;
   `);
@@ -65,14 +61,12 @@ export async function migrateMikeMonths() {
 export async function ensureReferralCode(userId) {
   const existing = await query('SELECT code FROM referral_codes WHERE user_id = $1', [userId]);
   if (existing.rows[0]?.code) return existing.rows[0].code;
-
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const code = makeCode();
     try {
       const { rows } = await query(
         `INSERT INTO referral_codes (user_id, code) VALUES ($1, $2)
-         ON CONFLICT (user_id) DO NOTHING
-         RETURNING code`,
+         ON CONFLICT (user_id) DO NOTHING RETURNING code`,
         [userId, code]
       );
       if (rows[0]?.code) return rows[0].code;
@@ -88,23 +82,15 @@ export async function ensureReferralCode(userId) {
 export async function attributeReferral(referredUserId, referralCode) {
   const code = String(referralCode || '').trim().toUpperCase();
   if (!code) return null;
-
-  const { rows } = await query(
-    `SELECT user_id FROM referral_codes WHERE code = $1`,
-    [code]
-  );
+  const { rows } = await query('SELECT user_id FROM referral_codes WHERE code = $1', [code]);
   const referrerId = rows[0]?.user_id;
   if (!referrerId || String(referrerId) === String(referredUserId)) return null;
-
   const referred = await getUserById(referredUserId);
   if (!referred) return null;
-
   try {
     const result = await query(
       `INSERT INTO referrals (referrer_user_id, referred_user_id, referral_code)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (referred_user_id) DO NOTHING
-       RETURNING *`,
+       VALUES ($1, $2, $3) ON CONFLICT (referred_user_id) DO NOTHING RETURNING *`,
       [referrerId, referredUserId, code]
     );
     return result.rows[0] || null;
@@ -119,7 +105,6 @@ export async function noteSubscriptionForReferral(userId, subscription) {
   const startEpoch = Number(subscription.current_period_start || subscription.start || Math.floor(Date.now() / 1000));
   const startedAt = new Date(startEpoch * 1000);
   const refundEligibleAt = new Date(startedAt.getTime() + REFUND_WINDOW_DAYS * 24 * 60 * 60 * 1000);
-
   const { rows } = await query(
     `UPDATE referrals
         SET subscription_id = $2,
@@ -128,6 +113,7 @@ export async function noteSubscriptionForReferral(userId, subscription) {
             refund_eligible_at = $5,
             status = CASE WHEN status = 'pending' THEN 'subscribed' ELSE status END
       WHERE referred_user_id = $1
+        AND subscription_id IS NULL
         AND status IN ('pending','subscribed')
       RETURNING *`,
     [userId, String(subscription.id), subscription.customer ? String(subscription.customer) : null, startedAt, refundEligibleAt]
@@ -142,10 +128,8 @@ async function awardReferral(referralId) {
     await client.query('BEGIN');
     const { rows } = await client.query(
       `SELECT r.*, u.subscription_status, u.current_period_end
-         FROM referrals r
-         JOIN users u ON u.id = r.referred_user_id
-        WHERE r.id = $1
-        FOR UPDATE OF r`,
+         FROM referrals r JOIN users u ON u.id = r.referred_user_id
+        WHERE r.id = $1 FOR UPDATE OF r`,
       [referralId]
     );
     const referral = rows[0];
@@ -158,7 +142,6 @@ async function awardReferral(referralId) {
       await client.query('COMMIT');
       return existing.rows[0] || null;
     }
-
     const active = new Set(['active', 'trialing']).has(String(referral.subscription_status || ''));
     if (!active || (referral.current_period_end && new Date(referral.current_period_end) <= new Date())) {
       await client.query(
@@ -169,15 +152,11 @@ async function awardReferral(referralId) {
       await client.query('COMMIT');
       return null;
     }
-
     const { rows: ledgerRows } = await client.query(
       `INSERT INTO mike_months_ledger (user_id, referral_id, months)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (referral_id) DO NOTHING
-       RETURNING *`,
+       VALUES ($1, $2, $3) ON CONFLICT (referral_id) DO NOTHING RETURNING *`,
       [referral.referrer_user_id, referralId, referral.reward_months]
     );
-
     await client.query(
       `UPDATE referrals SET status = 'qualified', qualified_at = COALESCE(qualified_at, now()) WHERE id = $1`,
       [referralId]
@@ -195,12 +174,9 @@ async function awardReferral(referralId) {
 export async function qualifyDueReferrals() {
   if (!pool) return { checked: 0, qualified: 0 };
   const { rows } = await query(
-    `SELECT id FROM referrals
-      WHERE status = 'subscribed'
-        AND refund_eligible_at IS NOT NULL
-        AND refund_eligible_at <= now()
-      ORDER BY id
-      LIMIT 100`
+    `SELECT id FROM referrals WHERE status = 'subscribed'
+      AND refund_eligible_at IS NOT NULL AND refund_eligible_at <= now()
+      ORDER BY id LIMIT 100`
   );
   let qualified = 0;
   for (const row of rows) {
@@ -219,15 +195,13 @@ export async function activateBankedMikeMonths() {
   const { rows: users } = await query(
     `SELECT u.id, u.current_period_end, u.mike_months_covered_until,
             COALESCE(SUM(l.months) FILTER (WHERE l.redeemed_at IS NULL), 0)::int AS banked
-       FROM users u
-       LEFT JOIN mike_months_ledger l ON l.user_id = u.id
+       FROM users u LEFT JOIN mike_months_ledger l ON l.user_id = u.id
       WHERE COALESCE(u.subscription_status, '') NOT IN ('active','trialing')
          OR (u.current_period_end IS NOT NULL AND u.current_period_end <= now())
       GROUP BY u.id
       HAVING COALESCE(SUM(l.months) FILTER (WHERE l.redeemed_at IS NULL), 0) > 0
       LIMIT 100`
   );
-
   let activated = 0;
   for (const user of users) {
     const client = await pool.connect();
@@ -235,19 +209,15 @@ export async function activateBankedMikeMonths() {
       await client.query('BEGIN');
       const { rows: pending } = await client.query(
         `SELECT id, months FROM mike_months_ledger
-          WHERE user_id = $1 AND redeemed_at IS NULL
-          ORDER BY earned_at, id
-          FOR UPDATE`,
+          WHERE user_id = $1 AND redeemed_at IS NULL ORDER BY earned_at, id FOR UPDATE`,
         [user.id]
       );
       if (!pending.length) {
         await client.query('COMMIT');
         continue;
       }
-
       let cursor = user.mike_months_covered_until && new Date(user.mike_months_covered_until) > new Date()
-        ? new Date(user.mike_months_covered_until)
-        : new Date();
+        ? new Date(user.mike_months_covered_until) : new Date();
       for (const reward of pending) {
         for (let i = 0; i < Number(reward.months || 0); i += 1) cursor = monthLater(cursor);
         await client.query('UPDATE mike_months_ledger SET redeemed_at = now() WHERE id = $1', [reward.id]);
@@ -274,7 +244,6 @@ export async function startMikeMonthsScheduler() {
   } catch (error) {
     console.error('[mike-months] startup check failed:', error.message || error);
   }
-
   const timer = setInterval(async () => {
     try {
       const result = await qualifyDueReferrals();
