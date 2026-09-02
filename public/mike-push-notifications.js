@@ -5,6 +5,8 @@
   const SW_URL = '/mike-push-sw.js';
 
   const token = () => { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; } };
+  const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const isStandalone = () => window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
   const base64ToUint8 = (value) => {
     const padding = '='.repeat((4 - value.length % 4) % 4);
     const base64 = (value + padding).replace(/-/g, '+').replace(/_/g, '/');
@@ -13,25 +15,34 @@
   };
 
   async function subscribe() {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+    if (!('serviceWorker' in navigator) || !('Notification' in window)) {
       throw new Error('push_not_supported');
     }
+    if (isIOS() && !isStandalone()) throw new Error('push_home_screen_required');
     const auth = token();
     if (!auth) throw new Error('sign_in_required');
     const keyResponse = await fetch(VAPID_URL, { headers: { Accept: 'application/json' } });
     const keyData = await keyResponse.json().catch(() => ({}));
     if (!keyResponse.ok || !keyData.publicKey) throw new Error(keyData.error || 'push_not_configured');
 
-    const permission = Notification.permission === 'granted'
-      ? 'granted'
-      : await Notification.requestPermission();
+    let permission = Notification.permission === 'granted' ? 'granted' : null;
+    if (!permission) {
+      try {
+        permission = await Notification.requestPermission();
+      } catch (error) {
+        if (isIOS() && !isStandalone()) throw new Error('push_home_screen_required');
+        throw error;
+      }
+    }
     if (permission !== 'granted') throw new Error('push_permission_denied');
 
     const registration = await navigator.serviceWorker.register(SW_URL, { scope: '/' });
-    await navigator.serviceWorker.ready;
-    let subscription = await registration.pushManager.getSubscription();
+    const ready = await navigator.serviceWorker.ready;
+    const pushManager = ready.pushManager || registration.pushManager;
+    if (!pushManager) throw new Error('push_not_supported');
+    let subscription = await pushManager.getSubscription();
     if (!subscription) {
-      subscription = await registration.pushManager.subscribe({
+      subscription = await pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: base64ToUint8(keyData.publicKey),
       });
@@ -67,8 +78,9 @@
       } catch (error) {
         const code = String(error?.message || error);
         if (code === 'sign_in_required') alert('Sign in to Mike first, then turn on Deal Alerts.');
-        else if (code === 'push_permission_denied') alert('Deal alerts are off. Allow notifications for Mike in your browser settings when you are ready.');
-        else if (code === 'push_not_supported') alert('This browser does not support Mike push alerts.');
+        else if (code === 'push_home_screen_required') alert('On iPhone, add Mike AI to your Home Screen first. Open the Share menu, choose Add to Home Screen, open Mike from its new icon, then turn on Deal Alerts.');
+        else if (code === 'push_permission_denied') alert('Deal alerts are off. Allow notifications for Mike in your device settings when you are ready.');
+        else if (code === 'push_not_supported') alert('Mike push alerts are not available in this browser context. Try opening Mike from the Home Screen app icon on iPhone.');
         else if (code === 'push_not_configured') alert('Mike deal alerts are being finished on the server. Try again shortly.');
         else alert('Mike could not turn on deal alerts. Try again in a moment.');
         button.textContent = old;
