@@ -27,10 +27,13 @@ try {
     const marker = "app.get('/api/owner/metrics', authRequired, async (req, res) => {";
     const index = source.indexOf(marker);
     if (index < 0) throw new Error('owner conversations route anchor not found (run after patch-owner-metrics)');
-    // Walk to the end of the metrics route so the new routes land after it.
-    const end = source.indexOf('});', source.indexOf('});', index) + 3);
+    // Walk to the metrics route's OWN closing bracket - the first '});' that
+    // starts a line (column 0). The indented '});' inside the route body (the
+    // .json({...}); calls in the 403 and 500 branches) must NOT match, or the
+    // new routes get inserted INSIDE the catch block and are never registered.
+    const end = source.indexOf('\n});', index);
     if (end < 0) throw new Error('could not find the end of the owner metrics route');
-    const at = end + 3;
+    const at = end + '\n});'.length;
 
     const routes = [
       '',
