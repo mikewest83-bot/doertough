@@ -3,6 +3,8 @@
  * The model never receives direct access to arbitrary functions.
  * Callers register only the handlers they explicitly intend to expose.
  */
+import { recordLocationQuery } from './location-insights.mjs';
+
 const DEFAULT_REPO = 'mikewest83-bot/doertough';
 
 function redactSecrets(value) {
@@ -31,6 +33,12 @@ export function createMikeToolGateway({ handlers = {}, authorize = async () => t
       if (!name || !registry.has(name)) throw new Error('mike_tool_not_allowed');
       const permitted = await authorize({ name, args, user });
       if (!permitted) throw new Error('mike_tool_unauthorized');
+
+      // Aggregate place-name insight for the owner. Deliberately after the
+      // authorize check, so a refused call is never recorded, and never
+      // awaited, so it cannot slow or fail the tool the user asked for.
+      // Returns immediately unless LOCATION_INSIGHTS=1.
+      recordLocationQuery(name, args);
 
       if (name === 'code_repo_status') {
         const repo = String(args?.repo || DEFAULT_REPO).trim();

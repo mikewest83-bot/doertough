@@ -1,4 +1,5 @@
 import { query } from './db.mjs';
+import { getLocationInsights } from './location-insights.mjs';
 
 const safe = async (label, fn) => {
   try { return await fn(); }
@@ -8,7 +9,7 @@ const one = async (sql, params = []) => (await query(sql, params)).rows[0] || {}
 const many = async (sql, params = []) => (await query(sql, params)).rows;
 
 export async function getOwnerMetrics() {
-  const [overview, growth, subscriptions, voice, access] = await Promise.all([
+  const [overview, growth, subscriptions, voice, access, locations] = await Promise.all([
     safe('overview', () => one(`SELECT
       COUNT(*)::int accounts,
       COUNT(*) FILTER (WHERE plan='pro' AND subscription_status IN ('active','trialing') AND (current_period_end IS NULL OR current_period_end>=now()))::int paying,
@@ -34,6 +35,7 @@ export async function getOwnerMetrics() {
       COUNT(*) FILTER (WHERE actual_seconds IS NULL AND ended_at IS NULL AND started_at<=now()-interval '10 minutes')::int never_settled
       FROM voice_sessions WHERE started_at>=now()-interval '30 days'`)),
     safe('access', () => many(`SELECT role,COUNT(*)::int count FROM users GROUP BY role ORDER BY role`)),
+    safe('locations', () => getLocationInsights()),
   ]);
 
   const voicePoolMinutes = Number(process.env.VOICE_MINUTES_GLOBAL || 5000);
@@ -50,6 +52,7 @@ export async function getOwnerMetrics() {
     growth, subscriptions,
     voice: voice ? {minutes:Math.round(voiceMinutes*10)/10,poolMinutes:voicePoolMinutes,poolPercent:voicePoolMinutes?Math.round(voiceMinutes/voicePoolMinutes*100):0,sessions:voice.sessions||0,callers:voice.callers||0,neverSettled:voice.never_settled||0} : null,
     access: access ? {roles:Object.fromEntries(access.map(r=>[r.role,Number(r.count)])),configured:true} : null,
+    locations: locations || { configured:false, enabled:false },
     alerts: overview && subscriptions && voice ? alerts : [],
     configured: true,
   };
