@@ -1,0 +1,13 @@
+/* Mike AI conversion showcase: make the value obvious before a visitor scrolls. */
+.mike-value-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:24px 0 8px}
+.mike-value-card{position:relative;overflow:hidden;padding:18px;border:1px solid #ffffff16;border-radius:18px;background:linear-gradient(145deg,#ffffff09,#ffffff03);box-shadow:0 12px 30px #00000035;transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease}
+.mike-value-card:after{content:"";position:absolute;width:110px;height:110px;right:-45px;top:-50px;border-radius:50%;background:#f26b2112;filter:blur(4px)}
+.mike-value-card:hover{transform:translateY(-3px);border-color:#f26b2140;box-shadow:0 18px 38px #00000055,0 0 0 1px #f26b2112}
+.mike-value-icon{font-size:22px;line-height:1;margin-bottom:10px}
+.mike-value-card strong{display:block;font-size:15px;letter-spacing:-.01em}
+.mike-value-card span{display:block;margin-top:5px;font-size:12.5px;line-height:1.45;opacity:.72}
+.mike-proof-line{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin:15px 0 0;font-size:12px;opacity:.78}
+.mike-proof-line span{display:inline-flex;align-items:center;gap:6px;padding:7px 10px;border-radius:999px;background:#ffffff06;border:1px solid #ffffff10}
+.mike-proof-line b{color:#4ade80;font-weight:800}
+@media(max-width:760px){.mike-value-strip{grid-template-columns:1fr;gap:9px;margin-top:18px}.mike-value-card{padding:15px}.mike-proof-line{justify-content:flex-start;font-size:11.5px}.mike-proof-line span{padding:6px 9px}}
+@media(prefers-reduced-motion:reduce){.mike-value-card{transition:none}.mike-value-card:hover{transform:none}}
