@@ -82,12 +82,12 @@ export async function ensureReferralCode(userId) {
 export async function attributeReferral(referredUserId, referralCode) {
   const code = String(referralCode || '').trim().toUpperCase();
   if (!code) return null;
-  const { rows } = await query('SELECT user_id FROM referral_codes WHERE code = $1', [code]);
-  const referrerId = rows[0]?.user_id;
-  if (!referrerId || String(referrerId) === String(referredUserId)) return null;
-  const referred = await getUserById(referredUserId);
-  if (!referred) return null;
   try {
+    const { rows } = await query('SELECT user_id FROM referral_codes WHERE code = $1', [code]);
+    const referrerId = rows[0]?.user_id;
+    if (!referrerId || String(referrerId) === String(referredUserId)) return null;
+    const referred = await getUserById(referredUserId);
+    if (!referred) return null;
     const result = await query(
       `INSERT INTO referrals (referrer_user_id, referred_user_id, referral_code)
        VALUES ($1, $2, $3) ON CONFLICT (referred_user_id) DO NOTHING RETURNING *`,
@@ -95,6 +95,7 @@ export async function attributeReferral(referredUserId, referralCode) {
     );
     return result.rows[0] || null;
   } catch (error) {
+    // Referral attribution must never make an otherwise valid signup fail.
     console.error('[mike-months] attribution failed:', error.message || error);
     return null;
   }
@@ -237,15 +238,9 @@ export async function activateBankedMikeMonths() {
 
 export async function startMikeMonthsScheduler() {
   if (!pool) return;
-  try {
-    await migrateMikeMonths();
-    await qualifyDueReferrals();
-    await activateBankedMikeMonths();
-  } catch (error) {
-    console.error('[mike-months] startup check failed:', error.message || error);
-  }
-  const timer = setInterval(async () => {
+  const run = async () => {
     try {
+      await migrateMikeMonths();
       const result = await qualifyDueReferrals();
       const activation = await activateBankedMikeMonths();
       if (result.checked || activation.activated) {
@@ -254,7 +249,9 @@ export async function startMikeMonthsScheduler() {
     } catch (error) {
       console.error('[mike-months] scheduler failed:', error.message || error);
     }
-  }, SCHEDULER_INTERVAL_MS);
+  };
+  await run();
+  const timer = setInterval(run, SCHEDULER_INTERVAL_MS);
   timer.unref?.();
 }
 
