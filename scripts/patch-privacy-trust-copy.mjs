@@ -22,9 +22,9 @@ if (!source.includes(privacyLine)) {
 const style = `\n<style>{`.concat('`','.privacy-badge{display:inline-flex;align-items:center;margin-left:8px;padding:3px 8px;border:1px solid rgba(74,222,128,.45);border-radius:999px;font-size:10px;font-weight:800;letter-spacing:.03em;line-height:1.2;white-space:nowrap;color:#4ade80;background:rgba(74,222,128,.08)}').concat('`}</style>\n');
 
 if (!source.includes('.privacy-badge{')) {
-  const styleAnchor = "  return (\n";
+  const styleAnchor = "  return (\n    <main>";
   if (!source.includes(styleAnchor)) throw new Error('[patch-privacy-trust-copy] App render anchor not found');
-  source = source.replace(styleAnchor, `${styleAnchor}${style}`);
+  source = source.replace(styleAnchor, `  return (\n    <main>${style}`);
 }
 
 fs.writeFileSync(path, source);
