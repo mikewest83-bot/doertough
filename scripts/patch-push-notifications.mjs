@@ -62,7 +62,7 @@ const indexPath = 'index.html';
 let index = fs.readFileSync(indexPath, 'utf8');
 const pushScript = '<script src="/mike-push-notifications.js?v=20260902-2"></script>';
 if (!index.includes(pushScript)) {
-  const anchor = '<script src="/resale-deals.js?v=20260901-1"></script>';
+  const anchor = '<script src="/resale-deals.js?v=20260902-1"></script>';
   if (!index.includes(anchor)) throw new Error('[patch-push-notifications] index script anchor not found');
   index = index.replace(anchor, anchor + '\n' + pushScript);
   fs.writeFileSync(indexPath, index);
