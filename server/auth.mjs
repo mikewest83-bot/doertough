@@ -17,6 +17,7 @@ import {
 import { sendPasswordReset } from './mailer.mjs';
 import { publicRole } from './rbac.mjs';
 import { hasPaidAccess, isTrialSubscriber } from './entitlements.mjs';
+import { attributeReferral } from './mike-months.mjs';
 
 const JWT_SECRET = process.env.JWT_SECRET || '';
 const TOKEN_TTL = '90d';
@@ -42,9 +43,6 @@ export const publicUser = (u) => ({
   email: u.email,
   role: publicRole(u, isOwner),
   isOwner: isOwner(u),
-  // The browser needs to know whether to offer a subscription or a billing
-  // link. Derived server-side from the same entitlement the API enforces, so
-  // it can never disagree with what the account can actually do.
   paid: hasPaidAccess(u),
   trialing: isTrialSubscriber(u),
 });
@@ -70,7 +68,7 @@ function guard(res) {
 export async function register(req, res) {
   if (!guard(res)) return;
   try {
-    const { name, email, password } = req.body || {};
+    const { name, email, password, referralCode } = req.body || {};
     const cleanEmail = normalizeEmail(email);
     const cleanName = String(name || '').trim();
 
@@ -83,7 +81,8 @@ export async function register(req, res) {
 
     const passwordHash = await bcrypt.hash(String(password), 12);
     const user = await createUser({ email: cleanEmail, name: cleanName, passwordHash });
-    console.log(`[auth] new account #${user.id}`);
+    if (referralCode) await attributeReferral(user.id, referralCode);
+    console.log(`[auth] new account #${user.id}${referralCode ? ' (referral captured)' : ''}`);
     res.json({ token: sign(user), user: publicUser(user) });
   } catch (err) {
     console.error('[auth] register failed:', err.message || err);
@@ -110,8 +109,6 @@ export async function login(req, res) {
 export async function me(req, res) {
   const user = req.user;
   if (!user) return res.status(401).json({ error: 'Sign in to continue.' });
-  // Rolling 90-day session: issue a fresh token whenever the authenticated
-  // browser checks its session, while preserving token-version invalidation.
   return res.json({ user: publicUser(user), token: sign(user) });
 }
 

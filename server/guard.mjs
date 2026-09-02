@@ -12,6 +12,7 @@ import {
   googleOAuthConfigured,
 } from './google-oauth.mjs';
 import { consumeDaily, isDailyLimited, secondsUntilReset } from './usage-ceiling.mjs';
+import { getMikeMonthsSummary, startMikeMonthsScheduler } from './mike-months.mjs';
 
 const PROTECTED = [
   '/api/ask',
@@ -19,11 +20,7 @@ const PROTECTED = [
   '/api/avatar',
   '/api/speech/token',
   '/api/client-log',
-  // Vision is the most expensive call in the app - a full multimodal request
-  // on an image up to 5 MB. It was outside the guard stack entirely.
   '/api/vision/analyze',
-  // Auth-gated but previously unthrottled, so a signed-in account could spin
-  // up Stripe sessions in a loop.
   '/api/billing/checkout',
   '/api/billing/portal',
 ];
@@ -56,15 +53,11 @@ const AUTH_PER_HOUR = Number(process.env.MIKE_AUTH_PER_HOUR || 20);
 const AUTH_PER_MINUTE = Number(process.env.MIKE_AUTH_PER_MINUTE || 5);
 const ACCESS_CODE = process.env.MIKE_ACCESS_CODE || '';
 
-// key -> { hour: { count, resetAt }, minute: { count, resetAt } }
-// Per-process and therefore per-replica. It is the fast first pass; the durable
-// per-account ceiling in usage-ceiling.mjs is what holds across replicas.
 const buckets = new Map();
 
 function hit(key, perMinute, perHour) {
   const now = Date.now();
   let entry = buckets.get(key);
-
   if (!entry) {
     entry = {
       hour: { count: 0, resetAt: now + 3600_000 },
@@ -72,24 +65,20 @@ function hit(key, perMinute, perHour) {
     };
     buckets.set(key, entry);
   }
-
   for (const [window, ms] of [['hour', 3600_000], ['minute', 60_000]]) {
     if (now > entry[window].resetAt) {
       entry[window].count = 0;
       entry[window].resetAt = now + ms;
     }
   }
-
   entry.hour.count += 1;
   entry.minute.count += 1;
-
   if (entry.minute.count > perMinute) {
     return { ok: false, retryAfter: Math.ceil((entry.minute.resetAt - now) / 1000), window: 'minute' };
   }
   if (entry.hour.count > perHour) {
     return { ok: false, retryAfter: Math.ceil((entry.hour.resetAt - now) / 1000), window: 'hour' };
   }
-
   return { ok: true, remaining: perHour - entry.hour.count };
 }
 
@@ -131,8 +120,6 @@ function installGoogleRoutes(app) {
     }
   });
 
-  // Callback is intentionally unauthenticated: the one-time state maps it
-  // back to the authenticated user and expires after ten minutes.
   app.get('/api/integrations/google/callback', async (req, res) => {
     try {
       if (req.query?.error) return res.redirect('/?google=denied');
@@ -157,6 +144,18 @@ function installGoogleRoutes(app) {
   });
 }
 
+function installMikeMonthsRoutes(app) {
+  app.get('/api/mike-months', async (req, res) => {
+    if (!req.user) return res.status(401).json({ error: 'sign_in_required' });
+    try {
+      return res.json(await getMikeMonthsSummary(req.user.id));
+    } catch (error) {
+      console.error('[mike-months] summary failed:', error.message || error);
+      return res.status(503).json({ error: 'mike_months_unavailable' });
+    }
+  });
+}
+
 export function installGuards(app) {
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -168,13 +167,14 @@ export function installGuards(app) {
 
   app.set('trust proxy', 1);
   installGoogleRoutes(app);
+  installMikeMonthsRoutes(app);
+  void startMikeMonthsScheduler();
 
   app.use(async (req, res, next) => {
     try {
       const isAuthRoute = matches(req.path, AUTH_PROTECTED);
       const isProtected = matches(req.path, PROTECTED);
       const isVoiceToken = req.path === '/api/speech/token';
-
       if (!isAuthRoute && !isProtected) return next();
 
       if (ACCESS_CODE && !isAuthRoute && req.get('x-mike-code') !== ACCESS_CODE) {
@@ -186,20 +186,13 @@ export function installGuards(app) {
         console.warn(`[guard] blocked origin: ${origin} -> ${req.path}`);
         return res.status(403).json({ error: 'origin_not_allowed' });
       }
-      if (!origin && REQUIRE_ORIGIN) {
-        return res.status(403).json({ error: 'origin_required' });
-      }
+      if (!origin && REQUIRE_ORIGIN) return res.status(403).json({ error: 'origin_required' });
 
-      // Realtime token issuance is protected by authentication, origin checks,
-      // and the durable Postgres voice allowance/reservation. It intentionally
-      // skips the generic in-memory limiter because WebRTC startup can legitimately
-      // make multiple token requests while negotiating a session.
       if (isVoiceToken) return next();
 
       const ip = req.ip || req.socket?.remoteAddress || 'unknown';
       const identity = req.user?.id ? `user:${req.user.id}` : `ip:${ip}`;
       const key = isAuthRoute ? `auth:${ip}` : identity;
-
       const result = isAuthRoute
         ? hit(key, AUTH_PER_MINUTE, AUTH_PER_HOUR)
         : hit(key, PER_MINUTE, PER_HOUR);
@@ -215,12 +208,8 @@ export function installGuards(app) {
           retryAfterSeconds: result.retryAfter,
         });
       }
-
       res.setHeader('X-RateLimit-Remaining', String(result.remaining));
 
-      // Durable per-account ceiling on the endpoints that cost money. Only
-      // applies to signed-in accounts; anonymous traffic is already bounded by
-      // the per-IP limiter above. Fails open.
       if (req.user?.id && isDailyLimited(req.path)) {
         const daily = await consumeDaily(req.user.id, req.path);
         if (!daily.ok) {
@@ -237,7 +226,6 @@ export function installGuards(app) {
 
       return next();
     } catch (error) {
-      // A guard failure must never break the request path.
       console.error('[guard] middleware error, allowing request:', error.message || error);
       return next();
     }
