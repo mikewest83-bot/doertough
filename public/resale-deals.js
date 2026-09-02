@@ -47,11 +47,8 @@
 
   const getCurrentLocation = async () => {
     try {
-      // GPS is always the primary source and is forced fresh; never silently use stale saved coordinates.
       return await locateGps();
     } catch (gpsError) {
-      // If iOS/Chrome blocks GPS permission or the device cannot acquire it, use a coarse IP location
-      // so the feature still works instead of dead-ending on "Location needed".
       try { return await locateByIp(); } catch { throw gpsError; }
     }
   };
@@ -142,5 +139,22 @@
     warmCurrentLocation();
   };
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true }); else boot();
+  // The homepage starter is a React button. Capture its click before React's
+  // handler so "Find me a deal" cannot fall through to the generic /api/ask
+  // route (or another page such as Mike Games). It uses the exact same resale
+  // flow as the floating Resale Deals button.
+  const wireFindMeADeal = () => {
+    document.addEventListener('click', (event) => {
+      const target = event.target?.closest?.('button.action-starter');
+      if (!target || target.textContent.trim() !== 'Find me a deal') return;
+      const resaleButton = document.getElementById(BUTTON_ID);
+      if (!resaleButton || resaleButton.disabled) return;
+      event.preventDefault();
+      event.stopPropagation();
+      run(resaleButton);
+    }, true);
+  };
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { boot(); wireFindMeADeal(); }, { once: true });
+  else { boot(); wireFindMeADeal(); }
 })();
