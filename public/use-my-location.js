@@ -79,7 +79,13 @@
     button.addEventListener('click', () => locate(button));
     if (input?.parentElement) input.parentElement.insertBefore(button, input);
     else document.body.appendChild(Object.assign(button, { style: button.style }));
-    if (!input?.parentElement) button.style.position = 'fixed', button.style.right = '16px', button.style.bottom = '16px', button.style.zIndex = '9999';
+    if (!input?.parentElement) {
+      button.style.position = 'fixed';
+      button.style.right = '16px';
+      // Keep the location control above the fixed Resale Deals CTA instead of overlapping it.
+      button.style.bottom = '84px';
+      button.style.zIndex = '9998';
+    }
   };
 
   const boot = () => { addButton(); new MutationObserver(addButton).observe(document.body, { childList: true, subtree: true }); };

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath } from 'url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const indexFile = path.join(root, 'server/index.mjs');
@@ -19,8 +19,11 @@ const roundLoop = '    for (let round = 0; round < 4; round += 1) {';
 const boundedRoundLoop = "    const maxToolRounds = Math.max(1, Math.min(4, Number(process.env.MIKE_MAX_TOOL_ROUNDS || 3)));\n    for (let round = 0; round < maxToolRounds; round += 1) {";
 const finalRoundCall = "      const roundTools = round === maxToolRounds - 1 ? [] : tools;\n      const response = await generateBrainResponse({ client: openai, instructions, input, tools: roundTools, message });";
 
-const indexAlreadyCanonical = source.includes(brainImport) && source.includes(targetModel) && source.includes(healthWithBrain) && source.includes(routedCall);
-if (!indexAlreadyCanonical) {
+// A build may run more than once against the same working tree. Treat the
+// answer-only final-round form as canonical too; otherwise the second build
+// would incorrectly look for the pre-patch direct OpenAI call and fail.
+const hasBrainWiring = source.includes(brainImport) && source.includes(targetModel) && source.includes(healthWithBrain) && (source.includes(routedCall) || source.includes(finalRoundCall));
+if (!hasBrainWiring) {
   if (!source.includes(ownerImport)) throw new Error('[patch-brain-router] owner-only tools import not found');
   source = source.replace(/^import \{ generateBrainResponse, getBrainStatus \} from '\.\/brain-router\.mjs';\n?/m, '');
   if (!source.includes(brainImport)) source = source.replace(ownerImport, `${ownerImport}\n${brainImport}`);
@@ -29,7 +32,7 @@ if (!indexAlreadyCanonical) {
     if (!source.includes(healthModel)) throw new Error('[patch-brain-router] health model block not found');
     source = source.replace(healthModel, healthWithBrain);
   }
-  if (!source.includes(routedCall)) {
+  if (!source.includes(routedCall) && !source.includes(finalRoundCall)) {
     if (!source.includes(directCall)) throw new Error('[patch-brain-router] direct OpenAI response call not found');
     source = source.replace(directCall, routedCall);
   }
@@ -51,8 +54,6 @@ if (!source.includes(finalRoundCall)) {
 fs.writeFileSync(indexFile, source);
 console.log('[patch-brain-router] chat route wired to brain router with bounded tool rounds');
 
-// The router source is canonical now: automatic requests start on Mini and
-// Mini owns the escalation decision. Keep this build patch as a guard only.
 const required = [
   "const wanted = mode === 'auto' ? 'mini' : mode;",
   "const LEVEL_TO_BRAIN = { deep: 'terra', deepest: 'opus' };",
