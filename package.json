@@ -23,7 +23,8 @@
     "rss-parser": "3.13.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "vite": "6.4.3"
+    "vite": "6.4.3",
+    "web-push": "3.8.0"
   },
   "devDependencies": {
     "mocha": "10.2.0",
