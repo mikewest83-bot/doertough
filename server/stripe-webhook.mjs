@@ -12,7 +12,11 @@ import {
   markStripeEventProcessed,
   releaseStripeEvent,
 } from './stripe-idempotency.mjs';
-import { noteSubscriptionForReferral } from './mike-months.mjs';
+import {
+  noteSubscriptionForReferral,
+  rejectReferralBySubscription,
+  rejectReferralByCustomer,
+} from './mike-months.mjs';
 
 export function verifyStripeSignature(rawBody, signature, secret) {
   if (!signature || !secret) return false;
@@ -118,6 +122,7 @@ async function processStripeWebhookEvent(event) {
         return;
       }
       if (event.type === 'customer.subscription.deleted') {
+        await rejectReferralBySubscription(subscription.id, 'subscription_canceled_during_refund_window');
         await setSubscriptionState(user.id, {
           plan: 'free',
           status: 'canceled',
@@ -127,6 +132,9 @@ async function processStripeWebhookEvent(event) {
         });
         console.log(`[stripe] ${user.email} -> plan=free status=canceled`);
         return;
+      }
+      if (event.type === 'customer.subscription.updated' && (subscription.cancel_at_period_end || subscription.cancel_at)) {
+        await rejectReferralBySubscription(subscription.id, 'subscription_canceled_during_refund_window');
       }
       await applySubscription(user, subscription);
       return;
@@ -149,6 +157,13 @@ async function processStripeWebhookEvent(event) {
       }
       const subscription = await fetchSubscription(subscriptionId);
       if (subscription) await applySubscription(user, subscription);
+      return;
+    }
+    case 'charge.refunded': {
+      const charge = event.data.object;
+      if (charge.customer) {
+        await rejectReferralByCustomer(charge.customer, 'refund_during_refund_window');
+      }
       return;
     }
     default:
