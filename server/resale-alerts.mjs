@@ -87,6 +87,7 @@ function normalizeOpportunity(item) {
   const resaleExpected = money(item.resaleExpected);
   const estimatedProfit = money(item.estimatedProfit);
   const roi = Number(item.roiPercent);
+  const dealScoreRaw = Number(item.dealScore);
   return {
     title: clean(item.title, 220),
     category: clean(item.category, 100),
@@ -95,6 +96,7 @@ function normalizeOpportunity(item) {
     resaleExpected,
     estimatedProfit,
     roiPercent: Number.isFinite(roi) ? Math.max(0, Math.min(1000, roi)) : null,
+    dealScore: Number.isFinite(dealScoreRaw) ? Math.max(0, Math.min(100, Math.round(dealScoreRaw))) : null,
     location: clean(item.location, 160),
     why: clean(item.why, 500),
     redFlags: clean(item.redFlags, 500),

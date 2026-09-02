@@ -9,6 +9,12 @@ export const OWNER_ONLY_TOOLS = new Set([
   'code_search',
   'code_create_branch',
   'code_write_file',
+  // Resale deal watches send recurring email/push/text alerts and hit paid
+  // web-search/Twilio/Resend usage on every scan. Keep this owner-only so a
+  // tester account can't spin up watches that run indefinitely on Mike's bill.
+  'set_resale_watch',
+  'list_resale_watches',
+  'cancel_resale_watch',
 ]);
 
 export const isOwnerOnlyTool = (name) => OWNER_ONLY_TOOLS.has(name);
