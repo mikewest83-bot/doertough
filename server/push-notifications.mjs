@@ -1,19 +1,39 @@
+import crypto from 'node:crypto';
 import webpush from 'web-push';
 import { query, dbEnabled } from './db.mjs';
 
-const configured = Boolean(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY && process.env.VAPID_SUBJECT);
-if (configured) {
-  webpush.setVapidDetails(process.env.VAPID_SUBJECT, process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY);
+const P256_ORDER = BigInt('0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551');
+const base64url = (value) => Buffer.from(value).toString('base64url');
+
+function deriveVapidIdentity() {
+  const explicitPrivate = String(process.env.VAPID_PRIVATE_KEY || '').trim();
+  const explicitPublic = String(process.env.VAPID_PUBLIC_KEY || '').trim();
+  if (explicitPrivate && explicitPublic) return { privateKey: explicitPrivate, publicKey: explicitPublic };
+
+  const seed = String(process.env.MIKE_PUSH_SEED || process.env.JWT_SECRET || process.env.AUTH_SECRET || process.env.DATABASE_URL || process.env.OPENAI_API_KEY || '').trim();
+  if (!seed) return { privateKey: '', publicKey: '' };
+
+  const digest = crypto.createHash('sha256').update(`doertough-mike-push-v1:${seed}`).digest();
+  const scalar = (BigInt(`0x${digest.toString('hex')}`) % (P256_ORDER - 1n)) + 1n;
+  const privateBytes = Buffer.from(scalar.toString(16).padStart(64, '0'), 'hex');
+  const ecdh = crypto.createECDH('prime256v1');
+  ecdh.setPrivateKey(privateBytes);
+  return { privateKey: base64url(privateBytes), publicKey: base64url(ecdh.getPublicKey(null, 'uncompressed')) };
 }
+
+const vapid = deriveVapidIdentity();
+const vapidSubject = process.env.VAPID_SUBJECT || 'mailto:support@doertough.com';
+const configured = Boolean(vapid.privateKey && vapid.publicKey && dbEnabled);
+if (configured) webpush.setVapidDetails(vapidSubject, vapid.publicKey, vapid.privateKey);
 
 let schemaReady = false;
 
 export function pushConfigured() {
-  return configured && dbEnabled;
+  return configured;
 }
 
 export function pushPublicKey() {
-  return configured ? process.env.VAPID_PUBLIC_KEY : '';
+  return configured ? vapid.publicKey : '';
 }
 
 export async function ensurePushSchema() {
@@ -34,11 +54,7 @@ export async function ensurePushSchema() {
 }
 
 function validSubscription(value) {
-  return Boolean(
-    value && typeof value === 'object' &&
-    typeof value.endpoint === 'string' && value.endpoint.startsWith('https://') &&
-    value.keys && typeof value.keys.p256dh === 'string' && typeof value.keys.auth === 'string'
-  );
+  return Boolean(value && typeof value === 'object' && typeof value.endpoint === 'string' && value.endpoint.startsWith('https://') && value.keys && typeof value.keys.p256dh === 'string' && typeof value.keys.auth === 'string');
 }
 
 export async function savePushSubscription(userId, subscription) {
@@ -59,14 +75,7 @@ export async function removePushSubscription(userId, endpoint) {
 }
 
 function notificationPayload({ title, body, url, tag }) {
-  return JSON.stringify({
-    title: String(title || 'Mike found something'),
-    body: String(body || ''),
-    url: String(url || '/'),
-    tag: String(tag || 'mike-alert'),
-    icon: '/mike-icon.svg',
-    badge: '/mike-icon.svg',
-  });
+  return JSON.stringify({ title: String(title || 'Mike found something'), body: String(body || ''), url: String(url || '/'), tag: String(tag || 'mike-alert'), icon: '/mike-icon.svg', badge: '/mike-icon.svg' });
 }
 
 export async function sendPushToUser(userId, payload) {
@@ -83,22 +92,15 @@ export async function sendPushToUser(userId, payload) {
       if (status === 404 || status === 410) {
         await query('DELETE FROM push_subscriptions WHERE id=$1', [row.id]);
         removed += 1;
-      } else {
-        console.warn(`[push] delivery failed for subscription #${row.id}: ${error?.message || error}`);
-      }
+      } else console.warn(`[push] delivery failed for subscription #${row.id}: ${error?.message || error}`);
     }
   }
   return { sent, removed };
 }
 
 export async function pushSubscribeHandler(req, res) {
-  try {
-    await savePushSubscription(req.user.id, req.body?.subscription);
-    res.json({ ok: true });
-  } catch (error) {
-    const status = error.message === 'push_not_configured' ? 503 : 400;
-    res.status(status).json({ error: error.message || 'push_subscription_failed' });
-  }
+  try { await savePushSubscription(req.user.id, req.body?.subscription); res.json({ ok: true }); }
+  catch (error) { res.status(error.message === 'push_not_configured' ? 503 : 400).json({ error: error.message || 'push_subscription_failed' }); }
 }
 
 export async function pushUnsubscribeHandler(req, res) {
@@ -107,7 +109,5 @@ export async function pushUnsubscribeHandler(req, res) {
     if (!endpoint) return res.status(400).json({ error: 'push_endpoint_required' });
     await removePushSubscription(req.user.id, endpoint);
     res.json({ ok: true });
-  } catch (error) {
-    res.status(400).json({ error: error.message || 'push_unsubscribe_failed' });
-  }
+  } catch (error) { res.status(400).json({ error: error.message || 'push_unsubscribe_failed' }); }
 }
