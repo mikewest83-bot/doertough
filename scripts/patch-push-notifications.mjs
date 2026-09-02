@@ -34,7 +34,22 @@ if (!resale.includes(resaleImport)) {
   resale = resale.replace(anchor, anchor + resaleImport);
 }
 const oldBlock = `      const mail = await sendResaleDealAlert({\n        to: watch.email,\n        name: watch.name,\n        location: watch.location,\n        radiusMiles: watch.radius_miles,\n        opportunities: fresh,\n      });\n      if (mail?.sent) emailed += 1;\n      console.log(\`[resale-watch] #\${watch.id} found=\${fresh.length} email_sent=\${mail?.sent ? 'true' : 'false'}\`);`;
-const newBlock = `      const push = await sendPushToUser(watch.user_id, {\n        title: fresh.length === 1 ? '💰 Mike found a deal' : \`💰 Mike found \${fresh.length} deals\`,\n        body: fresh.slice(0, 3).map((item) => \`\${item.title || 'Resale opportunity'} — $\${Number(item.estimatedProfit || 0).toLocaleString()} est. profit\`).join(' • '),\n        url: fresh[0]?.url || '/',\n        tag: \`mike-resale-\${watch.id}\`,\n      });\n      if (push?.sent) pushSent += push.sent;\n      const mail = await sendResaleDealAlert({\n        to: watch.email,\n        name: watch.name,\n        location: watch.location,\n        radiusMiles: watch.radius_miles,\n        opportunities: fresh,\n      });\n      if (mail?.sent) emailed += 1;\n      console.log(\`[resale-watch] #\${watch.id} found=\${fresh.length} push_sent=\${push?.sent || 0} email_sent=\${mail?.sent ? 'true' : 'false'}\`);`;
+const newBlock = `      const push = await sendPushToUser(watch.user_id, {
+        title: fresh.length === 1 ? '💰 Mike found a deal' : '💰 Mike found ' + fresh.length + ' deals',
+        body: fresh.slice(0, 3).map((item) => (item.title || 'Resale opportunity') + ' — $' + Number(item.estimatedProfit || 0).toLocaleString() + ' est. profit').join(' • '),
+        url: fresh[0]?.url || '/',
+        tag: 'mike-resale-' + watch.id,
+      });
+      if (push?.sent) pushSent += push.sent;
+      const mail = await sendResaleDealAlert({
+        to: watch.email,
+        name: watch.name,
+        location: watch.location,
+        radiusMiles: watch.radius_miles,
+        opportunities: fresh,
+      });
+      if (mail?.sent) emailed += 1;
+      console.log('[resale-watch] #' + watch.id + ' found=' + fresh.length + ' push_sent=' + (push?.sent || 0) + ' email_sent=' + (mail?.sent ? 'true' : 'false'));`;
 if (resale.includes(oldBlock) && !resale.includes('push_sent')) {
   resale = resale.replace('  let emailed = 0;\n', '  let emailed = 0;\n  let pushSent = 0;\n');
   resale = resale.replace(oldBlock, newBlock);
