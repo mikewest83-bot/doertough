@@ -25,6 +25,24 @@ if (!server.includes("app.post('/api/push/subscribe'")) {
 }
 fs.writeFileSync(serverPath, server);
 
+const resalePath = 'server/resale-alerts.mjs';
+let resale = fs.readFileSync(resalePath, 'utf8');
+const resaleImport = "import { sendPushToUser } from './push-notifications.mjs';\n";
+if (!resale.includes(resaleImport)) {
+  const anchor = "import { sendResaleDealAlert } from './mailer.mjs';\n";
+  if (!resale.includes(anchor)) throw new Error('[patch-push-notifications] resale import anchor not found');
+  resale = resale.replace(anchor, anchor + resaleImport);
+}
+const oldBlock = `      const mail = await sendResaleDealAlert({\n        to: watch.email,\n        name: watch.name,\n        location: watch.location,\n        radiusMiles: watch.radius_miles,\n        opportunities: fresh,\n      });\n      if (mail?.sent) emailed += 1;\n      console.log(\`[resale-watch] #\${watch.id} found=\${fresh.length} email_sent=\${mail?.sent ? 'true' : 'false'}\`);`;
+const newBlock = `      const push = await sendPushToUser(watch.user_id, {\n        title: fresh.length === 1 ? '💰 Mike found a deal' : \`💰 Mike found \${fresh.length} deals\`,\n        body: fresh.slice(0, 3).map((item) => \`${item.title || 'Resale opportunity'} — $\${Number(item.estimatedProfit || 0).toLocaleString()} est. profit\`).join(' • '),\n        url: fresh[0]?.url || '/',\n        tag: \`mike-resale-\${watch.id}\`,\n      });\n      if (push?.sent) pushSent += push.sent;\n      const mail = await sendResaleDealAlert({\n        to: watch.email,\n        name: watch.name,\n        location: watch.location,\n        radiusMiles: watch.radius_miles,\n        opportunities: fresh,\n      });\n      if (mail?.sent) emailed += 1;\n      console.log(\`[resale-watch] #\${watch.id} found=\${fresh.length} push_sent=\${push?.sent || 0} email_sent=\${mail?.sent ? 'true' : 'false'}\`);`;
+if (resale.includes(oldBlock) && !resale.includes('push_sent')) {
+  resale = resale.replace('  let emailed = 0;\n', '  let emailed = 0;\n  let pushSent = 0;\n');
+  resale = resale.replace(oldBlock, newBlock);
+  resale = resale.replace('return { checked, matched, emailed };', 'return { checked, matched, emailed, pushSent };');
+  resale = resale.replace('if (result.checked || result.matched) console.log(`[resale-watch] checked=${result.checked} matched=${result.matched} emails=${result.emailed}`);', 'if (result.checked || result.matched) console.log(`[resale-watch] checked=${result.checked} matched=${result.matched} pushes=${result.pushSent} emails=${result.emailed}`);');
+}
+fs.writeFileSync(resalePath, resale);
+
 const indexPath = 'index.html';
 let index = fs.readFileSync(indexPath, 'utf8');
 const pushScript = '<script src="/mike-push-notifications.js?v=20260902-1"></script>';
