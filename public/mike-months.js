@@ -4,13 +4,12 @@
   const readToken = () => { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; } };
   const saveRef = (code) => { try { if (code) localStorage.setItem(REF_KEY, code); } catch {} };
   const readRef = () => { try { return localStorage.getItem(REF_KEY) || ''; } catch { return ''; } };
+  const clearReferral = () => { try { localStorage.removeItem(REF_KEY); } catch {} };
 
   const url = new URL(window.location.href);
   const incomingRef = String(url.searchParams.get('ref') || '').trim().toUpperCase();
   if (incomingRef) saveRef(incomingRef);
 
-  // Preserve referral attribution without requiring the React auth form to know
-  // anything about the referral program. Only the signup endpoint is touched.
   const nativeFetch = window.fetch.bind(window);
   window.fetch = async (input, init = {}) => {
     try {
@@ -21,6 +20,9 @@
         if (code && !body.referralCode) {
           init = { ...init, body: JSON.stringify({ ...body, referralCode: code }) };
         }
+        const response = await nativeFetch(input, init);
+        if (response.ok && code) clearReferral();
+        return response;
       }
     } catch {}
     return nativeFetch(input, init);
@@ -74,27 +76,34 @@
     return card;
   };
 
+  const hideCard = () => {
+    if (card) card.style.display = 'none';
+    summary = null;
+  };
+
   const refresh = async () => {
     const token = readToken();
-    if (!token) return;
+    if (!token) { hideCard(); return; }
     try {
       const res = await nativeFetch('/api/mike-months', { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) return;
+      if (!res.ok) { hideCard(); return; }
       summary = await res.json();
       const el = ensureCard();
       el.style.display = 'block';
       const months = Number(summary.earnedMonths || 0);
       el.querySelector('.mm-count').textContent = `${months} free month${months === 1 ? '' : 's'} earned`;
       el.querySelector('.mm-link').textContent = summary.link || '';
-    } catch {}
+    } catch { hideCard(); }
   };
 
-  // The app writes the auth token during login/signup. Poll lightly rather than
-  // coupling this feature to React implementation details.
   refresh();
   let lastToken = readToken();
   setInterval(() => {
     const token = readToken();
-    if (token && token !== lastToken) { lastToken = token; refresh(); }
+    if (!token) {
+      if (lastToken) { lastToken = ''; hideCard(); }
+      return;
+    }
+    if (token !== lastToken) { lastToken = token; refresh(); }
   }, 1500);
 })();
