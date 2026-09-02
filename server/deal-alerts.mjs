@@ -1,238 +1,120 @@
-import { query, dbEnabled } from './db.mjs';
-import { findLocalDeals } from './deal-finder.mjs';
+import OpenAI from 'openai';
 
-const MAX = 50;
-const BATCH_SIZE = Math.max(1, Number(process.env.DEAL_ALERT_BATCH || 3));
-const MAX_ACTIVE_PER_USER = Math.max(1, Number(process.env.DEAL_ALERT_MAX_PER_USER || 5));
-const DEFAULT_FREQUENCY_MINUTES = 15;
-const MAX_CONSECUTIVE_FAILURES = Math.max(1, Number(process.env.DEAL_ALERT_MAX_FAILURES || 5));
-const ALLOWED_FREQUENCIES = new Set([5, 15, 30, 60]);
-const DEFAULT_RADIUS = Math.max(1, Math.min(100, Number(process.env.DEAL_ALERT_DEFAULT_RADIUS_MILES || 25)));
+const MODEL = process.env.DEAL_FINDER_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const TIMEOUT_MS = Number(process.env.DEAL_FINDER_TIMEOUT_MS || 30000);
 
-const clean = (v, n) => String(v ?? '').trim().slice(0, n);
+const client = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: TIMEOUT_MS, maxRetries: 0 })
+  : null;
 
-export async function ensureDealAlertSchema() {
-  if (!dbEnabled) return false;
-  await query(`
-    CREATE TABLE IF NOT EXISTS deal_alerts (
-      id BIGSERIAL PRIMARY KEY,
-      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      category TEXT NOT NULL,
-      location TEXT NOT NULL,
-      budget NUMERIC,
-      radius_miles INT,
-      constraints TEXT,
-      frequency_minutes INT NOT NULL DEFAULT 15,
-      enabled BOOLEAN NOT NULL DEFAULT true,
-      notified_urls JSONB NOT NULL DEFAULT '[]'::jsonb,
-      last_results JSONB NOT NULL DEFAULT '[]'::jsonb,
-      last_checked_at TIMESTAMPTZ,
-      last_notified_at TIMESTAMPTZ,
-      consecutive_failures INT NOT NULL DEFAULT 0,
-      last_error TEXT,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-    ALTER TABLE deal_alerts ADD COLUMN IF NOT EXISTS last_results JSONB NOT NULL DEFAULT '[]'::jsonb;
-    CREATE INDEX IF NOT EXISTS deal_alerts_due_idx ON deal_alerts(enabled, last_checked_at);
-    CREATE INDEX IF NOT EXISTS deal_alerts_user_idx ON deal_alerts(user_id, enabled, created_at DESC);
-  `);
-  return true;
-}
-
-function normalizeFrequency(value) {
-  if (value == null || value === '') return DEFAULT_FREQUENCY_MINUTES;
-  const frequency = Number(value);
-  if (!Number.isInteger(frequency) || !ALLOWED_FREQUENCIES.has(frequency)) throw new Error('deal_alert_frequency_invalid');
-  return frequency;
-}
-
-export async function createDealAlert(userId, args = {}) {
-  if (!userId || !(await ensureDealAlertSchema())) throw new Error('deal_alerts_not_configured');
-  const category = clean(args.category || 'resale opportunities', 180) || 'resale opportunities';
-  const location = clean(args.location, 160);
-  const constraints = clean(args.constraints, 1400) || null;
-  const budget = args.budget == null || args.budget === '' ? null : Number(args.budget);
-  const radius = args.radiusMiles == null || args.radiusMiles === '' ? DEFAULT_RADIUS : Number(args.radiusMiles);
-  const frequency = normalizeFrequency(args.frequencyMinutes);
-  if (!location) throw new Error('deal_alert_location_required');
-  if (!Number.isFinite(radius) || radius <= 0 || radius > 100) throw new Error('deal_alert_radius_invalid');
-  if (budget !== null && (!Number.isFinite(budget) || budget < 0)) throw new Error('deal_alert_budget_invalid');
-
-  const { rows: active } = await query('SELECT count(*)::int AS n FROM deal_alerts WHERE user_id=$1 AND enabled=true', [userId]);
-  if (Number(active?.[0]?.n || 0) >= MAX_ACTIVE_PER_USER) throw new Error('deal_alert_limit_reached');
-
-  const { rows } = await query(`
-    INSERT INTO deal_alerts (user_id, category, location, budget, radius_miles, constraints, frequency_minutes)
-    VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-    [userId, category, location, budget, Math.round(radius), constraints, frequency]
-  );
-  return rows[0];
-}
-
-export async function listDealAlerts(userId) {
-  if (!userId || !(await ensureDealAlertSchema())) return [];
-  const { rows } = await query(`
-    SELECT id, category, location, budget, radius_miles, constraints, frequency_minutes,
-           enabled, last_results, last_checked_at, last_notified_at, consecutive_failures, last_error, created_at
-    FROM deal_alerts WHERE user_id=$1 ORDER BY created_at DESC LIMIT $2`, [userId, MAX]);
-  return rows;
-}
-
-export async function cancelDealAlert(userId, id) {
-  if (!userId || !(await ensureDealAlertSchema())) return false;
-  const { rowCount } = await query('UPDATE deal_alerts SET enabled=false, updated_at=now() WHERE id=$1 AND user_id=$2 AND enabled=true', [id, userId]);
-  return rowCount > 0;
-}
-
-function normalizeUrl(raw) {
-  const value = String(raw || '').trim();
-  if (!value) return '';
-  try {
-    const url = new URL(value);
-    url.hash = '';
-    url.search = '';
-    url.hostname = url.hostname.toLowerCase().replace(/^www\./, '');
-    return url.toString().replace(/\/+$/, '');
-  } catch {
-    return value.replace(/[?#].*$/, '').replace(/\/+$/, '');
-  }
-}
-
-function extractCandidates(result) {
-  const text = String(result?.results || '');
-  const urls = [...new Set((text.match(/https?:\/\/[^\s)\]>]+/g) || []).map((u) => normalizeUrl(u.replace(/[.,;:]+$/, ''))).filter(Boolean))];
-  return urls.slice(0, 20).map((url) => ({ url }));
-}
-
-function dealScore(result) {
-  const text = String(result?.results || '');
-  const match = text.match(/(?:deal\s*score|resale\s*score|score)\s*[:=-]\s*(\d{1,3})\s*(?:\/\s*100)?/i);
-  return match ? Math.max(0, Math.min(100, Number(match[1]))) : null;
-}
-
-async function dueAlerts() {
-  if (!(await ensureDealAlertSchema())) return [];
-  const { rows } = await query(`
-    SELECT a.*, u.email, u.name
-    FROM deal_alerts a
-    JOIN users u ON u.id=a.user_id
-    WHERE a.enabled=true
-      AND (a.last_checked_at IS NULL OR a.last_checked_at <= now() - make_interval(mins => a.frequency_minutes))
-    ORDER BY a.last_checked_at NULLS FIRST
-    LIMIT $1`, [BATCH_SIZE]);
-  return rows;
-}
-
-async function recordFailure(alert, reason) {
-  const failures = Number(alert.consecutive_failures || 0) + 1;
-  const disable = failures >= MAX_CONSECUTIVE_FAILURES;
-  await query(`UPDATE deal_alerts SET consecutive_failures=$2,last_error=$3,enabled=CASE WHEN $4 THEN false ELSE enabled END,updated_at=now() WHERE id=$1`, [alert.id, failures, clean(reason, 500), disable]);
-}
-
-export async function checkDealAlerts() {
-  const alerts = await dueAlerts();
-  let checked = 0;
-  let matched = 0;
-
-  for (const alert of alerts) {
-    try {
-      await query('UPDATE deal_alerts SET last_checked_at=now(), updated_at=now() WHERE id=$1', [alert.id]);
-      const result = await findLocalDeals({
-        category: alert.category,
-        location: alert.location,
-        budget: alert.budget == null ? undefined : Number(alert.budget),
-        radiusMiles: alert.radius_miles == null ? DEFAULT_RADIUS : Number(alert.radius_miles),
-        constraints: alert.constraints || undefined,
-        resaleMode: true,
-      });
-      checked += 1;
-      if (result?.error) { await recordFailure(alert, result.error); continue; }
-      const candidates = extractCandidates(result);
-      const previous = Array.isArray(alert.notified_urls) ? alert.notified_urls.map(normalizeUrl).filter(Boolean) : [];
-      const seen = new Set(previous);
-      const fresh = candidates.filter((x) => !seen.has(x.url));
-      const score = dealScore(result);
-      const stored = [{ checkedAt: new Date().toISOString(), score, ...result }];
-      await query('UPDATE deal_alerts SET last_results=$2::jsonb, consecutive_failures=0, last_error=NULL, updated_at=now() WHERE id=$1', [alert.id, JSON.stringify(stored)]);
-      if (!fresh.length) continue;
-      await query('UPDATE deal_alerts SET notified_urls=$2::jsonb,last_notified_at=now(),updated_at=now() WHERE id=$1', [alert.id, JSON.stringify([...new Set([...previous, ...fresh.map((x) => x.url)])].slice(-200))]);
-      matched += 1;
-      console.log(`[deal-alerts] alert #${alert.id} found ${fresh.length} new resale candidate(s)${score == null ? '' : ` score=${score}/100`}`);
-    } catch (error) {
-      console.error(`[deal-alerts] alert #${alert.id} failed:`, error.message || error);
-      try { await recordFailure(alert, error.message || 'check_failed'); } catch {}
-    }
-  }
-  return { checked, matched };
-}
-
-export function startDealAlertScheduler() {
-  const run = async () => {
-    try {
-      const result = await checkDealAlerts();
-      if (result.checked || result.matched) console.log(`[deal-alerts] checked=${result.checked} matched=${result.matched}`);
-    } catch (error) {
-      console.error('[deal-alerts] scheduler failed:', error.message || error);
-    }
-  };
-  void run();
-  const timer = setInterval(run, 30_000);
-  timer.unref?.();
-  return timer;
-}
-
-function toolError(error) {
-  const code = error.message || 'deal_alert_unavailable';
-  const messages = {
-    deal_alert_location_required: 'I need your city or ZIP so I can search around you.',
-    deal_alert_frequency_invalid: 'Check interval must be 5, 15, 30, or 60 minutes.',
-    deal_alert_radius_invalid: 'Search radius must be between 1 and 100 miles.',
-    deal_alert_limit_reached: `You already have ${MAX_ACTIVE_PER_USER} active resale scans.`,
-  };
-  return { error: code, message: messages[code] || code };
-}
-
-export async function setDealAlertTool(userId, args = {}) {
-  try {
-    const alert = await createDealAlert(userId, args);
-    return { tool: 'set_deal_alert', alert, message: `Resale deal scan #${alert.id} is active near ${alert.location}, checking every ${alert.frequency_minutes} minutes within ${alert.radius_miles} miles.` };
-  } catch (error) { return toolError(error); }
-}
-
-export async function listDealAlertsTool(userId) {
-  try { return { tool: 'list_deal_alerts', alerts: await listDealAlerts(userId) }; }
-  catch (error) { return toolError(error); }
-}
-
-export async function cancelDealAlertTool(userId, args = {}) {
-  try {
-    const id = Number(args.id);
-    if (!Number.isInteger(id) || id <= 0) return { error: 'deal_alert_id_invalid' };
-    return { tool: 'cancel_deal_alert', canceled: await cancelDealAlert(userId, id) };
-  } catch (error) { return toolError(error); }
-}
-
-export const DEAL_ALERT_TOOLS = [
+export const DEAL_FINDER_TOOLS = [
   {
-    type: 'function', name: 'set_deal_alert',
-    description: 'Create a persistent local resale-deal scan. Search current public listings near the user, evaluate likely buy price versus realistic resale value, fees, repair risk, and travel cost, and surface only credible opportunities. Never invent listings, prices, profit, or resale values. If the user says near me, location must be supplied by the client or user; do not guess.',
-    parameters: { type: 'object', properties: {
-      category: { type: 'string', description: 'Specific category or "resale opportunities" for a broad scan.' },
-      location: { type: 'string', description: 'User city/state or ZIP. Required.' },
-      budget: { type: 'number', description: 'Maximum cash purchase price.' },
-      radiusMiles: { type: 'number', description: 'Search radius, 1-100 miles. Default 25.' },
-      constraints: { type: 'string', description: 'Resale preferences, such as easy-to-move items, minimum profit, avoid broken items, or target categories.' },
-      frequencyMinutes: { type: 'integer', enum: [5,15,30,60], description: 'How often to rescan.' },
-    }, required: ['location'], additionalProperties: false }
+    type: 'function',
+    name: 'find_local_deals',
+    description: 'Search the current public web for local listings and identify purchases that may be resold for profit. Use for specific items or a broad "resale opportunities" scan. Never invent listings, prices, resale values, or profit.',
+    parameters: {
+      type: 'object',
+      properties: {
+        category: { type: 'string', description: 'Specific item/category or "resale opportunities" for a broad scan.' },
+        location: { type: 'string', description: 'City/state or ZIP code. Do not guess if no usable location is known.' },
+        budget: { type: 'number', description: 'Maximum purchase price when provided.' },
+        radiusMiles: { type: 'number', description: 'Preferred local search radius in miles.' },
+        constraints: { type: 'string', description: 'Requirements such as minimum profit, easy transport, condition, title status, or categories to avoid.' },
+        resaleMode: { type: 'boolean', description: 'Set true when the goal is buying locally and reselling for profit.' },
+      },
+      required: ['category', 'location'],
+      additionalProperties: false,
+    },
   },
-  { type: 'function', name: 'list_deal_alerts', description: 'List the signed-in user\'s resale deal scans and their latest results.', parameters: { type: 'object', properties: {}, additionalProperties: false } },
-  { type: 'function', name: 'cancel_deal_alert', description: 'Disable one resale deal scan by id.', parameters: { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'], additionalProperties: false } },
 ];
 
-export function dealAlertHandlerFor(name, userId) {
-  if (name === 'set_deal_alert') return (args) => setDealAlertTool(userId, args);
-  if (name === 'list_deal_alerts') return () => listDealAlertsTool(userId);
-  if (name === 'cancel_deal_alert') return (args) => cancelDealAlertTool(userId, args);
-  return null;
+const RESALE_CATEGORIES = [
+  'quality tools and tool sets',
+  'lawn equipment and small engines',
+  'outdoor power equipment',
+  'name-brand electronics and appliances',
+  'bicycles and fitness equipment',
+  'fishing and boating equipment',
+  'automotive parts and accessories',
+  'quality furniture and home goods',
+  'collectibles and hobby equipment',
+];
+
+export async function findLocalDeals({ category, location, budget, radiusMiles, constraints, resaleMode = false } = {}) {
+  if (!client) return { error: 'deal_finder_not_configured' };
+  const item = String(category || '').trim();
+  const place = String(location || '').trim();
+  if (!item || !place) return { error: 'category_and_location_required' };
+
+  const broadResale = resaleMode || /^resale opportunities$|^resale$/i.test(item);
+  const searchTarget = broadResale
+    ? `Find the best current local resale opportunities across these categories: ${RESALE_CATEGORIES.join(', ')}.`
+    : `Find current public listings for ${item}.`;
+  const budgetText = Number.isFinite(Number(budget)) ? `Maximum purchase price: $${Number(budget).toLocaleString('en-US')}.` : 'No maximum purchase price was provided.';
+  const radiusText = Number.isFinite(Number(radiusMiles)) ? `Search within about ${Number(radiusMiles)} miles of ${place}.` : `Favor listings close to ${place}; use a practical local radius.`;
+  const constraintText = String(constraints || '').trim() || 'No additional constraints were provided.';
+
+  const prompt = `You are Mike Deal Finder, a local resale-hunting engine.\n${searchTarget}\nLocation: ${place}.\n${budgetText}\n${radiusText}\nOther requirements: ${constraintText}\n\nSearch multiple relevant public marketplaces and local listing sources when practical. Prioritize Facebook Marketplace listings first — search for them specifically (for example "site:facebook.com/marketplace" style queries or the item plus "facebook marketplace"). Only fall back to Craigslist if Facebook Marketplace turns up nothing relevant. Do not bypass logins, anti-bot controls, paywalls, or marketplace restrictions. Do not claim complete coverage of any marketplace.\n\nOnly consider tangible physical goods that can be individually bought and resold. Do NOT include real estate, land, or property listings. Do NOT include businesses, franchises, or storefronts/stores for sale. Do NOT include yard sale, garage sale, moving sale, or estate sale event listings — those are sale events, not individually priced items, and are out of scope even if items inside them might be relevant.\n\nThe goal is NOT to find something merely cheap. Find items that appear materially underpriced relative to a realistic local resale price. Prefer clean, easy-to-test, easy-to-transport items with strong buyer demand. Penalize missing critical information, obvious damage, title problems, counterfeit risk, high repair cost, bulky/slow inventory, and long driving distance.\n\nFor every candidate that you call a real opportunity, report: item/title, asking price, location, listing date if visible, condition/details, direct listing URL, estimated realistic resale range, estimated gross spread, likely fees/repair/travel costs when relevant, estimated net profit range, ROI estimate, a deal score from 0-100 (higher = stronger opportunity, weighing profit, ROI, and confidence together), confidence, and the specific reason it may be mispriced. If resale value or a cost cannot be supported by current evidence, mark it unknown instead of guessing.\n\nRank candidates by expected risk-adjusted profit. Return no more than 8 candidates and put the two strongest opportunities first. If there is not enough evidence for a genuine profit opportunity, say that clearly. Never invent a listing, price, resale value, profit, or comparable. Keep the response concise enough for voice.`;
+
+  try {
+    const response = await client.responses.create({
+      model: MODEL,
+      input: prompt,
+      tools: [{ type: 'web_search_preview' }],
+    });
+    return {
+      category: item,
+      location: place,
+      resaleMode: broadResale,
+      results: response.output_text?.trim() || 'No credible listings were returned.',
+      source: 'OpenAI web search over current public web sources',
+    };
+  } catch (error) {
+    console.error('[deal-finder] search failed:', error.message || error);
+    return { error: 'deal_finder_search_failed' };
+  }
 }
+
+function parseJsonArray(text) {
+  const raw = String(text || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : Array.isArray(parsed?.opportunities) ? parsed.opportunities : [];
+  } catch {
+    const match = raw.match(/\[[\s\S]*\]/);
+    if (!match) return [];
+    try { const parsed = JSON.parse(match[0]); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+  }
+}
+
+export async function findResaleDeals({ location, radiusMiles = 25, categories, maxBuy, minProfit = 300, minRoi = 30, constraints } = {}) {
+  if (!client) return { error: 'deal_finder_not_configured' };
+  const place = String(location || '').trim();
+  if (!place) return { error: 'category_and_location_required' };
+  const radius = Math.min(250, Math.max(1, Number(radiusMiles) || 25));
+  const categoryText = String(categories || RESALE_CATEGORIES.join(', ')).slice(0, 600);
+  const maxBuyText = Number.isFinite(Number(maxBuy)) ? `Maximum purchase price: $${Number(maxBuy).toLocaleString('en-US')}.` : 'No maximum purchase price; prioritize realistic, capital-efficient opportunities.';
+  const extra = String(constraints || '').trim().slice(0, 1000) || 'No extra constraints.';
+  const prompt = `You are Mike's automated local resale scanner. Search the current public web for listings near ${place}, within roughly ${radius} miles.\nCategories: ${categoryText}.\n${maxBuyText}\nMinimum target net profit: $${Number(minProfit) || 300}.\nMinimum target ROI: ${Number(minRoi) || 30}%.\nExtra rules: ${extra}\n\nPrioritize Facebook Marketplace listings first — search for them specifically (for example "site:facebook.com/marketplace" style queries or the item plus "facebook marketplace"). Only fall back to Craigslist if Facebook Marketplace turns up nothing relevant.\n\nDo not bypass logins, robots, anti-bot controls, paywalls, or site restrictions. Do not use or scrape sources that prohibit automated collection. If a marketplace is inaccessible, skip it rather than pretending you searched it.\n\nOnly consider tangible physical goods that can be individually bought and resold. Do NOT include real estate, land, or property listings. Do NOT include businesses, franchises, or storefronts/stores for sale. Do NOT include yard sale, garage sale, moving sale, or estate sale event listings — those are sale events, not individually priced items, and are out of scope even if items inside them might otherwise be relevant.\n\nFind only plausible buy-low/resell-higher opportunities. Use current public listing evidence and current resale/comparable evidence when available. Account for realistic selling fees, repair reserve, travel/pickup cost, and obvious risk. Do not treat an asking price as a completed sale. Do not call an item profitable when the evidence is too weak.\n\nReturn ONLY valid JSON: an array of up to 8 objects. Each object must have exactly these fields: title, category, askingPrice, resaleLow, resaleExpected, estimatedProfit, roiPercent, dealScore, location, why, redFlags, confidence, url. Use null when a value cannot be supported. estimatedProfit must be a conservative net estimate, not gross spread. roiPercent is estimatedProfit divided by askingPrice times 100. dealScore is a 0-100 overall opportunity score you calculate from profit, ROI, and confidence together — higher means a stronger deal. confidence must be high, medium, or low. URLs must be direct public listing URLs when available.\n\nRank by risk-adjusted profit and freshness. Only include opportunities where estimatedProfit >= ${Number(minProfit) || 300} and roiPercent >= ${Number(minRoi) || 30}. Never invent a listing, URL, price, resale value, fee, repair cost, profit, comparable, or deal score.`;
+  try {
+    const response = await client.responses.create({
+      model: MODEL,
+      input: prompt,
+      tools: [{ type: 'web_search_preview' }],
+    });
+    const text = response.output_text?.trim() || '';
+    return {
+      location: place,
+      opportunities: parseJsonArray(text),
+      raw: text,
+      source: 'OpenAI web search over current public web sources',
+    };
+  } catch (error) {
+    console.error('[deal-finder] resale scan failed:', error.message || error);
+    return { error: 'deal_finder_search_failed' };
+  }
+}
+
+export const DEAL_FINDER_HANDLERS = {
+  find_local_deals: findLocalDeals,
+};
