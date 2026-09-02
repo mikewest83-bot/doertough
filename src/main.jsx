@@ -246,7 +246,6 @@ function App() {
         <p className="pricing-trial">7 days free. No card to start.</p>
         <ul className="pricing-list">
           <li>Voice and text, any hour of the day</li>
-          <li>200 minutes of talking with Mike a month</li>
           <li>He remembers your work between conversations</li>
           <li>Cancel anytime — and nothing to cancel during the trial</li>
         </ul>
