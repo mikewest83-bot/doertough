@@ -107,6 +107,104 @@ export async function getConversation(id, { limit = 300 } = {}) {
   };
 }
 
+// ── User directory: who to check on ──────────────────────
+
+// The owner's list of users, most-recently-active first: who they are, how
+// active they've been, and whether they're moving right now. "live" is the
+// same recency label the conversation list uses - a poll target, not a
+// stream. This reads users and their message counts; it collects nothing.
+export async function listUsers({ minutes = 43200, limit = 100 } = {}) {
+  const mins = clamp(minutes, 43200, 1, 60 * 24 * 90);
+  const max = clamp(limit, 100, 1, 500);
+  const { rows } = await query(`
+    SELECT u.id,
+           u.name,
+           u.email,
+           u.plan,
+           u.role,
+           u.subscription_status,
+           u.created_at,
+           u.last_seen_at,
+           COUNT(DISTINCT c.id)::int                                   AS conversations,
+           COUNT(m.id)::int                                            AS turns,
+           MAX(m.created_at)                                           AS last_message_at,
+           (u.last_seen_at >= now() - ($1 || ' seconds')::interval)    AS live
+      FROM users u
+      LEFT JOIN conversations c ON c.user_id = u.id
+      LEFT JOIN messages m ON m.conversation_id = c.id
+     WHERE u.last_seen_at >= now() - ($2 || ' minutes')::interval
+        OR u.created_at   >= now() - ($2 || ' minutes')::interval
+     GROUP BY u.id
+     ORDER BY (u.last_seen_at >= now() - ($1 || ' seconds')::interval) DESC,
+              u.last_seen_at DESC NULLS LAST
+     LIMIT $3
+  `, [String(LIVE_WINDOW_SECONDS), String(mins), max]);
+
+  return {
+    liveWindowSeconds: LIVE_WINDOW_SECONDS,
+    users: rows.map((row) => ({
+      id: Number(row.id),
+      name: row.name || null,
+      email: row.email || null,
+      plan: row.plan || null,
+      role: row.role || null,
+      status: row.subscription_status || null,
+      createdAt: row.created_at,
+      lastSeenAt: row.last_seen_at,
+      lastMessageAt: row.last_message_at,
+      conversations: row.conversations || 0,
+      turns: row.turns || 0,
+      live: Boolean(row.live),
+    })),
+  };
+}
+
+// One user's recent conversations - what you get when you click their row.
+// Reuses the same conversation shape the main list returns.
+export async function getUserConversations(userId, { limit = 25 } = {}) {
+  const uid = Number(userId);
+  if (!Number.isInteger(uid) || uid <= 0) return null;
+  const max = clamp(limit, 25, 1, 200);
+
+  const [head, list] = await Promise.all([
+    query('SELECT id, name, email, plan, role, subscription_status, created_at, last_seen_at FROM users WHERE id = $1', [uid]),
+    query(`
+      SELECT c.id,
+             c.created_at                                  AS started_at,
+             MAX(m.created_at)                             AS last_at,
+             COUNT(m.id)::int                              AS turns,
+             (MAX(m.created_at) >= now() - ($1 || ' seconds')::interval) AS live,
+             (ARRAY_AGG(m.content ORDER BY m.created_at DESC))[1]        AS last_message,
+             (ARRAY_AGG(m.role    ORDER BY m.created_at DESC))[1]        AS last_role
+        FROM conversations c
+        LEFT JOIN messages m ON m.conversation_id = c.id
+       WHERE c.user_id = $2
+       GROUP BY c.id
+       ORDER BY COALESCE(MAX(m.created_at), c.created_at) DESC
+       LIMIT $3
+    `, [String(LIVE_WINDOW_SECONDS), uid, max]),
+  ]);
+  const u = head.rows[0];
+  if (!u) return null;
+
+  return {
+    user: {
+      id: Number(u.id), name: u.name || null, email: u.email || null, plan: u.plan || null,
+      role: u.role || null, status: u.subscription_status || null,
+      createdAt: u.created_at, lastSeenAt: u.last_seen_at,
+    },
+    conversations: list.rows.map((row) => ({
+      id: Number(row.id),
+      startedAt: row.started_at,
+      lastAt: row.last_at,
+      turns: row.turns || 0,
+      live: Boolean(row.live),
+      lastRole: row.last_role || null,
+      preview: row.last_message ? String(row.last_message).slice(0, 180) : null,
+    })),
+  };
+}
+
 // ── Voice: new collection, off by default ────────────────
 
 let voiceSchema = null;

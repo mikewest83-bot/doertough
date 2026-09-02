@@ -16,14 +16,14 @@ const target = path.join(root, 'server', 'index.mjs');
 let source = fs.readFileSync(target, 'utf8');
 
 try {
-  const importLine = "import { listConversations, getConversation, listVoiceCalls, getVoiceCall, recordVoiceTurn, voiceTranscriptsEnabled } from './owner-conversations.mjs';";
+  const importLine = "import { listConversations, getConversation, listVoiceCalls, getVoiceCall, recordVoiceTurn, voiceTranscriptsEnabled, listUsers, getUserConversations } from './owner-conversations.mjs';";
   if (!source.includes('owner-conversations.mjs')) {
     const anchor = "import { getOwnerMetrics } from './owner-metrics.mjs';";
     if (!source.includes(anchor)) throw new Error('owner conversations import anchor not found (run after patch-owner-metrics)');
     source = source.replace(anchor, `${anchor}\n${importLine}`);
   }
 
-  if (!source.includes("app.get('/api/owner/conversations'")) {
+  if (!source.includes("app.get('/api/owner/users'")) {
     const marker = "app.get('/api/owner/metrics', authRequired, async (req, res) => {";
     const index = source.indexOf(marker);
     if (index < 0) throw new Error('owner conversations route anchor not found (run after patch-owner-metrics)');
@@ -35,9 +35,34 @@ try {
     const routes = [
       '',
       '',
-      '// ===== Owner conversation viewer (read-only, owner-gated) =====',
-      '// Text is read straight from conversations/messages, which the app already',
-      '// stores. Voice returns empty unless VOICE_TRANSCRIPTS=1.',
+      '// ===== Owner user directory + conversation viewer (read-only, owner-gated) =====',
+      '// The directory (who to check on) and the conversations behind each user',
+      '// read straight from users/conversations/messages, already stored. Voice',
+      '// returns empty unless VOICE_TRANSCRIPTS=1.',
+      "app.get('/api/owner/users', authRequired, async (req, res) => {",
+      "  if (!isOwner(req.user)) return res.status(403).json({ error: 'forbidden' });",
+      '  try {',
+      '    const minutes = Number(req.query.minutes) || 43200;',
+      '    const limit = Number(req.query.limit) || 100;',
+      '    res.json(await listUsers({ minutes, limit }));',
+      '  } catch (error) {',
+      "    console.error('[owner-conversations] users failed:', error.message || error);",
+      "    res.status(500).json({ error: 'owner_users_unavailable' });",
+      '  }',
+      '});',
+      '',
+      "app.get('/api/owner/users/:id', authRequired, async (req, res) => {",
+      "  if (!isOwner(req.user)) return res.status(403).json({ error: 'forbidden' });",
+      '  try {',
+      '    const found = await getUserConversations(req.params.id);',
+      "    if (!found) return res.status(404).json({ error: 'not_found' });",
+      '    res.json(found);',
+      '  } catch (error) {',
+      "    console.error('[owner-conversations] user read failed:', error.message || error);",
+      "    res.status(500).json({ error: 'owner_users_unavailable' });",
+      '  }',
+      '});',
+      '',
       "app.get('/api/owner/conversations', authRequired, async (req, res) => {",
       "  if (!isOwner(req.user)) return res.status(403).json({ error: 'forbidden' });",
       '  try {',
