@@ -4,8 +4,8 @@ const mainPath = 'src/main.jsx';
 let main = fs.readFileSync(mainPath, 'utf8');
 
 const helperAnchor = "  const [input, setInput] = useState('');\n";
-const helper = `  const mikeTelemetry = (event) => {\n    try {\n      const allowed = new Set(['landing_view','prompt_submitted','first_response','second_message','account_created','voice_started','tool_result','abandoned']);\n      if (!allowed.has(event)) return;\n      void fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phase: 'telemetry', name: event, message: 'product_event' }) }).catch(() => {});\n    } catch {}\n  };\n`;
-const telemetryRef = `  const telemetryRef = useRef({ prompts: 0, responses: 0, accountCreated: false, voiceStarted: false });\n`;
+const helper = `  const mikeTelemetry = (event) => {\n    try {\n      const allowed = new Set(['landing_view','prompt_submitted','first_response','second_message','account_created','voice_started','abandoned']);\n      if (!allowed.has(event)) return;\n      void fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phase: 'telemetry', name: event, message: 'product_event' }) }).catch(() => {});\n    } catch {}\n  };\n`;
+const telemetryRef = `  const telemetryRef = useRef({ prompts: 0, responses: 0, accountCreated: false });\n`;
 
 if (!main.includes('const mikeTelemetry = (event) =>')) {
   if (!main.includes(helperAnchor)) throw new Error('[patch-mike-telemetry] state anchor not found');
@@ -35,13 +35,13 @@ if (!main.includes("telemetryRef.current.responses += 1") && main.includes(respo
 }
 
 const voiceTranscriptAnchor = "else if (message.type === 'response.audio_transcript.done') { const text = String(message.transcript || '').trim(); if (text) setMessages((prev) => [...prev, { role: 'mike', text, voice: true }]); }";
-if (!main.includes("voice_first_response") && main.includes(voiceTranscriptAnchor)) {
+if (main.includes(voiceTranscriptAnchor)) {
   const replacement = "else if (message.type === 'response.audio_transcript.done') { const text = String(message.transcript || '').trim(); if (text) { setMessages((prev) => [...prev, { role: 'mike', text, voice: true }]); telemetryRef.current.responses += 1; if (telemetryRef.current.responses === 1) mikeTelemetry('first_response'); } }";
   main = main.replace(voiceTranscriptAnchor, replacement);
 }
 
-const voiceAnchor = "const startVoice = async () => {";
-if (!main.includes("mikeTelemetry('voice_started')") && main.includes(voiceAnchor)) main = main.replace(voiceAnchor, voiceAnchor + " mikeTelemetry('voice_started');");
+const voiceAnchor = "const startRealtimeConversation = async () => {";
+if (!main.includes("mikeTelemetry('voice_started')") && main.includes(voiceAnchor)) main = main.replace(voiceAnchor, voiceAnchor + "\n    mikeTelemetry('voice_started');");
 
 const tokenAnchor = "writeToken(data.token);";
 if (!main.includes("mikeTelemetry('account_created')") && main.includes(tokenAnchor)) {
