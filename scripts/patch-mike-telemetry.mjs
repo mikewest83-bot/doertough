@@ -2,27 +2,56 @@ import fs from 'node:fs';
 
 const mainPath = 'src/main.jsx';
 let main = fs.readFileSync(mainPath, 'utf8');
+
 const helperAnchor = "  const [input, setInput] = useState('');\n";
-const helper = `  const mikeTelemetry = (event) => {\n    try {\n      const allowed = new Set(['landing_view','prompt_submitted','first_response','second_message','voice_started','abandoned']);\n      if (!allowed.has(event)) return;\n      void fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phase: 'telemetry', name: event, message: 'product_event' }) }).catch(() => {});\n    } catch {}\n  };\n`;
+const helper = `  const mikeTelemetry = (event) => {\n    try {\n      const allowed = new Set(['landing_view','prompt_submitted','first_response','second_message','account_created','voice_started','tool_result','abandoned']);\n      if (!allowed.has(event)) return;\n      void fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phase: 'telemetry', name: event, message: 'product_event' }) }).catch(() => {});\n    } catch {}\n  };\n`;
+const telemetryRef = `  const telemetryRef = useRef({ prompts: 0, responses: 0, accountCreated: false, voiceStarted: false });\n`;
+
 if (!main.includes('const mikeTelemetry = (event) =>')) {
   if (!main.includes(helperAnchor)) throw new Error('[patch-mike-telemetry] state anchor not found');
   main = main.replace(helperAnchor, helperAnchor + helper);
 }
+if (!main.includes('const telemetryRef = useRef(')) {
+  const refAnchor = "  const photoInputRef = useRef(null);\n";
+  if (!main.includes(refAnchor)) throw new Error('[patch-mike-telemetry] ref anchor not found');
+  main = main.replace(refAnchor, refAnchor + telemetryRef);
+}
+
 if (!main.includes("mikeTelemetry('landing_view')")) {
   const pos = main.indexOf("  useEffect(() => {", main.indexOf(helperAnchor));
   if (pos < 0) throw new Error('[patch-mike-telemetry] effect anchor not found');
   main = main.slice(0, pos) + "  useEffect(() => { mikeTelemetry('landing_view'); }, []);\n\n" + main.slice(pos);
 }
+
 const askAnchor = "  const ask = async (raw) => { const text = (raw || '').trim();";
-if (!main.includes("mikeTelemetry('prompt_submitted')")) {
+if (!main.includes("telemetryRef.current.prompts += 1")) {
   if (!main.includes(askAnchor)) throw new Error('[patch-mike-telemetry] ask anchor not found');
-  main = main.replace(askAnchor, askAnchor + "\n    mikeTelemetry('prompt_submitted');");
+  main = main.replace(askAnchor, askAnchor + "\n    telemetryRef.current.prompts += 1; mikeTelemetry('prompt_submitted'); if (telemetryRef.current.prompts === 2) mikeTelemetry('second_message');");
 }
+
+const responseAnchor = "setMessages((prev) => [...prev, { role: 'mike', text: data.text }]);";
+if (!main.includes("telemetryRef.current.responses += 1") && main.includes(responseAnchor)) {
+  main = main.replace(responseAnchor, responseAnchor + " telemetryRef.current.responses += 1; if (telemetryRef.current.responses === 1) mikeTelemetry('first_response');");
+}
+
+const voiceTranscriptAnchor = "else if (message.type === 'response.audio_transcript.done') { const text = String(message.transcript || '').trim(); if (text) setMessages((prev) => [...prev, { role: 'mike', text, voice: true }]); }";
+if (!main.includes("voice_first_response") && main.includes(voiceTranscriptAnchor)) {
+  const replacement = "else if (message.type === 'response.audio_transcript.done') { const text = String(message.transcript || '').trim(); if (text) { setMessages((prev) => [...prev, { role: 'mike', text, voice: true }]); telemetryRef.current.responses += 1; if (telemetryRef.current.responses === 1) mikeTelemetry('first_response'); } }";
+  main = main.replace(voiceTranscriptAnchor, replacement);
+}
+
 const voiceAnchor = "const startVoice = async () => {";
 if (!main.includes("mikeTelemetry('voice_started')") && main.includes(voiceAnchor)) main = main.replace(voiceAnchor, voiceAnchor + " mikeTelemetry('voice_started');");
+
+const tokenAnchor = "writeToken(data.token);";
+if (!main.includes("mikeTelemetry('account_created')") && main.includes(tokenAnchor)) {
+  main = main.replace(tokenAnchor, tokenAnchor + " if (authMode === 'register' && !telemetryRef.current.accountCreated) { telemetryRef.current.accountCreated = true; mikeTelemetry('account_created'); }");
+}
+
 if (!main.includes("mikeTelemetry('abandoned')") && main.includes('  return (')) {
   const abandonment = `  useEffect(() => {\n    const onHide = () => { if (document.visibilityState === 'hidden' && messages.length <= 1) mikeTelemetry('abandoned'); };\n    document.addEventListener('visibilitychange', onHide);\n    return () => document.removeEventListener('visibilitychange', onHide);\n  }, [messages.length]);\n\n`;
   main = main.replace('  return (', abandonment + '  return (');
 }
+
 fs.writeFileSync(mainPath, main);
-console.log('[patch-mike-telemetry] privacy-safe funnel events wired');
+console.log('[patch-mike-telemetry] privacy-safe funnel events wired: landing, prompt, first response, second message, account creation, voice, abandonment');
