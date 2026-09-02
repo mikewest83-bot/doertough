@@ -238,10 +238,18 @@ async function callClaude({ instructions, input, tools }) {
     error.status = 500;
     throw error;
   }
+  // Prompt caching. Anthropic builds its cache prefix tools -> system -> messages, so one
+  // breakpoint at the end of `system` covers the tool schemas AND the persona - roughly 10k
+  // of the ~11k input tokens, byte-identical on every call. Writes cost 1.25x, reads 0.1x,
+  // 5-minute TTL refreshed on each hit, so this only loses if opus fires less than once per
+  // window. Guard on a non-empty string: the block form needs real text or the API 400s.
+  // Kill switch: MIKE_OPUS_CACHE=0.
+  const cacheOn = String(process.env.MIKE_OPUS_CACHE || '1').trim() !== '0' && typeof instructions === 'string' && instructions.trim().length > 0;
+  const system = cacheOn ? [{ type: 'text', text: instructions, cache_control: { type: 'ephemeral' } }] : instructions;
   const response = await fetch(ANTHROPIC_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: Number(process.env.MIKE_OPUS_MAX_TOKENS || 8192), system: instructions, messages, tools: toAnthropicTools(tools) }),
+    body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: Number(process.env.MIKE_OPUS_MAX_TOKENS || 8192), system, messages, tools: toAnthropicTools(tools) }),
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -255,6 +263,9 @@ async function callClaude({ instructions, input, tools }) {
     if (block.type === 'text') outputText += block.text || '';
     else if (block.type === 'tool_use') output.push({ type: 'function_call', call_id: block.id, name: block.name, arguments: JSON.stringify(block.input || {}) });
   }
+  // read close to write means the prefix is being reused; read stuck at 0 means it is changing between calls.
+  const u = payload.usage || {};
+  if (cacheOn) console.log(`[brain] opus cache write=${u.cache_creation_input_tokens ?? 0} read=${u.cache_read_input_tokens ?? 0} uncached=${u.input_tokens ?? 0}`);
   return { output, output_text: outputText.trim(), usage: payload.usage, _brain: 'opus' };
 }
 
