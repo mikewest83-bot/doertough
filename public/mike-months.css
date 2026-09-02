@@ -1,0 +1,3 @@
+/* Mike Months keeps the referral panel intentionally small and mobile-safe. */
+#mike-months-card { box-sizing: border-box; }
+#mike-months-card, #mike-months-card * { box-sizing: border-box; }
