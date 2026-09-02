@@ -3,6 +3,8 @@
   const STORAGE_KEY = 'mike_location';
   const LOCATION_EVENT = 'mike-location-ready';
 
+  const LOCATE_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 auto"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path><circle cx="12" cy="12" r="8"></circle></svg>';
+
   const getLocationInput = () => {
     const fields = [...document.querySelectorAll('input, textarea')];
     return fields.find((el) => {
@@ -34,11 +36,16 @@
     }
   };
 
+  const setLabel = (button, text) => {
+    const label = button.querySelector('.mike-loc-label');
+    if (label) label.textContent = text;
+  };
+
   const showStatus = (button, message, error = false) => {
-    button.textContent = message;
+    setLabel(button, message);
     button.dataset.error = error ? '1' : '0';
     window.setTimeout(() => {
-      if (document.getElementById(BUTTON_ID) === button) button.textContent = '📍 Use My Location';
+      if (document.getElementById(BUTTON_ID) === button) setLabel(button, 'Use My Location');
     }, 3500);
   };
 
@@ -48,7 +55,7 @@
       return;
     }
     button.disabled = true;
-    button.textContent = '📍 Finding you…';
+    setLabel(button, 'Finding you…');
     navigator.geolocation.getCurrentPosition(async ({ coords }) => {
       const { latitude, longitude } = coords;
       const place = await reverseGeocode(latitude, longitude);
@@ -57,7 +64,7 @@
       const input = getLocationInput();
       if (input) setReactValue(input, value);
       window.dispatchEvent(new CustomEvent(LOCATION_EVENT, { detail: { value, latitude, longitude } }));
-      showStatus(button, place ? `📍 ${place}` : '📍 Location ready');
+      showStatus(button, place || 'Location ready');
       button.disabled = false;
     }, (error) => {
       const message = error.code === 1 ? 'Allow location access' : 'Could not get location';
@@ -72,16 +79,18 @@
     const button = document.createElement('button');
     button.id = BUTTON_ID;
     button.type = 'button';
-    button.textContent = '📍 Use My Location';
+    button.innerHTML = `${LOCATE_ICON}<span class="mike-loc-label">Use My Location</span>`;
     button.title = 'Use your device location for nearby searches';
     button.setAttribute('aria-label', 'Use My Location');
-    button.style.cssText = 'margin:6px 0;padding:7px 11px;border:1px solid rgba(255,255,255,.16);border-radius:999px;background:#111;color:#fff;font:600 13px system-ui,sans-serif;cursor:pointer;';
+    button.style.cssText = 'display:inline-flex;align-items:center;gap:7px;margin:6px 0;padding:10px 14px;border:1px solid rgba(255,255,255,.18);border-radius:999px;background:#11161b;color:#fff;font:700 13px system-ui,sans-serif;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.3);transition:transform .15s ease,border-color .15s ease;';
+    button.addEventListener('mouseenter', () => { button.style.borderColor = 'rgba(39,169,255,.6)'; button.style.transform = 'translateY(-1px)'; });
+    button.addEventListener('mouseleave', () => { button.style.borderColor = 'rgba(255,255,255,.18)'; button.style.transform = 'none'; });
     button.addEventListener('click', () => locate(button));
     if (input?.parentElement) input.parentElement.insertBefore(button, input);
-    else document.body.appendChild(Object.assign(button, { style: button.style }));
+    else document.body.appendChild(button);
     if (!input?.parentElement) {
       button.style.position = 'fixed';
-      button.style.right = '16px';
+      button.style.right = '14px';
       // Keep the location control above the fixed Resale Deals CTA instead of overlapping it.
       button.style.bottom = '84px';
       button.style.zIndex = '9998';
