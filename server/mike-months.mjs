@@ -132,6 +132,32 @@ export async function noteSubscriptionForReferral(userId, subscription) {
   return rows[0] || null;
 }
 
+// A cancellation/refund during the protected window must permanently block
+// the referral reward. Stripe can report cancel_at_period_end while the
+// subscription is still technically active, so the qualification query alone
+// is not enough to enforce the business rule.
+export async function rejectReferralForUser(userId, reason = 'subscription_canceled_during_refund_window') {
+  if (!userId) return 0;
+  const { rowCount } = await query(
+    `UPDATE referrals
+        SET status = 'rejected', rejected_reason = $2
+      WHERE referred_user_id = $1 AND status IN ('pending','subscribed')`,
+    [userId, String(reason)]
+  );
+  return Number(rowCount || 0);
+}
+
+export async function rejectReferralForCustomer(customerId, reason = 'subscription_refunded_during_refund_window') {
+  if (!customerId) return 0;
+  const { rowCount } = await query(
+    `UPDATE referrals
+        SET status = 'rejected', rejected_reason = $2
+      WHERE stripe_customer_id = $1 AND status IN ('pending','subscribed')`,
+    [String(customerId), String(reason)]
+  );
+  return Number(rowCount || 0);
+}
+
 async function awardReferral(referralId) {
   if (!pool) throw new Error('database_not_configured');
   const client = await pool.connect();
