@@ -1,5 +1,5 @@
 const OPENAI_MODELS = {
-  mini: process.env.MIKE_MINI_MODEL || 'gpt-4o-mini',
+  mini: process.env.MIKE_MINI_MODEL || 'gpt-5.6-luna',
   terra: 'gpt-5.6-terra',
   sol: 'gpt-5.6-sol',
 };
