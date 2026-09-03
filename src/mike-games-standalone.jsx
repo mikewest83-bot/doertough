@@ -63,9 +63,16 @@ function mount() {
   }
   const host = document.createElement('div');
   host.dataset.mikeGamesRoot = 'true';
-  const photoButton = app.querySelector('.vision-photo-button');
-  if (photoButton?.parentElement) {
-    photoButton.parentElement.insertAdjacentElement('afterend', host);
+  // Games belong inside the page, above the footer. The old anchor was
+  // .vision-photo-button, a class the build no longer produces, so this always
+  // fell through to app.after() and rendered the whole section BELOW the site
+  // footer - the one element that is supposed to be last.
+  const footer = app.querySelector('.site-footer');
+  const photoWrap = app.querySelector('.vision-photo-button')?.parentElement || app.querySelector('#mike-vision-wrap');
+  if (footer?.parentElement) {
+    footer.parentElement.insertBefore(host, footer);
+  } else if (photoWrap) {
+    photoWrap.insertAdjacentElement('afterend', host);
   } else {
     app.after(host);
   }
