@@ -8,18 +8,22 @@ import { LIVE_TOOLS as BASE_TOOLS, LIVE_TOOL_HANDLERS as BASE_HANDLERS } from '.
 import { BUSINESS_TOOLS, BUSINESS_TOOL_HANDLERS } from './business.mjs';
 import { FREE_TOOLS, FREE_TOOL_HANDLERS } from './free-tools.mjs';
 import { FIELD_TOOLS, FIELD_TOOL_HANDLERS } from './field-tools.mjs';
+import { CODING_TOOLS, CODING_TOOL_HANDLERS } from './coding-tools.mjs';
+import { REMINDER_TOOLS, setReminderTool, listRemindersTool, cancelReminderTool, ensureReminderSchema } from './reminders.mjs';
+import { reminderHandlerFor, startReminderScheduler } from './reminders.mjs';
+import { RESALE_ALERT_TOOLS, resaleAlertHandlerFor, startResaleWatchScheduler } from './resale-alerts.mjs';
 import { MONEY_TOOLS, MONEY_TOOL_HANDLERS } from './money-tools.mjs';
 import { DOERTOUGH_INTELLIGENCE_TOOLS, DOERTOUGH_INTELLIGENCE_HANDLERS } from './doertough-intelligence-tools.mjs';
 import { DEAL_FINDER_TOOLS, DEAL_FINDER_HANDLERS } from './deal-finder.mjs';
-import { REMINDER_TOOLS, reminderHandlerFor, startReminderScheduler } from './reminders.mjs';
+
 import { DEAL_ALERT_TOOLS, dealAlertHandlerFor, startDealAlertScheduler } from './deal-alerts.mjs';
 import { createMikeToolGateway } from './mike-tool-gateway.mjs';
 import { installGuards } from './guard.mjs';
+import { ensureRbacSchema, getRbacOverview } from './rbac.mjs';
 import { mailerConfigured } from './mailer.mjs';
 import { MIKE_INSTRUCTIONS } from './persona.mjs';
 import { getRelevantMemories, listMemories, saveMemory, deleteMemory, memoryPrompt, CATEGORIES } from './memory.mjs';
 import {
-  migrate,
   recordVoiceSession,
   closeVoiceSession,
   countVoiceSessions,
@@ -35,6 +39,7 @@ import {
   hasActiveSubscription,
 } from './billing.mjs';
 import { initializeSpeechEngine, getSpeechEngineToken } from './speech-engine.mjs';
+import { analyzeVisionImage } from './vision.mjs';
 import {
   verifyStripeSignature,
   stripeWebhookConfigured,
@@ -51,7 +56,15 @@ import {
   isOwner,
   authConfigured,
 } from './auth.mjs';
+import { reserveVoiceSession, releaseVoiceReservation } from './voice-reservations.mjs';
+import { getRealtimeToolHandler, isRealtimeToolAllowed } from './realtime-tools.mjs';
 import { OWNER_ONLY_TOOLS } from './tool-access.mjs';
+import { pushConfigured, pushPublicKey, pushSubscribeHandler, pushUnsubscribeHandler } from './push-notifications.mjs';
+import { smsConfigured, startPhoneVerification, confirmPhoneVerification, removePhoneSubscription, getSmsStatus } from './sms-notifications.mjs';
+import { getOwnerMetrics } from './owner-metrics.mjs';
+import { listConversations, getConversation, listVoiceCalls, getVoiceCall, recordVoiceTurn, voiceTranscriptsEnabled, listUsers, getUserConversations, getActivitySummary, searchConversations } from './owner-conversations.mjs';
+import { generateBrainResponse, getBrainStatus } from './brain-router.mjs';
+import { getBrainStatus } from './brain-router.mjs';
 
 const LIVE_TOOLS = [
   ...BASE_TOOLS,
@@ -62,6 +75,7 @@ const LIVE_TOOLS = [
   // DOERTOUGH_INTELLIGENCE_TOOLS already arrive via BASE_TOOLS -> DICTIONARY_TOOLS.
   ...DEAL_FINDER_TOOLS,
   ...REMINDER_TOOLS,
+  ...RESALE_ALERT_TOOLS,
   ...DEAL_ALERT_TOOLS,
 ];
 
@@ -69,6 +83,10 @@ const ACCOUNT_SCOPED_TOOL_HANDLERS = Object.fromEntries([
   ...REMINDER_TOOLS.map((tool) => [
     tool.name,
     (args = {}) => reminderHandlerFor(tool.name, args?.user?.id)?.(args),
+  ]),
+  ...RESALE_ALERT_TOOLS.map((tool) => [
+    tool.name,
+    (args = {}) => resaleAlertHandlerFor(tool.name, args?.user?.id)?.(args),
   ]),
   ...DEAL_ALERT_TOOLS.map((tool) => [
     tool.name,
@@ -97,7 +115,7 @@ const NON_OWNER_NOTE =
   'know about the portfolio is fair game.';
 
 const mikeToolGateway = createMikeToolGateway({
-  handlers: LIVE_TOOL_HANDLERS,
+  handlers: { ...LIVE_TOOL_HANDLERS, find_local_deals: (input) => DEAL_FINDER_HANDLERS.find_local_deals?.(input) },
   authorize: async ({ name, user }) => {
     const owner = isOwner(user);
     return owner || !OWNER_ONLY_TOOLS.has(name);
@@ -107,7 +125,7 @@ const mikeToolGateway = createMikeToolGateway({
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.6-terra';
 const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 45_000);
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: OPENAI_TIMEOUT_MS, maxRetries: 0 })
@@ -159,12 +177,217 @@ app.use(express.json({ limit: '15mb' }));
 app.use(optionalAuth);
 installGuards(app);
 
+// Vision analysis is authenticated and must remain behind the shared guard stack.
+app.post('/api/vision/analyze', authRequired, analyzeVisionImage);
+
+// ===== Realtime WebRTC answer proxy =====
+app.post('/api/realtime/webrtc-answer', authRequired, async (req, res) => {
+  try {
+    const sdp = String(req.body?.sdp || '');
+    const clientSecret = String(req.get('x-mike-realtime-token') || '').trim();
+    if (!sdp || sdp.length > 200000) return res.status(400).json({ error: 'sdp_invalid' });
+    if (!clientSecret) return res.status(401).json({ error: 'realtime_token_required' });
+
+    const form = new FormData();
+    form.append('sdp', sdp);
+    const origin = String(process.env.PUBLIC_APP_ORIGIN || 'https://doertoughmikeai.com').replace(/\/$/, '');
+    const upstream = await fetch('https://api.openai.com/v1/realtime/calls', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + clientSecret,
+        Origin: origin,
+      },
+      body: form,
+    });
+
+    const answer = await upstream.text();
+    if (!upstream.ok) {
+      console.error('[realtime] WebRTC answer failed:', upstream.status, answer.slice(0, 800));
+      return res.status(upstream.status).json({ error: 'realtime_webrtc_failed', detail: answer.slice(0, 800) });
+    }
+    res.type('application/sdp').send(answer);
+  } catch (error) {
+    console.error('[realtime] WebRTC proxy error:', error.message || error);
+    res.status(error.status || 502).json({ error: error.message || 'realtime_webrtc_proxy_failed' });
+  }
+});
+
+
 // ===== Accounts =====
 app.post('/api/auth/register', register);
 app.post('/api/auth/login', login);
 app.get('/api/auth/me', authRequired, me);
 app.post('/api/auth/forgot-password', requestPasswordReset);
 app.post('/api/auth/reset-password', resetPassword);
+
+
+// ===== Browser push notifications =====
+app.get('/api/push/public-key', (_req, res) => {
+  if (!pushConfigured()) return res.status(503).json({ error: 'push_not_configured' });
+  res.json({ publicKey: pushPublicKey() });
+});
+app.post('/api/push/subscribe', authRequired, pushSubscribeHandler);
+app.post('/api/push/unsubscribe', authRequired, pushUnsubscribeHandler);
+
+// ===== Text (SMS) deal alerts =====
+app.get('/api/sms/status', authRequired, async (req, res) => {
+  try { res.json(await getSmsStatus(req.user.id)); }
+  catch (error) { console.error('[sms] status failed:', error.message || error); res.status(500).json({ error: 'sms_status_failed' }); }
+});
+app.post('/api/sms/subscribe', authRequired, async (req, res) => {
+  if (!smsConfigured()) return res.status(503).json({ error: 'sms_not_configured' });
+  try {
+    const { phone } = await startPhoneVerification(req.user.id, req.body?.phone);
+    res.json({ ok: true, phone });
+  } catch (error) {
+    const code = error.message || 'sms_subscribe_failed';
+    const status = code === 'sms_phone_invalid' ? 400 : code === 'sms_not_configured' ? 503 : 500;
+    res.status(status).json({ error: code });
+  }
+});
+app.post('/api/sms/verify', authRequired, async (req, res) => {
+  try {
+    const { phone } = await confirmPhoneVerification(req.user.id, req.body?.code);
+    res.json({ ok: true, phone });
+  } catch (error) {
+    const code = error.message || 'sms_verify_failed';
+    const status = ['sms_code_required', 'sms_code_mismatch', 'sms_code_expired', 'sms_no_pending_code'].includes(code) ? 400 : 500;
+    res.status(status).json({ error: code });
+  }
+});
+app.post('/api/sms/unsubscribe', authRequired, async (req, res) => {
+  try { res.json({ ok: true, removed: await removePhoneSubscription(req.user.id) }); }
+  catch (error) { console.error('[sms] unsubscribe failed:', error.message || error); res.status(500).json({ error: 'sms_unsubscribe_failed' }); }
+});
+
+// ===== Owner-only roadmap controls =====
+app.get('/api/owner/overview', authRequired, async (req, res) => {
+  if (!isOwner(req.user)) return res.status(403).json({ error: 'forbidden' });
+  try {
+    res.json(await getRbacOverview());
+  } catch (error) {
+    console.error('[owner] overview failed:', error.message || error);
+    res.status(500).json({ error: 'owner_overview_unavailable' });
+  }
+});
+
+// ===== Owner production metrics (read-only) =====
+app.get('/api/owner/metrics', authRequired, async (req, res) => {
+  if (!isOwner(req.user)) return res.status(403).json({ error: 'forbidden' });
+  try {
+    res.json(await getOwnerMetrics());
+  } catch (error) {
+    console.error('[owner-metrics] route failed:', error.message || error);
+    res.status(500).json({ error: 'owner_metrics_unavailable' });
+  }
+});
+
+// ===== Owner user directory + conversation viewer (read-only, owner-gated) =====
+// The directory (who to check on) and the conversations behind each user
+// read straight from users/conversations/messages, already stored. Voice
+// returns empty unless VOICE_TRANSCRIPTS=1.
+app.get('/api/owner/users', authRequired, async (req, res) => {
+  if (!isOwner(req.user)) return res.status(403).json({ error: 'forbidden' });
+  try {
+    const minutes = Number(req.query.minutes) || 43200;
+    const limit = Number(req.query.limit) || 100;
+    res.json(await listUsers({ minutes, limit }));
+  } catch (error) {
+    console.error('[owner-conversations] users failed:', error.message || error);
+    res.status(500).json({ error: 'owner_users_unavailable' });
+  }
+});
+
+app.get('/api/owner/activity', authRequired, async (req, res) => {
+  if (!isOwner(req.user)) return res.status(403).json({ error: 'forbidden' });
+  try {
+    res.json(await getActivitySummary());
+  } catch (error) {
+    console.error('[owner-conversations] activity failed:', error.message || error);
+    res.status(500).json({ error: 'owner_activity_unavailable' });
+  }
+});
+
+app.get('/api/owner/search', authRequired, async (req, res) => {
+  if (!isOwner(req.user)) return res.status(403).json({ error: 'forbidden' });
+  try {
+    res.json(await searchConversations(req.query.q, { limit: Number(req.query.limit) || 40 }));
+  } catch (error) {
+    console.error('[owner-conversations] search failed:', error.message || error);
+    res.status(500).json({ error: 'owner_search_unavailable' });
+  }
+});
+
+app.get('/api/owner/users/:id', authRequired, async (req, res) => {
+  if (!isOwner(req.user)) return res.status(403).json({ error: 'forbidden' });
+  try {
+    const found = await getUserConversations(req.params.id);
+    if (!found) return res.status(404).json({ error: 'not_found' });
+    res.json(found);
+  } catch (error) {
+    console.error('[owner-conversations] user read failed:', error.message || error);
+    res.status(500).json({ error: 'owner_users_unavailable' });
+  }
+});
+
+app.get('/api/owner/conversations', authRequired, async (req, res) => {
+  if (!isOwner(req.user)) return res.status(403).json({ error: 'forbidden' });
+  try {
+    const minutes = Number(req.query.minutes) || 1440;
+    const limit = Number(req.query.limit) || 40;
+    const [text, voice] = await Promise.all([
+      listConversations({ minutes, limit }),
+      listVoiceCalls({ minutes, limit }),
+    ]);
+    res.json({ ...text, voice, voiceEnabled: voiceTranscriptsEnabled() });
+  } catch (error) {
+    console.error('[owner-conversations] list failed:', error.message || error);
+    res.status(500).json({ error: 'owner_conversations_unavailable' });
+  }
+});
+
+app.get('/api/owner/conversations/:id', authRequired, async (req, res) => {
+  if (!isOwner(req.user)) return res.status(403).json({ error: 'forbidden' });
+  try {
+    const found = await getConversation(req.params.id);
+    if (!found) return res.status(404).json({ error: 'not_found' });
+    res.json(found);
+  } catch (error) {
+    console.error('[owner-conversations] read failed:', error.message || error);
+    res.status(500).json({ error: 'owner_conversations_unavailable' });
+  }
+});
+
+app.get('/api/owner/voice/:sessionKey', authRequired, async (req, res) => {
+  if (!isOwner(req.user)) return res.status(403).json({ error: 'forbidden' });
+  try {
+    const found = await getVoiceCall(req.params.sessionKey);
+    if (!found) return res.status(404).json({ error: 'not_found' });
+    res.json(found);
+  } catch (error) {
+    console.error('[owner-conversations] voice read failed:', error.message || error);
+    res.status(500).json({ error: 'owner_conversations_unavailable' });
+  }
+});
+
+// The browser posts Realtime transcripts here as they arrive. Any signed-in
+// user may post their OWN turns - the userId is taken from the token, never
+// from the body - and the whole route is inert unless VOICE_TRANSCRIPTS=1.
+app.post('/api/voice/transcript', authRequired, async (req, res) => {
+  try {
+    const result = await recordVoiceTurn({
+      userId: req.user?.id || null,
+      sessionKey: req.body?.sessionKey,
+      role: req.body?.role,
+      content: req.body?.content,
+    });
+    res.json(result);
+  } catch (error) {
+    console.error('[owner-conversations] transcript post failed:', error.message || error);
+    res.status(500).json({ error: 'transcript_unavailable' });
+  }
+});
+
 
 // ===== Realtime voice =====
 const MAX_SESSION_SECONDS = Number(process.env.VOICE_MAX_SESSION_SECONDS || 600);
@@ -184,25 +407,52 @@ app.get('/api/speech/token', async (req, res) => {
     const trialAccess = paidAccess && isTrialSubscriber(req.user);
     const sessionLimit = trialAccess ? TRIAL_SESSION_LIMIT : paidAccess ? PAID_SESSION_LIMIT : FREE_SESSION_LIMIT;
     const minuteLimit = trialAccess ? TRIAL_MINUTE_LIMIT : paidAccess ? PAID_MINUTE_LIMIT : FREE_MINUTE_LIMIT;
+    const ownerVoiceQa = isOwner(req.user);
     const outOfBudget = () => res.status(402).json({
       error: paidAccess ? 'voice_allowance_reached' : 'upgrade_required',
-      message: paidAccess ? "You've used this month's voice time. It resets on a rolling 30-day window." : 'Start your free trial to talk with Mike.',
+      message: trialAccess ? "That's the voice time included in your free trial. Subscribe for the full monthly allowance." : paidAccess ? "You've used this month's voice time. It resets on a rolling 30-day window." : 'Start your free trial to talk with Mike.',
     });
-    const usedSessions = await countVoiceSessions(req.user.id, MAX_SESSION_SECONDS);
-    if (usedSessions >= sessionLimit) return outOfBudget();
+
     const secondsAllowance = minuteLimit * 60;
-    const secondsUsed = await countVoiceSeconds(req.user.id, MAX_SESSION_SECONDS);
-    if (secondsUsed >= secondsAllowance) return outOfBudget();
-    const globalUsedSessions = await countVoiceSessionsGlobal(MAX_SESSION_SECONDS);
-    const globalUsedSeconds = await countVoiceSecondsGlobal(MAX_SESSION_SECONDS);
-    if (globalUsedSessions >= GLOBAL_SESSION_LIMIT || globalUsedSeconds >= GLOBAL_MINUTE_LIMIT * 60) {
-      console.error(`[speech-engine] global ceiling hit - ${globalUsedSessions} sessions, ${Math.round(globalUsedSeconds / 60)} minutes`);
-      return res.status(503).json({ error: 'voice_capacity_reached', message: 'Mike is at capacity right now. Try again a bit later.' });
-    }
-    const result = await getSpeechEngineToken();
+    const reservationLimits = ownerVoiceQa
+      ? { accountSessionLimit: Number.MAX_SAFE_INTEGER, accountSecondLimit: Number.MAX_SAFE_INTEGER, globalSessionLimit: Number.MAX_SAFE_INTEGER, globalSecondLimit: Number.MAX_SAFE_INTEGER }
+      : { accountSessionLimit: sessionLimit, accountSecondLimit: secondsAllowance, globalSessionLimit: GLOBAL_SESSION_LIMIT, globalSecondLimit: GLOBAL_MINUTE_LIMIT * 60 };
+
     const sessionKey = crypto.randomUUID();
-    await recordVoiceSession(req.user.id, result.agentId, { sessionKey, reservedSeconds: MAX_SESSION_SECONDS });
-    res.json({ ...result, sessionKey, maxSessionSeconds: MAX_SESSION_SECONDS, minutesRemaining: Math.max(0, Math.floor((secondsAllowance - secondsUsed) / 60)) });
+    const agentId = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1';
+    const reserveResult = await reserveVoiceSession({
+      userId: req.user.id,
+      agentId,
+      sessionKey,
+      reservedSeconds: MAX_SESSION_SECONDS,
+      ...reservationLimits,
+    });
+
+    if (!reserveResult.ok) {
+      if (reserveResult.reason === 'account_session_limit' || reserveResult.reason === 'account_second_limit') return outOfBudget();
+      if (reserveResult.reason === 'global_session_limit' || reserveResult.reason === 'global_second_limit') {
+        console.error('[speech-engine] global ceiling hit during atomic reservation');
+        return res.status(503).json({ error: 'voice_capacity_reached', message: 'Mike is at capacity right now. Try again a bit later.' });
+      }
+      return res.status(503).json({ error: 'voice_reservation_failed' });
+    }
+
+    let result;
+    try {
+      result = await getSpeechEngineToken();
+    } catch (error) {
+      try { await releaseVoiceReservation(sessionKey, req.user.id); }
+      catch (releaseError) { console.error('[speech-engine] failed to release reservation after token failure:', releaseError.message || releaseError); }
+      throw error;
+    }
+
+    const secondsUsed = ownerVoiceQa ? 0 : await countVoiceSeconds(req.user.id, MAX_SESSION_SECONDS);
+    res.json({
+      ...result,
+      sessionKey,
+      maxSessionSeconds: MAX_SESSION_SECONDS,
+      minutesRemaining: ownerVoiceQa ? null : Math.max(0, Math.floor((secondsAllowance - secondsUsed) / 60)),
+    });
   } catch (error) {
     console.error('[speech-engine] token failed:', error.message || error);
     res.status(error.status || 502).json({ error: error.message || 'speech_engine_unavailable' });
@@ -223,6 +473,58 @@ app.post('/api/speech/session-end', authRequired, async (req, res) => {
   } catch (error) {
     console.error('[speech-engine] settle failed:', error.message || error);
     res.status(500).json({ error: 'settle_failed' });
+  }
+});
+
+// ===== Persistent reminders / alarms =====
+app.get('/api/reminders', authRequired, async (req, res) => {
+  try {
+    res.json({ reminders: await listRemindersTool(req.user.id, { includePast: req.query?.includePast === 'true' }) });
+  } catch (error) {
+    console.error('[reminders] list route failed:', error.message || error);
+    res.status(500).json({ error: 'reminders_unavailable' });
+  }
+});
+
+app.post('/api/reminders', authRequired, async (req, res) => {
+  try {
+    const result = await setReminderTool(req.user.id, req.body || {});
+    if (result?.error) return res.status(400).json(result);
+    res.json(result);
+  } catch (error) {
+    console.error('[reminders] create route failed:', error.message || error);
+    res.status(500).json({ error: 'reminder_create_failed' });
+  }
+});
+
+app.delete('/api/reminders/:id', authRequired, async (req, res) => {
+  try {
+    res.json(await cancelReminderTool(req.user.id, { id: Number(req.params.id) }));
+  } catch (error) {
+    console.error('[reminders] cancel route failed:', error.message || error);
+    res.status(500).json({ error: 'reminder_cancel_failed' });
+  }
+});
+
+// ===== Realtime public tool dispatch =====
+app.post('/api/realtime/tool', authRequired, async (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    if (!isRealtimeToolAllowed(name)) return res.status(403).json({ error: 'tool_not_allowed' });
+    let args = req.body?.arguments;
+    if (typeof args === 'string') {
+      try { args = JSON.parse(args); } catch { return res.status(400).json({ error: 'tool_arguments_invalid' }); }
+    }
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return res.status(400).json({ error: 'tool_arguments_invalid' });
+    const handler = getRealtimeToolHandler(name, req.user);
+    if (!handler) return res.status(403).json({ error: 'tool_not_allowed' });
+    const output = await handler({ ...args, user: req.user });
+    const serialized = JSON.stringify(output ?? null);
+    const safeOutput = serialized.length > 12000 ? serialized.slice(0, 11950) + '\n[output truncated]' : serialized;
+    res.json({ output: safeOutput });
+  } catch (error) {
+    console.error('[realtime-tool] failed:', error.message || error);
+    res.status(500).json({ error: error.message || 'tool_failed' });
   }
 });
 
@@ -287,6 +589,7 @@ app.get('/api/health', (req, res) => {
     mailConfigured: mailerConfigured(),
     billingConfigured: billingConfigured(),
     model: OPENAI_MODEL,
+    brain: getBrainStatus(),
     timestamp: new Date().toISOString(),
   });
 });
@@ -307,12 +610,19 @@ app.post('/api/ask', async (req, res) => {
       { role: 'user', content: [{ type: 'input_text', text: message }] },
     ];
     const owner = isOwner(req.user);
-    const tools = owner ? LIVE_TOOLS : PUBLIC_TOOLS;
+    const tools = [...(owner ? LIVE_TOOLS : PUBLIC_TOOLS), { type: 'web_search_preview' }];
     const relevantMemories = req.user ? await getRelevantMemories(req.user.id, message, 12) : [];
     const instructions = (owner ? MIKE_INSTRUCTIONS : MIKE_INSTRUCTIONS + NON_OWNER_NOTE) + memoryPrompt(relevantMemories);
     let text = "I'm here. Give me another shot.";
-    for (let round = 0; round < 4; round += 1) {
-      const response = await openai.responses.create({ model: OPENAI_MODEL, instructions, input, tools });
+    const REMINDER_TOOL_HANDLERS = req.user ? {
+      set_reminder: (args) => setReminderTool(req.user.id, args),
+      list_reminders: (args) => listRemindersTool(req.user.id, args),
+      cancel_reminder: (args) => cancelReminderTool(req.user.id, args),
+    } : {};
+    const maxToolRounds = Math.max(1, Math.min(4, Number(process.env.MIKE_MAX_TOOL_ROUNDS || 3)));
+    for (let round = 0; round < maxToolRounds; round += 1) {
+      const roundTools = round === maxToolRounds - 1 ? [] : tools;
+      const response = await generateBrainResponse({ client: openai, instructions, input, tools: roundTools, message });
       const calls = (response.output || []).filter((item) => item.type === 'function_call');
       if (!calls.length) {
         text = response.output_text?.trim() || text;
@@ -401,14 +711,19 @@ app.use('/assets', express.static(path.join(DIST_DIR, 'assets'), {
   dotfiles: 'deny',
 }));
 app.use(express.static(DIST_DIR, { maxAge: 0, etag: true, dotfiles: 'deny' }));
-app.use((req, res) => {
+const SPA_ROUTES = new Set(['/']);
+const SPA_ROUTE_PREFIXES = ['/app', '/login', '/register', '/forgot-password', '/reset-password', '/games', '/privacy', '/refunds', '/support'];
+const isKnownSpaRoute = (pathname) => SPA_ROUTES.has(pathname) || SPA_ROUTE_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix + '/'));
+
+app.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return res.status(404).json({ error: 'not_found' });
+  if (!isKnownSpaRoute(req.path)) return res.status(404).json({ error: 'not_found' });
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
-  res.sendFile(path.join(DIST_DIR, 'index.html'));
+  return res.sendFile(path.join(DIST_DIR, 'index.html'));
 });
 
-migrate().catch((error) => console.error('[db] migrate threw:', error.message || error));
 
 const server = http.createServer(app);
 server.keepAliveTimeout = 65_000;
@@ -432,6 +747,12 @@ server.listen(PORT, async () => {
     console.log('[mike-ai] reminder scheduler ready');
   } catch (error) {
     console.error('[mike-ai] reminder scheduler initialization failed:', error.message || error);
+  }
+  try {
+    startResaleWatchScheduler();
+    console.log('[mike-ai] resale deal scanner ready');
+  } catch (error) {
+    console.error('[mike-ai] resale deal scanner initialization failed:', error.message || error);
   }
   try {
     startDealAlertScheduler();
