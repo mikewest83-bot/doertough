@@ -1,5 +1,5 @@
 const OPENAI_MODELS = {
-  mini: process.env.MIKE_MINI_MODEL || 'gpt-4o-mini',
+  mini: process.env.MIKE_MINI_MODEL || 'gpt-5.6-luna',
   terra: 'gpt-5.6-terra',
   sol: 'gpt-5.6-sol',
 };
@@ -7,14 +7,16 @@ const CLAUDE_MODEL = 'claude-opus-5';
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const VALID_REASONING = new Set(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
 const BRAIN_ORDER = ['mini', 'terra', 'sol', 'opus'];
-const REASONING_BRAINS = new Set(['terra', 'sol']);
+// Mini is now GPT-5.6 Luna, which reasons like Terra/Sol (just cheaper and faster) -
+// so it gets a reasoning effort too instead of being called as a plain completion.
+const REASONING_BRAINS = new Set(['mini', 'terra', 'sol']);
 
 const normalizeBrain = (value) => {
   const brain = String(value || '').trim().toLowerCase();
   return [...BRAIN_ORDER, 'auto'].includes(brain) ? brain : 'auto';
 };
 
-const TIER_EFFORT_DEFAULT = { terra: 'low', sol: 'medium' };
+const TIER_EFFORT_DEFAULT = { mini: 'low', terra: 'low', sol: 'medium' };
 const validEffort = (value, fallback) => {
   const v = String(value || '').trim().toLowerCase();
   return VALID_REASONING.has(v) ? v : fallback;
@@ -147,7 +149,7 @@ export function getBrainStatus() {
   return {
     configuredMode,
     costMode: costMode(),
-    reasoningEffort: { terra: reasoningEffort('terra'), sol: reasoningEffort('sol') },
+    reasoningEffort: { mini: reasoningEffort('mini'), terra: reasoningEffort('terra'), sol: reasoningEffort('sol') },
     defaultBrain: 'mini',
     escalation: thresholds(),
     available: {
@@ -303,3 +305,4 @@ export async function generateBrainResponse({ client, instructions, input, tools
 }
 
 export const BRAIN_MODELS = { ...OPENAI_MODELS, opus: CLAUDE_MODEL };
+
