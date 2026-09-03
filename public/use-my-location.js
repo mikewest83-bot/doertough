@@ -73,6 +73,33 @@
     }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 });
   };
 
+  // The composer's photo CTA is where this belongs: it is a utility for a
+  // search, not a headline action, and floating it over the hero meant it sat
+  // on top of the orb on small screens. Falls back to the old fixed corner only
+  // if that anchor never appears.
+  // Anchors in preference order: the photo CTA wrapper, then the composer
+  // form, then the photo-mode tab row. The first two are built by patch
+  // scripts, so more than one candidate keeps this from silently falling
+  // back to a floating corner if one of them is renamed.
+  const DOCK_ANCHORS = ['#mike-vision-wrap', 'main form', '.vision-tab-row'];
+
+  const dockInline = (button) => {
+    const anchor = DOCK_ANCHORS.reduce((found, sel) => found || document.querySelector(sel), null);
+    if (!anchor?.parentElement) return false;
+    if (button.previousElementSibling !== anchor) anchor.parentElement.insertBefore(button, anchor.nextSibling);
+    button.style.position = 'static';
+    button.style.right = '';
+    button.style.bottom = '';
+    button.style.zIndex = '';
+    // inline-flex ignores auto margins, so switch to block-level flex with a
+    // fit-content width to actually centre it under the composer.
+    button.style.display = 'flex';
+    button.style.width = 'fit-content';
+    button.style.margin = '10px auto 2px';
+    button.style.alignSelf = 'center';
+    return true;
+  };
+
   const addButton = () => {
     if (document.getElementById(BUTTON_ID)) return;
     const input = getLocationInput();
@@ -86,17 +113,24 @@
     button.addEventListener('mouseenter', () => { button.style.borderColor = 'rgba(39,169,255,.6)'; button.style.transform = 'translateY(-1px)'; });
     button.addEventListener('mouseleave', () => { button.style.borderColor = 'rgba(255,255,255,.18)'; button.style.transform = 'none'; });
     button.addEventListener('click', () => locate(button));
-    if (input?.parentElement) input.parentElement.insertBefore(button, input);
-    else document.body.appendChild(button);
-    if (!input?.parentElement) {
-      button.style.position = 'fixed';
-      button.style.right = '14px';
-      // Keep the location control above the fixed Resale Deals CTA instead of overlapping it.
-      button.style.bottom = '84px';
-      button.style.zIndex = '9998';
-    }
+    if (input?.parentElement) { input.parentElement.insertBefore(button, input); return; }
+    if (dockInline(button)) return;
+    // This script runs before React has rendered, so the anchor usually is not
+    // there yet on the first pass; the observer below docks it once it is.
+    document.body.appendChild(button);
+    button.style.position = 'fixed';
+    button.style.right = '14px';
+    button.style.bottom = '84px';
+    button.style.zIndex = '9998';
   };
 
-  const boot = () => { addButton(); new MutationObserver(addButton).observe(document.body, { childList: true, subtree: true }); };
+  const boot = () => {
+    addButton();
+    new MutationObserver(() => {
+      addButton();
+      const button = document.getElementById(BUTTON_ID);
+      if (button && button.style.position === 'fixed') dockInline(button);
+    }).observe(document.body, { childList: true, subtree: true });
+  };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true }); else boot();
 })();
