@@ -121,7 +121,7 @@ struct DealAlertDetailView: View {
     }
 
     private func refresh() async {
-        guard !isStopping else { return }
+        guard !isRefreshing, !isStopping else { return }
         isRefreshing = true
         defer { isRefreshing = false }
         do {
@@ -138,13 +138,14 @@ struct DealAlertDetailView: View {
     }
 
     private func stop() async {
-        guard currentAlert.enabled else { return }
+        guard currentAlert.enabled, !isStopping else { return }
         isStopping = true
-        defer { isStopping = false }
         do {
             try await api.cancelDealAlert(id: currentAlert.id)
+            isStopping = false
             await refresh()
         } catch {
+            isStopping = false
             errorMessage = error.localizedDescription
         }
     }
