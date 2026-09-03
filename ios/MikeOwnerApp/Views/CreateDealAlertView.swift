@@ -53,9 +53,14 @@ struct CreateDealAlertView: View {
                 Button("Create") {
                     Task { await create() }
                 }
-                .disabled(isSaving || location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(isSaving || !canCreate)
             }
         }
+    }
+
+    private var canCreate: Bool {
+        !location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !category.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func create() async {
@@ -63,12 +68,47 @@ struct CreateDealAlertView: View {
         errorMessage = nil
         defer { isSaving = false }
 
+        let trimmedCategory = category.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedLocation = location.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedBudget = budget.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedRadius = radius.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedConstraints = constraints.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !trimmedCategory.isEmpty else {
+            errorMessage = "Enter a category for Mike to watch."
+            return
+        }
+        guard !trimmedLocation.isEmpty else {
+            errorMessage = "Enter a city or ZIP code."
+            return
+        }
+
+        let parsedBudget: Double?
+        if trimmedBudget.isEmpty {
+            parsedBudget = nil
+        } else if let value = Double(trimmedBudget), value >= 0 {
+            parsedBudget = value
+        } else {
+            errorMessage = "Max purchase price must be a valid number of $0 or more."
+            return
+        }
+
+        let parsedRadius: Double?
+        if trimmedRadius.isEmpty {
+            parsedRadius = nil
+        } else if let value = Double(trimmedRadius), value > 0, value <= 100 {
+            parsedRadius = value
+        } else {
+            errorMessage = "Search radius must be between 1 and 100 miles."
+            return
+        }
+
         let request = CreateDealAlertRequest(
-            category: category.trimmingCharacters(in: .whitespacesAndNewlines),
-            location: location.trimmingCharacters(in: .whitespacesAndNewlines),
-            budget: Double(budget.trimmingCharacters(in: .whitespacesAndNewlines)),
-            radiusMiles: Double(radius.trimmingCharacters(in: .whitespacesAndNewlines)),
-            constraints: constraints.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : constraints,
+            category: trimmedCategory,
+            location: trimmedLocation,
+            budget: parsedBudget,
+            radiusMiles: parsedRadius,
+            constraints: trimmedConstraints.isEmpty ? nil : trimmedConstraints,
             frequencyMinutes: frequency
         )
 
