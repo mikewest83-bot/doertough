@@ -112,7 +112,12 @@ export async function attributeReferral(referredUserId, referralCode) {
 
 export async function noteSubscriptionForReferral(userId, subscription) {
   if (!subscription?.id) return null;
-  const startEpoch = Number(subscription.current_period_start || subscription.start || Math.floor(Date.now() / 1000));
+  const periodStartEpoch = Number(subscription.current_period_start || subscription.start || Math.floor(Date.now() / 1000));
+  const trialEndEpoch = Number(subscription.trial_end || 0);
+  // Mike Months qualification starts after the later of the trial ending and
+  // the paid subscription period starting, then holds for the full refund
+  // window. This prevents trial time from being counted toward the refund clock.
+  const startEpoch = Math.max(periodStartEpoch, trialEndEpoch);
   const startedAt = new Date(startEpoch * 1000);
   const refundEligibleAt = new Date(startedAt.getTime() + REFUND_WINDOW_DAYS * 24 * 60 * 60 * 1000);
   const { rows } = await query(
@@ -261,24 +266,26 @@ export async function startMikeMonthsScheduler() {
 }
 
 export async function getMikeMonthsSummary(userId) {
+  if (!pool || !userId) return { code: null, banked: 0, coveredUntil: null, referrals: [] };
   const code = await ensureReferralCode(userId);
-  const { rows } = await query(
-    `SELECT
-       (SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1 AND status = 'qualified')::int AS qualified_referrals,
-       (SELECT COALESCE(SUM(months), 0) FROM mike_months_ledger WHERE user_id = $1)::int AS earned_months,
-       (SELECT COALESCE(SUM(months), 0) FROM mike_months_ledger WHERE user_id = $1 AND redeemed_at IS NULL)::int AS banked_months,
-       (SELECT mike_months_covered_until FROM users WHERE id = $1) AS covered_until`,
+  const { rows: referrals } = await query(
+    `SELECT r.id, r.created_at, r.status, r.refund_eligible_at, r.qualified_at,
+            r.reward_months, r.rejected_reason, u.email
+       FROM referrals r JOIN users u ON u.id = r.referred_user_id
+      WHERE r.referrer_user_id = $1 ORDER BY r.created_at DESC LIMIT 50`,
     [userId]
   );
-  const summary = rows[0] || {};
+  const { rows } = await query(
+    `SELECT COALESCE(SUM(months) FILTER (WHERE redeemed_at IS NULL), 0)::int AS banked
+       FROM mike_months_ledger WHERE user_id = $1`,
+    [userId]
+  );
+  const user = await getUserById(userId);
   return {
     code,
-    link: `${APP_URL}/?ref=${encodeURIComponent(code)}`,
-    qualifiedReferrals: Number(summary.qualified_referrals || 0),
-    earnedMonths: Number(summary.earned_months || 0),
-    bankedMonths: Number(summary.banked_months || 0),
-    coveredUntil: summary.covered_until || null,
+    shareUrl: `${APP_URL}/?ref=${encodeURIComponent(code)}`,
+    banked: Number(rows[0]?.banked || 0),
+    coveredUntil: user?.mike_months_covered_until || null,
+    referrals,
   };
 }
-
-export { REFUND_WINDOW_DAYS };
