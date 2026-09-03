@@ -1,44 +1,52 @@
 # Mike AI iOS
 
-Native iPhone client for Mike AI. This project is intentionally a separate client layer: the existing Mike AI backend remains the source of truth for authentication, model routing, tools, usage limits, Vision, Deal Finder, alerts, and account entitlements.
+Native iPhone client work for Mike AI. This is intentionally a separate client layer; the existing Mike AI backend remains the source of truth for authentication, model routing, tools, usage limits, Vision, Deal Finder, alerts, and account entitlements.
 
-## Product goals
+## Current scope
 
-- Fast, conversational Mike experience with voice first-class.
-- Chat, voice, Vision, Deal Finder, and alerts in one native app.
+**Phase 1 is focused only on Deal Alerts in the Mike AI owner app.**
+
+Do not build the consumer-facing Chat, Voice, Vision, Deal Finder, or subscription purchase UI yet. Those remain future phases unless explicitly requested.
+
+The first iPhone milestone is an owner-only Deal Alerts control surface that lets the owner:
+
+- View the current deal-alert system state.
+- Review alert configuration and cadence.
+- Use the existing hourly alert capability.
+- Review recent alert/deal activity where the backend exposes it.
+- See clear success/error/disabled states.
+- Avoid duplicating alert scheduling or search logic on the phone.
+
+## Product rules
+
 - No avatar.
 - No Mike AI Pro tier or branding.
-- 7-day free trial as the current product requirement.
-- Dedicated Vision and Deal Alerts paths remain on their existing mini model routes.
-- Main conversational Mike continues using GPT-5.6 Luna with existing routing/escalation behavior.
-- Present OpenAI + Anthropic as a customer benefit without implying every request uses both providers.
+- Keep dedicated Deal Alerts on its existing mini model path.
+- Keep the alert scheduler and deal-search logic server-side.
+- The iOS client is an owner tool for now, not the public Mike AI customer app.
+- Production must not be changed just to prototype the iOS owner experience.
 
 ## Proposed stack
 
-- Swift + SwiftUI for the app UI.
-- StoreKit 2 for App Store subscriptions and trial presentation.
-- App Store Server API + App Store Server Notifications for server-side subscription truth.
-- Native camera/photo picker for Vision.
-- Native microphone/audio session and the existing Mike realtime backend bridge for voice.
-- HTTPS JSON APIs for authenticated chat, Vision, Deal Finder, alerts, and account operations.
+- Swift + SwiftUI.
+- Authenticated HTTPS JSON API calls to the existing Mike backend.
+- Native iOS notifications only when they are explicitly needed for the owner experience; the backend remains responsible for alert scheduling.
+- No provider/API secrets in the app.
 
 ## Initial screens
 
-1. Home — one-tap Talk, Chat, Show Mike, Find a Deal.
-2. Conversation — text and voice with smooth turn-taking.
-3. Vision — capture/select a photo and analyze it with Mike Vision.
-4. Deal Finder — search and inspect resale opportunities.
-5. Alerts — manage deal alerts, including hourly cadence where eligible.
-6. Account — profile, entitlement, Mike Months, subscription management, restore purchases, and sign out.
+1. Owner Dashboard — alert system status and latest activity.
+2. Deal Alerts — enable/disable, cadence, location/ZIP where supported, and current configuration.
+3. Alert Detail — inspect a found deal and the reasoning/data returned by the server.
 
-## Security rules
+## Security
 
-- Never embed OpenAI, Anthropic, Stripe, database, or App Store private keys in the app.
-- Authenticate API calls with the existing Mike account token/session mechanism.
-- Keep provider/model selection server-side.
-- Treat the server as the entitlement source of truth for cross-platform access.
-- Validate Apple transactions server-side before granting subscription access.
+- Never embed OpenAI, Anthropic, Stripe, database, or other private keys in the app.
+- Authenticate using the existing Mike account/session mechanism.
+- Keep model/provider selection server-side.
+- Keep alert scheduling server-side.
+- Only expose owner-only controls after server-side authorization.
 
-## First implementation milestone
+## Next implementation milestone
 
-Build the native shell and API client first, then wire chat. Voice, Vision, Deal Finder, alerts, and StoreKit follow as isolated feature modules. Do not change production while the iOS client is being built.
+Build the native owner shell and API client for Deal Alerts first. Then connect the real existing alert endpoints, test hourly cadence/state transitions, and only after that expand the iOS scope.
