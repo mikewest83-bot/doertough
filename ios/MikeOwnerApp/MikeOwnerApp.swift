@@ -10,10 +10,13 @@ struct MikeOwnerApp: App {
                 if api.token == nil {
                     OwnerLoginView()
                 } else {
-                    DealAlertsView()
+                    OwnerDashboardView()
                 }
             }
             .environmentObject(api)
+            .task {
+                await api.restoreSession()
+            }
         }
     }
 }
