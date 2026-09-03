@@ -1,0 +1,23 @@
+# Dependencies and build output. Neither has ever been tracked in this repo -
+# Railway installs and builds from source on every deploy - so ignoring them
+# changes nothing about what ships. It just stops 280-odd packages and a dist/
+# folder showing up as untracked noise in GitHub Desktop, where a bulk "commit
+# everything" could sweep them in.
+node_modules/
+dist/
+
+# Secrets. Nothing matching this is tracked today; keep it that way.
+.env
+.env.*
+!.env.example
+
+# OS and editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# Local logs
+npm-debug.log*
+*.log
