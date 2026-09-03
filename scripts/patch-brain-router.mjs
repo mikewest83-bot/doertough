@@ -6,7 +6,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const indexFile = path.join(root, 'server/index.mjs');
 const routerFile = path.join(root, 'server/brain-router.mjs');
 let source = fs.readFileSync(indexFile, 'utf8');
-const router = fs.readFileSync(routerFile, 'utf8');
+let router = fs.readFileSync(routerFile, 'utf8');
 
 const brainImport = "import { generateBrainResponse, getBrainStatus } from './brain-router.mjs';";
 const ownerImport = "import { OWNER_ONLY_TOOLS } from './tool-access.mjs';";
@@ -52,14 +52,29 @@ if (!source.includes(finalRoundCall)) {
   source = source.replace(routedCall, finalRoundCall);
 }
 fs.writeFileSync(indexFile, source);
-console.log('[patch-brain-router] chat route wired to brain router with bounded tool rounds');
+
+// Mike chat starts on GPT-5.6 Luna. Keep the internal `mini` slot name because
+// Vision and Deal Alerts intentionally retain their own mini-model configuration.
+const lunaModelLine = "  mini: process.env.MIKE_MINI_MODEL || 'gpt-5.6-luna',";
+const legacyModelLine = "  mini: process.env.MIKE_MINI_MODEL || 'gpt-4o-mini',";
+if (router.includes(legacyModelLine)) router = router.replace(legacyModelLine, lunaModelLine);
+const legacyReasoning = "const REASONING_BRAINS = new Set(['terra', 'sol']);";
+const lunaReasoning = "const REASONING_BRAINS = new Set(['mini', 'terra', 'sol']);";
+if (router.includes(legacyReasoning)) router = router.replace(legacyReasoning, "// Mini is now GPT-5.6 Luna for Mike chat; Vision and Deal Alerts keep their own mini model paths.\n" + lunaReasoning);
+const legacyDefaults = "const TIER_EFFORT_DEFAULT = { terra: 'low', sol: 'medium' };";
+const lunaDefaults = "const TIER_EFFORT_DEFAULT = { mini: 'low', terra: 'low', sol: 'medium' };";
+if (router.includes(legacyDefaults)) router = router.replace(legacyDefaults, lunaDefaults);
+fs.writeFileSync(routerFile, router);
+console.log('[patch-brain-router] chat route wired to Luna-backed brain router with bounded tool rounds');
 
 const required = [
   "const wanted = mode === 'auto' ? 'mini' : mode;",
   "const LEVEL_TO_BRAIN = { deep: 'terra', deepest: 'opus' };",
   "return 'mini';",
+  "mini: process.env.MIKE_MINI_MODEL || 'gpt-5.6-luna',",
+  "const REASONING_BRAINS = new Set(['mini', 'terra', 'sol']);",
 ];
 for (const marker of required) {
   if (!router.includes(marker)) throw new Error(`[patch-brain-router] canonical router marker missing: ${marker}`);
 }
-console.log('[patch-brain-router] canonical brain-router verified; no router rewrite needed');
+console.log('[patch-brain-router] canonical router verified: Luna chat + mini slot preserved for dedicated tools');
