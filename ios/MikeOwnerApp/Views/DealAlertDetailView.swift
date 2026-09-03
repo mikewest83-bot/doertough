@@ -1,40 +1,52 @@
 import SwiftUI
 
 struct DealAlertDetailView: View {
+    @EnvironmentObject private var api: MikeAPIClient
     let alert: DealAlert
+
+    @State private var currentAlert: DealAlert
+    @State private var isRefreshing = false
+    @State private var isStopping = false
+    @State private var errorMessage: String?
+    @State private var showingStopConfirmation = false
+
+    init(alert: DealAlert) {
+        self.alert = alert
+        _currentAlert = State(initialValue: alert)
+    }
 
     var body: some View {
         List {
             Section("Configuration") {
-                LabeledContent("Status", value: alert.enabled ? "Active" : "Stopped")
-                LabeledContent("Cadence", value: alert.isHourly ? "Hourly (60 min)" : "Every \(alert.frequencyMinutes) min")
-                LabeledContent("Location", value: alert.location)
-                if let radius = alert.radiusMiles {
+                LabeledContent("Status", value: currentAlert.enabled ? "Active" : "Stopped")
+                LabeledContent("Cadence", value: currentAlert.isHourly ? "Hourly (60 min)" : "Every \(currentAlert.frequencyMinutes) min")
+                LabeledContent("Location", value: currentAlert.location)
+                if let radius = currentAlert.radiusMiles {
                     LabeledContent("Radius", value: "\(radius) miles")
                 }
-                if let budget = alert.budget {
+                if let budget = currentAlert.budget {
                     LabeledContent("Max price", value: budget.formatted(.currency(code: "USD")))
                 }
-                if let constraints = alert.constraints, !constraints.isEmpty {
+                if let constraints = currentAlert.constraints, !constraints.isEmpty {
                     LabeledContent("Preferences", value: constraints)
                 }
             }
 
             Section("Server Activity") {
-                if let date = alert.lastCheckedAt {
+                if let date = currentAlert.lastCheckedAt {
                     LabeledContent("Last checked", value: date.formatted(date: .abbreviated, time: .shortened))
                 } else {
                     Text("No scan has completed yet.")
                         .foregroundStyle(.secondary)
                 }
-                if let date = alert.lastNotifiedAt {
+                if let date = currentAlert.lastNotifiedAt {
                     LabeledContent("Last notified", value: date.formatted(date: .abbreviated, time: .shortened))
                 }
-                if alert.consecutiveFailures > 0 {
-                    Label("\(alert.consecutiveFailures) consecutive scan failure(s)", systemImage: "exclamationmark.triangle")
+                if currentAlert.consecutiveFailures > 0 {
+                    Label("\(currentAlert.consecutiveFailures) consecutive scan failure(s)", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
                 }
-                if let error = alert.lastError, !error.isEmpty {
+                if let error = currentAlert.lastError, !error.isEmpty {
                     Text(error)
                         .font(.callout)
                         .foregroundStyle(.red)
@@ -42,7 +54,7 @@ struct DealAlertDetailView: View {
             }
 
             Section("Latest Result") {
-                if let result = alert.lastResults.first {
+                if let result = currentAlert.lastResults.first {
                     if let score = result.score {
                         LabeledContent("Deal score", value: "\(score)/100")
                     }
@@ -61,8 +73,79 @@ struct DealAlertDetailView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+
+            if let errorMessage {
+                Section {
+                    Label(errorMessage, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.red)
+                }
+            }
         }
-        .navigationTitle("Alert #\(alert.id)")
+        .navigationTitle("Alert #\(currentAlert.id)")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    Task { await refresh() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .accessibilityLabel("Refresh alert")
+                .disabled(isRefreshing || isStopping)
+
+                if currentAlert.enabled {
+                    Button(role: .destructive) {
+                        showingStopConfirmation = true
+                    } label: {
+                        Image(systemName: "bell.slash")
+                    }
+                    .accessibilityLabel("Stop alert")
+                    .disabled(isRefreshing || isStopping)
+                }
+            }
+        }
+        .refreshable { await refresh() }
+        .task { await refresh() }
+        .confirmationDialog(
+            "Stop this deal alert?",
+            isPresented: $showingStopConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Stop Alert", role: .destructive) {
+                Task { await stop() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Mike will stop checking this alert. You can keep the alert history on the server.")
+        }
+    }
+
+    private func refresh() async {
+        guard !isStopping else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        do {
+            let alerts = try await api.listDealAlerts()
+            guard let updated = alerts.first(where: { $0.id == currentAlert.id }) else {
+                errorMessage = "This alert is no longer available."
+                return
+            }
+            currentAlert = updated
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func stop() async {
+        guard currentAlert.enabled else { return }
+        isStopping = true
+        defer { isStopping = false }
+        do {
+            try await api.cancelDealAlert(id: currentAlert.id)
+            await refresh()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }
