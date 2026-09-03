@@ -17,6 +17,11 @@
     proof.className = 'mike-proof-line';
     proof.innerHTML = '<span><b>✓</b> 7-day free trial</span><span><b>✓</b> No card to start</span><span><b>✓</b> Voice + text + photo</span>';
     strip.parentNode.insertBefore(proof, strip.nextSibling);
+    const trust = document.createElement('div');
+    trust.className = 'mike-model-trust';
+    trust.setAttribute('aria-label','Mike AI model technology');
+    trust.innerHTML = '<span class="mike-model-trust-label">Powered by leading AI</span><span class="mike-model-pill">OpenAI</span><span class="mike-model-plus">+</span><span class="mike-model-pill">Anthropic</span>';
+    proof.parentNode.insertBefore(trust, proof.nextSibling);
   };
   const observer = new MutationObserver(ready);
   observer.observe(document.body,{childList:true,subtree:true});
