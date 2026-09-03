@@ -33,6 +33,7 @@ const MUST_CONTAIN = [
   ['server/index.mjs', "app.post('/api/vision/analyze'", 'Vision route registered'],
   ['server/index.mjs', "from './brain-router.mjs'", 'Mike brain router imported'],
   ['server/index.mjs', 'generateBrainResponse({ client: openai', 'Mike chat uses brain router'],
+  ['server/brain-router.mjs', "gpt-5.6-luna", 'Mini brain configured (reasoning-capable starting brain)'],
   ['server/brain-router.mjs', "gpt-5.6-terra", 'Terra brain configured'],
   ['server/brain-router.mjs', "gpt-5.6-sol", 'Sol brain configured'],
   ['server/brain-router.mjs', "claude-opus-5", 'Opus brain configured'],
@@ -60,6 +61,7 @@ const MUST_NOT_CONTAIN = [
   ['server/persona.mjs', 'Watch It for Me / persistent deal alerts are currently disabled', 'obsolete disabled Deal Alert instructions'],
   ['server/index.mjs', 'openai.responses.create({ model: OPENAI_MODEL', 'legacy direct model call removed'],
   ['server/index.mjs', "process.env.OPENAI_MODEL || 'gpt-4o-mini'", 'legacy GPT-4o-mini default removed'],
+  ['server/brain-router.mjs', "mini: process.env.MIKE_MINI_MODEL || 'gpt-4o-mini'", 'Mini brain no longer defaults to GPT-4o-mini'],
 ];
 
 const MUST_BE_ORDERED = [
