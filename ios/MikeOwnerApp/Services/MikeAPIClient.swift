@@ -12,6 +12,7 @@ final class MikeAPIClient: ObservableObject {
     private let encoder: JSONEncoder
 
     @Published private(set) var token: String?
+    @Published private(set) var currentUser: MikeUser?
 
     init(baseURL: URL = URL(string: "https://doertoughmikeai.com")!, session: URLSession = .shared) {
         self.baseURL = baseURL
@@ -23,14 +24,42 @@ final class MikeAPIClient: ObservableObject {
         self.token = KeychainStore.load(key: "mike-owner-auth-token")
     }
 
-    func setToken(_ token: String) {
+    func setToken(_ token: String, user: MikeUser? = nil) {
         self.token = token
+        self.currentUser = user
         KeychainStore.save(token, key: "mike-owner-auth-token")
     }
 
     func clearToken() {
         token = nil
+        currentUser = nil
         KeychainStore.delete(key: "mike-owner-auth-token")
+    }
+
+    func restoreSession() async {
+        guard token != nil else { return }
+        do {
+            let response: MeResponse = try await request(path: "/api/auth/me", method: "GET")
+            guard response.user.isOwner else {
+                clearToken()
+                return
+            }
+            setToken(response.token, user: response.user)
+        } catch {
+            clearToken()
+        }
+    }
+
+    func login(email: String, password: String) async throws {
+        let response: LoginResponse = try await post(
+            path: "/api/auth/login",
+            body: LoginRequest(email: email.trimmingCharacters(in: .whitespacesAndNewlines), password: password)
+        )
+        guard response.user.isOwner else {
+            clearToken()
+            throw APIError.server("This account is not authorized for the Mike owner app.")
+        }
+        setToken(response.token, user: response.user)
     }
 
     func listDealAlerts() async throws -> [DealAlert] {
@@ -51,7 +80,7 @@ final class MikeAPIClient: ObservableObject {
         try await request(path: path, method: "POST", body: body)
     }
 
-    private func request<T: Decodable, Body: Encodable>(path: String, method: String, body: Body?) async throws -> T {
+    private func request<T: Decodable, Body: Encodable>(path: String, method: String, body: Body? = nil) async throws -> T {
         var request = URLRequest(url: baseURL.appendingPathComponent(path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))))
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -66,8 +95,8 @@ final class MikeAPIClient: ObservableObject {
             throw APIError.unauthorized
         }
         guard (200..<300).contains(http.statusCode) else {
-            let message = (try? JSONDecoder().decode(APIErrorEnvelope.self, from: data).message)
-                ?? (try? JSONDecoder().decode(APIErrorEnvelope.self, from: data).error)
+            let message = (try? decoder.decode(APIErrorEnvelope.self, from: data).message)
+                ?? (try? decoder.decode(APIErrorEnvelope.self, from: data).error)
                 ?? "Request failed (\(http.statusCode))."
             throw APIError.server(message)
         }
@@ -96,6 +125,31 @@ enum APIError: LocalizedError {
         case .server(let message): return message
         }
     }
+}
+
+struct LoginRequest: Codable {
+    let email: String
+    let password: String
+}
+
+struct LoginResponse: Codable {
+    let token: String
+    let user: MikeUser
+}
+
+struct MeResponse: Codable {
+    let user: MikeUser
+    let token: String
+}
+
+struct MikeUser: Codable {
+    let id: String
+    let name: String?
+    let email: String
+    let role: String?
+    let isOwner: Bool
+    let paid: Bool?
+    let trialing: Bool?
 }
 
 private enum KeychainStore {
