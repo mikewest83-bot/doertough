@@ -1,0 +1,57 @@
+/* Centers the DT / MIKE lockup inside the orb.
+   The lockup was assembled by three different stylesheets: the letters absolutely
+   positioned at top:18%, the two-tone rule as a background-position on the core,
+   and "M I K E" pinned to bottom:%. Each piece was placed independently, so the
+   group as a whole sat low and slightly off-axis, and every size change needed
+   three numbers re-tuned by hand.
+   This makes it one centered flex stack instead: D and T on one line, MIKE on the
+   next with the rule carried above it, the whole group centred as a unit. Nothing
+   here is a magic offset, so it stays centred at every breakpoint.
+   Selectors are html body-prefixed on purpose: the bundled style.css loads last
+   and carries .voice-box .voice-orb .orb-core rules of its own. */
+
+html body .voice-box .voice-orb .orb-core,
+html body .voice-orb .orb-core {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  align-content: center !important;
+  justify-content: center !important;
+  padding: 0 !important;
+  background-image: none !important;
+}
+
+html body .voice-orb .orb-core > span,
+html body .voice-orb .orb-core > em {
+  position: static !important;
+  top: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: auto !important;
+  transform: none !important;
+  margin: 0 !important;
+}
+
+/* MIKE takes a full row of its own and carries the white/orange rule above it,
+   so the rule can never drift away from the text it underlines. text-indent
+   cancels the trailing letter-space after the E, which otherwise pushes the
+   visual centre of the word about 3px left of the box centre. */
+html body .voice-orb .orb-core::after {
+  position: static !important;
+  transform: none !important;
+  flex: 0 0 100% !important;
+  width: 100% !important;
+  top: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: auto !important;
+  text-align: center !important;
+  text-indent: 0.25em !important;
+  margin: 0 !important;
+  padding-top: 0.62em !important;
+  background-image: linear-gradient(to bottom, #fff 0 0.16em, transparent 0.16em 0.3em, #f26b21 0.3em 0.46em, transparent 0.46em) !important;
+  background-repeat: no-repeat !important;
+  background-size: 5.6em 0.46em !important;
+  background-position: 50% 0 !important;
+}
