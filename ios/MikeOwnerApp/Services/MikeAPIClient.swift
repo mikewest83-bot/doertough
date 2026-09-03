@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import Combine
 
 @MainActor
 final class MikeAPIClient: ObservableObject {
@@ -38,16 +39,16 @@ final class MikeAPIClient: ObservableObject {
     }
 
     func createDealAlert(_ requestBody: CreateDealAlertRequest) async throws -> DealAlert {
-        let response: CreateDealAlertResponse = try await request(
-            path: "/api/owner/deal-alerts",
-            method: "POST",
-            body: requestBody
-        )
+        let response: CreateDealAlertResponse = try await request(path: "/api/owner/deal-alerts", method: "POST", body: requestBody)
         return response.alert
     }
 
     func cancelDealAlert(id: Int) async throws {
         let _: CancelDealAlertResponse = try await request(path: "/api/owner/deal-alerts/\(id)", method: "DELETE")
+    }
+
+    func post<T: Decodable, Body: Encodable>(path: String, body: Body) async throws -> T {
+        try await request(path: path, method: "POST", body: body)
     }
 
     private func request<T: Decodable, Body: Encodable>(path: String, method: String, body: Body?) async throws -> T {
@@ -100,10 +101,7 @@ enum APIError: LocalizedError {
 private enum KeychainStore {
     static func save(_ value: String, key: String) {
         let data = Data(value.utf8)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: key,
-        ]
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrAccount as String: key]
         SecItemDelete(query as CFDictionary)
         var item = query
         item[kSecValueData as String] = data
@@ -124,10 +122,7 @@ private enum KeychainStore {
     }
 
     static func delete(key: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: key,
-        ]
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrAccount as String: key]
         SecItemDelete(query as CFDictionary)
     }
 }
