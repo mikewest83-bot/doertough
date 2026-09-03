@@ -69,13 +69,16 @@ struct OwnerDashboardView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Server scheduler")
                     .font(.headline)
-                Text("Mike's backend is the source of truth")
+                Text("Scheduling and alert state are controlled by Mike's backend")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
-            Spacer()
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
+            Spacer(minLength: 8)
+            Text("Server")
+                .font(.caption.bold())
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(.thinMaterial, in: Capsule())
         }
         .padding()
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
