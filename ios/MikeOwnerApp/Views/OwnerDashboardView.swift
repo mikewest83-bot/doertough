@@ -5,6 +5,7 @@ struct OwnerDashboardView: View {
     @State private var alerts: [DealAlert] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var showingSignOut = false
 
     private var activeCount: Int { alerts.filter(\.enabled).count }
     private var latestAlert: DealAlert? { alerts.first(where: { $0.enabled }) ?? alerts.first }
@@ -33,6 +34,17 @@ struct OwnerDashboardView: View {
         .task { await load() }
         .overlay {
             if isLoading && alerts.isEmpty { ProgressView("Loading…") }
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Sign Out") { showingSignOut = true }
+            }
+        }
+        .confirmationDialog("Sign out of Mike Owner?", isPresented: $showingSignOut, titleVisibility: .visible) {
+            Button("Sign Out", role: .destructive) {
+                api.clearToken()
+            }
+            Button("Cancel", role: .cancel) {}
         }
         .alert("Deal Alerts", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK") { errorMessage = nil }
@@ -118,8 +130,11 @@ struct OwnerDashboardView: View {
     }
 
     private func load() async {
+        isLoading = true
+        defer { isLoading = false }
         do {
             alerts = try await api.listDealAlerts()
+            errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
         }
