@@ -37,6 +37,8 @@ const MUST_CONTAIN = [
   ['server/brain-router.mjs', "gpt-5.6-terra", 'Terra brain configured'],
   ['server/brain-router.mjs', "gpt-5.6-sol", 'Sol brain configured'],
   ['server/brain-router.mjs', "claude-opus-5", 'Opus brain configured'],
+  ['src/main.jsx', 'className="sample-exchange"', 'sample exchange section'],
+  ['src/main.jsx', '.sample-thread{', 'sample exchange styles'],
   ['index.html', 'mike-orb-center.css', 'orb lockup centering stylesheet linked'],
   ['src/main.jsx', 'className="site-footer"', 'site footer with support/legal links'],
   ['src/main.jsx', '.trust-strip{', 'trust strip styles'],
