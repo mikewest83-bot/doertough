@@ -7,6 +7,9 @@ struct DealAlertsView: View {
     @State private var errorMessage: String?
     @State private var showingCreate = false
 
+    private var activeAlerts: [DealAlert] { alerts.filter(\.enabled) }
+    private var stoppedAlerts: [DealAlert] { alerts.filter { !$0.enabled } }
+
     var body: some View {
         List {
             Section {
@@ -27,10 +30,13 @@ struct DealAlertsView: View {
             }
 
             Section("Active Alerts") {
-                if alerts.isEmpty && !isLoading {
-                    ContentUnavailableView("No Deal Alerts", systemImage: "bell.slash", description: Text("Create an alert and Mike will keep watching for resale opportunities."))
+                if activeAlerts.isEmpty && !isLoading {
+                    EmptyAlertsView(
+                        title: "No Active Alerts",
+                        message: "Create an alert and Mike will keep watching for resale opportunities."
+                    )
                 } else {
-                    ForEach(alerts) { alert in
+                    ForEach(activeAlerts) { alert in
                         NavigationLink {
                             DealAlertDetailView(alert: alert)
                         } label: {
@@ -42,6 +48,18 @@ struct DealAlertsView: View {
                             } label: {
                                 Label("Stop", systemImage: "bell.slash")
                             }
+                        }
+                    }
+                }
+            }
+
+            if !stoppedAlerts.isEmpty {
+                Section("Stopped Alerts") {
+                    ForEach(stoppedAlerts) { alert in
+                        NavigationLink {
+                            DealAlertDetailView(alert: alert)
+                        } label: {
+                            DealAlertRow(alert: alert)
                         }
                     }
                 }
@@ -99,6 +117,27 @@ struct DealAlertsView: View {
     }
 }
 
+private struct EmptyAlertsView: View {
+    let title: String
+    let message: String
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "bell.slash")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Text(title)
+                .font(.headline)
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 20)
+    }
+}
+
 private struct DealAlertRow: View {
     let alert: DealAlert
 
@@ -111,6 +150,7 @@ private struct DealAlertRow: View {
                 Circle()
                     .fill(alert.enabled ? .green : .gray)
                     .frame(width: 9, height: 9)
+                    .accessibilityHidden(true)
             }
             Text(alert.location)
                 .foregroundStyle(.secondary)
