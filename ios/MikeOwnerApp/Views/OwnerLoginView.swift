@@ -27,12 +27,13 @@ struct OwnerLoginView: View {
             } label: {
                 if isLoading {
                     ProgressView()
+                        .frame(maxWidth: .infinity)
                 } else {
                     Text("Sign In")
                         .frame(maxWidth: .infinity)
                 }
             }
-            .disabled(isLoading || email.isEmpty || password.isEmpty)
+            .disabled(isLoading || email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty)
         }
         .navigationTitle("Owner Access")
     }
@@ -43,35 +44,9 @@ struct OwnerLoginView: View {
         defer { isLoading = false }
 
         do {
-            let body = LoginRequest(email: email, password: password)
-            let response: LoginResponse = try await api.post(path: "/api/auth/login", body: body)
-            guard response.user.isOwner else {
-                api.clearToken()
-                throw APIError.server("This account is not authorized for the Mike owner app.")
-            }
-            api.setToken(response.token)
+            try await api.login(email: email, password: password)
         } catch {
             errorMessage = error.localizedDescription
         }
     }
-}
-
-struct LoginRequest: Codable {
-    let email: String
-    let password: String
-}
-
-struct LoginResponse: Codable {
-    let token: String
-    let user: MikeUser
-}
-
-struct MikeUser: Codable {
-    let id: String
-    let name: String?
-    let email: String
-    let role: String?
-    let isOwner: Bool
-    let paid: Bool?
-    let trialing: Bool?
 }
