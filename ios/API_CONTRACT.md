@@ -1,64 +1,50 @@
-# Mike AI iOS API Contract
+# Mike AI iOS Deal Alerts API Contract
 
-## Existing backend routes to reuse
+## Scope
 
-### Authentication
+Phase 1 of the iPhone work is **owner-only Deal Alerts**. The app must reuse the existing Mike backend and must not implement alert search, ranking, scheduling, or model selection locally.
 
-- `POST /api/auth/login`
-- `POST /api/auth/register`
-- `GET /api/auth/me`
-- Existing password reset routes
+## Existing backend capabilities to reuse
 
-The app should send the authenticated bearer token on API requests and never handle provider secrets.
+The iOS owner client should call the existing authenticated Deal Alerts/resale endpoints already used by Mike AI. The server remains responsible for:
 
-### Main conversation
+- Deal discovery and search.
+- Local resale logic and Facebook Marketplace priority.
+- Deal ranking/analysis.
+- Alert scheduling, including the hourly cadence.
+- Alert persistence and delivery state.
+- Model/provider routing, including the dedicated Deal Alerts mini path.
 
-- `POST /api/ask`
+The exact endpoint names should be taken from the current server implementation rather than invented in the iOS client.
 
-The iOS client should treat the response as Mike's server-generated answer and should not select an AI provider locally.
+## Owner authentication
 
-### Realtime voice
+- Use the existing Mike account authentication/session mechanism.
+- Require server-side owner authorization for every owner-only alert operation.
+- Never put provider or database secrets in the app.
 
-- `GET /api/speech/token`
-- `POST /api/realtime/webrtc-answer`
+## Owner UI data contract
 
-The existing web client uses an authenticated same-origin proxy for realtime WebRTC negotiation. The iOS implementation should use an equivalent authenticated server bridge rather than exposing an OpenAI realtime secret to the device.
+The client should be able to display, when available from the backend:
 
-### Vision
+- Alert enabled/disabled state.
+- Current cadence/frequency.
+- Current location/ZIP configuration.
+- Last successful scan/run.
+- Last alert/deal result.
+- Recent alert activity.
+- Error/paused state and a human-readable reason.
 
-- `POST /api/vision/analyze`
+The app should treat server responses as authoritative and should not infer scheduler state from local timers.
 
-Use native camera/photo selection, then upload the image through the authenticated Vision route. Preserve the dedicated Vision model path.
+## Hourly alerts
 
-### Deal Finder / resale
+The existing hourly alert option must be represented as a server-confirmed cadence. The iPhone app should request the cadence change and then refresh the server state. It must not create a second hourly timer on the device.
 
-Reuse the existing Deal Finder/resale API routes discovered from the production backend rather than duplicating search logic in the app. Facebook Marketplace priority and the existing local resale behavior remain server-side.
+## Notifications
 
-### Alerts
+If native iOS notifications are added, they should mirror server-confirmed alert events. Notification delivery must not become a second source of truth for whether an alert ran.
 
-Reuse the existing resale/deal alert endpoints. The client should display the server-confirmed cadence and state rather than implementing its own scheduler.
+## Future expansion
 
-### Account / subscription
-
-The iOS client needs a small server contract for:
-
-- Current Mike entitlement.
-- App Store transaction association with the Mike account.
-- Mike Months balance/coverage.
-- Subscription state and expiration.
-- Restore/sync status.
-
-Apple purchase validation and subscription state updates belong on the server.
-
-## iOS-specific server work still required
-
-1. Add a safe endpoint to associate an authenticated Mike account with an App Store transaction/appAccountToken.
-2. Add App Store Server Notifications V2 handling.
-3. Add App Store Server API verification using Apple's server library.
-4. Map Apple subscription products to Mike entitlements.
-5. Ensure Apple refunds/cancellations immediately update entitlement state without affecting already-earned Mike Months incorrectly.
-6. Add idempotent transaction processing and replay protection.
-
-## Important compatibility rule
-
-Do not replace the existing web Stripe billing implementation while building iOS. Apple billing should be added as a separate entitlement source, allowing web and iPhone customers to be handled cleanly by the same Mike account system.
+Chat, Voice, Vision, consumer Deal Finder, and Apple subscription billing are intentionally out of Phase 1. Their API contracts should not be added to the owner Deal Alerts client until the scope is expanded.
