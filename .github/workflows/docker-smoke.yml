@@ -3,6 +3,7 @@ name: Mike AI Docker Smoke
 on:
   push:
     branches:
+      - main
       - fix/vision-clean-rebuild
   pull_request:
     branches:
@@ -43,6 +44,14 @@ jobs:
           echo 'Health endpoint did not become ready.'
           docker logs mike-ai-smoke || true
           exit 1
+
+      - name: Verify unknown API paths are real 404s
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(curl --silent --output /tmp/mike-404.json --write-out '%{http_code}' http://127.0.0.1:18080/api/definitely-not-a-real-route)"
+          test "$status" = "404"
+          grep -q '"error":"not_found"' /tmp/mike-404.json
 
       - name: Capture container logs on failure
         if: failure()
