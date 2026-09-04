@@ -35,7 +35,7 @@ function patchSpeechEngine() {
       '  }',
       '}',
       '',
-    ].join('\\n');
+    ].join('\n');
     source = source.slice(0, pos) + helper + source.slice(pos);
   }
   source = source.replace('export async function getSpeechEngineToken() {', 'export async function getSpeechEngineToken(userId = null) {');
@@ -68,7 +68,7 @@ function patchIndex() {
       '  }',
       '});',
       '',
-    ].join('\\n');
+    ].join('\n');
     source = source.slice(0, indexAt) + route + source.slice(indexAt);
   }
   fs.writeFileSync(index, source);
@@ -87,11 +87,11 @@ function patchMain() {
       "  fetch('/api/voice/learn', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ content: text }) }).catch(() => {});",
       '};',
       '',
-    ].join('\\n');
+    ].join('\n');
     source = source.slice(0, pos) + helper + source.slice(pos);
   }
   const userAnchor = "else if (message.type === 'conversation.item.input_audio_transcription.completed') { const text = String(message.transcript || '').trim(); if (text) setMessages";
-  const alreadyWired = "if (text) { voiceRelationshipLearn(text); }";
+  const alreadyWired = 'if (text) { voiceRelationshipLearn(text); }';
   if (source.includes(userAnchor) && !source.includes(alreadyWired)) {
     source = source.replace(userAnchor, "else if (message.type === 'conversation.item.input_audio_transcription.completed') { const text = String(message.transcript || '').trim(); if (text) { voiceRelationshipLearn(text); } if (text) setMessages");
   }
