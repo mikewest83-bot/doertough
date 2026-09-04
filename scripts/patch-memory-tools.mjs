@@ -5,8 +5,8 @@ const patches = [
     path: 'server/index.mjs',
     steps: [
       {
-        old: "import { OWNER_ONLY_TOOLS } from './tool-access.mjs';",
-        next: "import { OWNER_ONLY_TOOLS } from './tool-access.mjs';\nimport { MEMORY_TOOLS, MEMORY_TOOL_HANDLERS } from './memory-tools.mjs';",
+        old: "import { OWNER_ONLY_TOOLS } FROM './tool-access.mjs';",
+        next: "import { OWNER_ONLY_TOOLS } FROM './tool-access.mjs';\nimport { MEMORY_TOOLS, MEMORY_TOOL_HANDLERS } from './memory-tools.mjs';",
         label: 'memory import',
       },
       {
@@ -46,6 +46,11 @@ const patches = [
 for (const patch of patches) {
   let source = fs.readFileSync(patch.path, 'utf8');
   for (const step of patch.steps) {
+    // Imports can be reordered by later build patches (for example, the
+    // relationship-learning import is intentionally inserted at the same
+    // anchor). Treat the import as installed if it exists anywhere in the
+    // file instead of requiring an exact adjacent sequence.
+    if (step.label === 'memory import' && source.includes("import { MEMORY_TOOLS, MEMORY_TOOL_HANDLERS } from './memory-tools.mjs';")) continue;
     if (source.includes(step.next)) continue;
     if (!source.includes(step.old)) throw new Error(`[memory-tools] ${patch.path}: anchor not found for ${step.label}`);
     source = source.replace(step.old, step.next);
