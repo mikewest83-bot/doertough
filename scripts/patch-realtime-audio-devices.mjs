@@ -31,7 +31,33 @@ function mikeAudioDeviceSupport() {
     try {
       stream = await mediaDevices.getUserMedia({ audio: audioConstraints() });
     } catch {
-      try { stream = await mediaDevices.getUserMedia({ audio: true }); } catch { return null; }
+      // Keep voice processing enabled even if the browser rejects one of the
+      // more specific constraints. This is deliberately less strict than the
+      // primary request so older browsers still get echo/noise control.
+      try {
+        stream = await mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            channelCount: 1,
+          }
+        });
+      } catch {
+        try { stream = await mediaDevices.getUserMedia({ audio: true }); } catch { return null; }
+      }
+    }
+    // Best-effort enforcement for browsers that support applyConstraints.
+    try {
+      const track = stream.getAudioTracks?.()[0];
+      if (track?.applyConstraints) await track.applyConstraints({
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1,
+      });
+    } catch (audioConstraintError) {
+      console.warn('[voice] advanced audio constraints unavailable:', audioConstraintError);
     }
     const devices = await refresh();
     const activeInput = stream.getAudioTracks?.()[0]?.getSettings?.()?.deviceId || '';
@@ -76,4 +102,4 @@ if (!source.includes("audioDevices.routeOutput(audio).catch(() => {});")) {
 }
 
 fs.writeFileSync(target, source);
-console.log('[build] Audio cleanup and device routing wired with single microphone acquisition');
+console.log('[build] Audio cleanup, echo cancellation, noise suppression, and device routing wired with single microphone acquisition');
