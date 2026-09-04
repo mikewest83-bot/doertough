@@ -57,6 +57,9 @@ const MUST_CONTAIN = [
   ['server/index.mjs', 'const SPA_ROUTES = new Set', 'known SPA route allowlist'],
   ['server/index.mjs', 'const isKnownSpaRoute =', 'SPA route validation'],
   ['server/index.mjs', "res.status(404).json({ error: 'not_found' })", 'real 404 fallback'],
+  ['server/memory.mjs', 'memory-extractor.mjs', 'automatic memory extractor wired'],
+  ['server/memory.mjs', 'extractAndSaveMemories(userId, queryText)', 'automatic memory save invoked'],
+  ['server/memory-extractor.mjs', 'source: \'auto-extracted\'', 'durable memories saved as auto-extracted'],
 ];
 
 const MUST_NOT_CONTAIN = [
