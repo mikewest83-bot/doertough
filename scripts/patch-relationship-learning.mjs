@@ -15,8 +15,8 @@ if (!text.includes(importLine)) {
 }
 
 const anchor = "    const message = String(req.body?.message || '').trim();\n    if (!message) return res.status(400).json({ error: 'message_required' });";
-const replacement = `${anchor}\n    if (req.user) await learnFromInteraction(req.user.id, message).catch((err) => console.error('[ask] relationship learning failed:', err.message || err));`;
-if (!text.includes('learnFromInteraction(req.user.id, message)')) {
+const replacement = `${anchor}\n    if (req.user) {\n      void learnFromInteraction(req.user.id, message).catch((err) => console.error('[ask] relationship learning failed:', err.message || err));\n    }`;
+if (!text.includes('void learnFromInteraction(req.user.id, message)')) {
   if (!text.includes(anchor)) throw new Error('relationship learning message anchor missing');
   text = text.replace(anchor, replacement);
 }
