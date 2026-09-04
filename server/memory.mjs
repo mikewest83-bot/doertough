@@ -1,4 +1,4 @@
-// Mike Memory v1
+// Mike Memory v2
 // Persistent, account-scoped memory stored in the same PostgreSQL database used
 // by Mike's accounts and conversations. This module deliberately keeps memory
 // separate from Mike's personality instructions so personality can evolve
@@ -17,9 +17,6 @@ import {
 
 let ready = false;
 
-// `operating_system` is a virtual API category. OS records live in their own
-// normalized tables and are exposed through the existing /api/memory routes so
-// the frontend has one authenticated context API to talk to.
 const CATEGORIES = new Set(['preference', 'goal', 'project', 'context', 'learned', 'operating_system']);
 const MEMORY_CATEGORIES = new Set(['preference', 'goal', 'project', 'context', 'learned']);
 
@@ -49,6 +46,37 @@ async function ensureMemorySchema() {
 
 function clean(value, max = 1000) {
   return String(value || '').trim().slice(0, max);
+}
+
+function tokenize(value, maxWords = 24) {
+  return clean(value, 1200)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length >= 3)
+    .slice(0, maxWords);
+}
+
+function daysSince(value) {
+  if (!value) return 365;
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) return 365;
+  return Math.max(0, (Date.now() - time) / 86_400_000);
+}
+
+function memoryScore(memory, words) {
+  const text = String(memory.memory || '').toLowerCase();
+  const matches = new Set(words.filter((word) => text.includes(word)));
+  const lexical = matches.size;
+  const importance = Math.min(5, Math.max(1, Number(memory.importance) || 3));
+  const recencyDays = daysSince(memory.last_used_at || memory.updated_at || memory.created_at);
+  const recency = Math.max(0, 6 - Math.min(6, recencyDays / 14));
+
+  // Durable facts stay valuable, but memories that actually match the current
+  // conversation rise to the top. Recently useful memories get a modest boost.
+  // This prevents the old "first 12 memories" behavior from crowding out what
+  // matters to the current turn.
+  const categoryBoost = memory.category === 'goal' || memory.category === 'project' ? 1.5 : 0;
+  return (importance * 8) + (lexical * 14) + recency + categoryBoost;
 }
 
 async function listOperatingMemories(userId) {
@@ -180,7 +208,7 @@ async function addOperatingContext(userId, memories) {
 
 async function learnExplicitMemory(userId, queryText) {
   const text = clean(queryText, 1200);
-  const match = text.match(/^(?:please\s+)?(?:remember|don't forget|do not forget|keep in mind|from now on|going forward)\s+(?:that\s+)?(.+)$/i);
+  const match = text.match(/^(?:please\s+)?(?:remember|don't\s+forget|do\s+not\s+forget|keep\s+in\s+mind|from\s+now\s+on|going\s+forward)\s+(?:that\s+)?(.+)$/i);
   if (!match) return null;
   const memory = clean(match[1], 1000);
   if (!memory) return null;
@@ -195,28 +223,37 @@ async function learnExplicitMemory(userId, queryText) {
 export async function getRelevantMemories(userId, queryText, limit = 12) {
   if (!userId || !(await ensureMemorySchema())) return [];
   await learnExplicitMemory(userId, queryText).catch((err) => console.error('[memory] explicit learn failed:', err.message || err));
-  const words = clean(queryText, 800).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3).slice(0, 12);
-  if (!words.length) return addOperatingContext(userId, await listMemories(userId, { limit }));
 
-  const clauses = words.map((_, i) => `memory ILIKE $${i + 2}`).join(' OR ');
-  const params = [userId, ...words.map((w) => `%${w}%`), Math.min(50, Math.max(1, limit))];
-  const { rows } = await query(
+  const words = tokenize(queryText);
+  const safeLimit = Math.min(50, Math.max(1, Math.round(Number(limit) || 12)));
+
+  // Pull a bounded candidate set, then rank in application code using lexical
+  // relevance + importance + recent usefulness. This is deliberately account
+  // scoped and small (the account write cap is 250) so the ranking stays cheap.
+  const { rows: candidates } = await query(
     `SELECT id, category, memory, importance, source, created_at, updated_at, last_used_at
        FROM user_memories
-      WHERE user_id = $1 AND active = true AND (${clauses})
+      WHERE user_id = $1 AND active = true
       ORDER BY importance DESC, updated_at DESC
-      LIMIT $${params.length}`,
-    params
+      LIMIT 200`,
+    [userId]
   );
 
-  if (rows.length) {
+  const ranked = candidates
+    .map((memory) => ({ ...memory, _score: memoryScore(memory, words) }))
+    .sort((a, b) => b._score - a._score || Number(b.importance) - Number(a.importance) || new Date(b.updated_at) - new Date(a.updated_at))
+    .slice(0, safeLimit)
+    .map(({ _score, ...memory }) => memory);
+
+  if (ranked.length) {
     await query(
       `UPDATE user_memories SET last_used_at = now()
         WHERE id = ANY($1::bigint[])`,
-      [rows.map((r) => r.id)]
+      [ranked.map((r) => r.id)]
     ).catch(() => {});
   }
-  return addOperatingContext(userId, rows);
+
+  return addOperatingContext(userId, ranked);
 }
 
 export async function deleteMemory(userId, id) {
@@ -236,7 +273,7 @@ export async function deleteMemory(userId, id) {
 export function memoryPrompt(memories) {
   if (!memories?.length) return '';
   const lines = memories.map((m) => `- [${m.category}] ${m.memory}`);
-  return `\n\nMIKE MEMORY — RELEVANT USER CONTEXT\nUse these memories when they genuinely help. Do not mention the memory system unless asked. Do not treat a memory as a current fact if the user's current message contradicts it.\n${lines.join('\n')}`;
+  return `\n\nMIKE MEMORY — RELEVANT USER CONTEXT\nUse these memories when they genuinely help. Do not mention the memory system unless asked. Do not treat a memory as a current fact if the user's current message contradicts it. Prefer the user's active goals/projects and stable preferences when they materially improve the answer. Never bring up a personal detail merely to prove that you remember it. If a memory is not relevant to the current task, ignore it.\n${lines.join('\n')}`;
 }
 
 export { CATEGORIES };
