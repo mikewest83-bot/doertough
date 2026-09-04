@@ -17,9 +17,6 @@ import {
 
 let ready = false;
 
-// `operating_system` is a virtual API category. OS records live in their own
-// normalized tables and are exposed through the existing /api/memory routes so
-// the frontend has one authenticated context API to talk to.
 const CATEGORIES = new Set(['preference', 'goal', 'project', 'context', 'learned', 'operating_system']);
 const MEMORY_CATEGORIES = new Set(['preference', 'goal', 'project', 'context', 'learned']);
 
@@ -70,7 +67,6 @@ async function saveOperatingMemory(userId, payload) {
   if (!data || typeof data !== 'object') return null;
   const type = clean(data.type, 30).toLowerCase();
   const action = clean(data.action || 'create', 30).toLowerCase();
-
   if (type === 'focus') {
     if (action === 'update') return updateFocus(userId, data.id, data);
     if (action === 'complete') return updateFocus(userId, data.id, { status: 'done' });
@@ -105,26 +101,19 @@ export async function saveMemory(userId, { category, memory, importance = 3, sou
   const safeMemory = clean(memory);
   if (!safeMemory) return null;
   const safeImportance = Math.min(5, Math.max(1, Math.round(Number(importance) || 3)));
-
   const existing = await query(
-    `SELECT id FROM user_memories
-      WHERE user_id = $1 AND category = $2 AND active = true AND lower(memory) = lower($3)
-      LIMIT 1`,
+    `SELECT id FROM user_memories WHERE user_id = $1 AND category = $2 AND active = true AND lower(memory) = lower($3) LIMIT 1`,
     [userId, safeCategory, safeMemory]
   );
   if (existing.rows[0]) {
     const { rows } = await query(
-      `UPDATE user_memories
-          SET importance = GREATEST(importance, $2), updated_at = now()
-        WHERE id = $1 RETURNING *`,
+      `UPDATE user_memories SET importance = GREATEST(importance, $2), updated_at = now() WHERE id = $1 RETURNING *`,
       [existing.rows[0].id, safeImportance]
     );
     return rows[0];
   }
-
   const { rows } = await query(
-    `INSERT INTO user_memories (user_id, category, memory, source, importance)
-     VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+    `INSERT INTO user_memories (user_id, category, memory, source, importance) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
     [userId, safeCategory, safeMemory, clean(source, 60), safeImportance]
   );
   return rows[0];
@@ -136,22 +125,10 @@ export async function listMemories(userId, { category, limit = 100 } = {}) {
   if (!(await ensureMemorySchema())) return [];
   const safeLimit = Math.min(200, Math.max(1, Math.round(Number(limit) || 100)));
   if (category && MEMORY_CATEGORIES.has(category)) {
-    const { rows } = await query(
-      `SELECT id, category, memory, importance, source, created_at, updated_at, last_used_at
-         FROM user_memories
-        WHERE user_id = $1 AND active = true AND category = $2
-        ORDER BY importance DESC, updated_at DESC LIMIT $3`,
-      [userId, category, safeLimit]
-    );
+    const { rows } = await query(`SELECT id, category, memory, importance, source, created_at, updated_at, last_used_at FROM user_memories WHERE user_id = $1 AND active = true AND category = $2 ORDER BY importance DESC, updated_at DESC LIMIT $3`, [userId, category, safeLimit]);
     return rows;
   }
-  const { rows } = await query(
-    `SELECT id, category, memory, importance, source, created_at, updated_at, last_used_at
-       FROM user_memories
-      WHERE user_id = $1 AND active = true
-      ORDER BY importance DESC, updated_at DESC LIMIT $2`,
-    [userId, safeLimit]
-  );
+  const { rows } = await query(`SELECT id, category, memory, importance, source, created_at, updated_at, last_used_at FROM user_memories WHERE user_id = $1 AND active = true ORDER BY importance DESC, updated_at DESC LIMIT $2`, [userId, safeLimit]);
   return rows;
 }
 
@@ -159,19 +136,9 @@ async function addOperatingContext(userId, memories) {
   try {
     const snapshot = await getOperatingSnapshot(userId);
     if (!snapshot) return memories;
-    const hasContext = [snapshot.focus, snapshot.actions, snapshot.decisions, snapshot.patterns]
-      .some((items) => Array.isArray(items) && items.length > 0);
+    const hasContext = [snapshot.focus, snapshot.actions, snapshot.decisions, snapshot.patterns].some((items) => Array.isArray(items) && items.length > 0);
     if (!hasContext) return memories;
-
-    return [
-      ...memories,
-      {
-        category: 'operating_system',
-        memory: operatingSystemPrompt(snapshot).replace(/^\n\nMIKE PERSONAL OPERATING SYSTEM — CURRENT CONTEXT\n/, ''),
-        importance: 5,
-        source: 'mike-os',
-      },
-    ];
+    return [...memories, { category: 'operating_system', memory: operatingSystemPrompt(snapshot).replace(/^\n\nMIKE PERSONAL OPERATING SYSTEM — CURRENT CONTEXT\n/, ''), importance: 5, source: 'mike-os' }];
   } catch (err) {
     console.error('[memory] operating-system context failed:', err.message || err);
     return memories;
@@ -184,37 +151,31 @@ async function learnExplicitMemory(userId, queryText) {
   if (!match) return null;
   const memory = clean(match[1], 1000);
   if (!memory) return null;
-  return saveMemory(userId, {
-    category: 'context',
-    memory,
-    importance: 5,
-    source: 'explicit-user',
-  });
+  return saveMemory(userId, { category: 'context', memory, importance: 5, source: 'explicit-user' });
 }
 
 export async function getRelevantMemories(userId, queryText, limit = 12) {
   if (!userId || !(await ensureMemorySchema())) return [];
   await learnExplicitMemory(userId, queryText).catch((err) => console.error('[memory] explicit learn failed:', err.message || err));
+
+  // Automatic learning runs after the current turn has been prepared so it never
+  // blocks Mike's response. Explicit memory above remains immediate.
+  if (process.env.MIKE_AUTO_MEMORY !== 'false') {
+    import('./memory-extractor.mjs')
+      .then(({ extractAndSaveMemories }) => extractAndSaveMemories(userId, queryText))
+      .catch((err) => console.error('[memory] auto extractor failed:', err.message || err));
+  }
+
   const words = clean(queryText, 800).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3).slice(0, 12);
   if (!words.length) return addOperatingContext(userId, await listMemories(userId, { limit }));
-
   const clauses = words.map((_, i) => `memory ILIKE $${i + 2}`).join(' OR ');
   const params = [userId, ...words.map((w) => `%${w}%`), Math.min(50, Math.max(1, limit))];
   const { rows } = await query(
-    `SELECT id, category, memory, importance, source, created_at, updated_at, last_used_at
-       FROM user_memories
-      WHERE user_id = $1 AND active = true AND (${clauses})
-      ORDER BY importance DESC, updated_at DESC
-      LIMIT $${params.length}`,
+    `SELECT id, category, memory, importance, source, created_at, updated_at, last_used_at FROM user_memories WHERE user_id = $1 AND active = true AND (${clauses}) ORDER BY importance DESC, updated_at DESC LIMIT $${params.length}`,
     params
   );
-
   if (rows.length) {
-    await query(
-      `UPDATE user_memories SET last_used_at = now()
-        WHERE id = ANY($1::bigint[])`,
-      [rows.map((r) => r.id)]
-    ).catch(() => {});
+    await query(`UPDATE user_memories SET last_used_at = now() WHERE id = ANY($1::bigint[])`, [rows.map((r) => r.id)]).catch(() => {});
   }
   return addOperatingContext(userId, rows);
 }
@@ -225,11 +186,7 @@ export async function deleteMemory(userId, id) {
   if (!(await ensureMemorySchema())) return false;
   const value = String(id || '').trim();
   if (!/^\d+$/.test(value)) return false;
-  const { rowCount } = await query(
-    `UPDATE user_memories SET active = false, updated_at = now()
-      WHERE id = $1 AND user_id = $2 AND active = true`,
-    [value, userId]
-  );
+  const { rowCount } = await query(`UPDATE user_memories SET active = false, updated_at = now() WHERE id = $1 AND user_id = $2 AND active = true`, [value, userId]);
   return rowCount > 0;
 }
 
