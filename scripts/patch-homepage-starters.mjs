@@ -4,12 +4,21 @@ const path = 'src/main.jsx';
 const source = fs.readFileSync(path, 'utf8');
 const block = "<div className=\"try-row\"><span className=\"try-label\">Try him right now</span><div className=\"try-chips\">{starterPrompts.map((prompt) => (<button key={prompt} type=\"button\" className=\"try-chip\" onClick={() => prompt.startsWith('📷') ? openPhotoPicker() : ask(prompt)} disabled={busy || (conversationMode && !prompt.startsWith('📷'))}>{prompt}</button>))}</div></div>";
 const starterLine = "  const starterPrompts = ['What would you do?', 'Help me figure this out.', 'I need a second opinion.', '📷 Ask Mike about a photo'];\n";
+const actionStarterLine = "  const starterPrompts = ['Find me a deal', 'Save me money', 'Help me decide'];\n";
 
 let next = source;
 next = next.replace(starterLine, '');
 next = next.replace(block, '');
 
 if (next === source) {
+  // The action-first homepage intentionally owns the starterPrompts declaration.
+  // Leave that declaration alone so the following action-first patch remains
+  // stable across repeated builds.
+  if (source.includes(actionStarterLine)) {
+    process.stdout.write('[build] Homepage action starters already configured\n');
+    process.exit(0);
+  }
+
   const hasStarterReferences = source.includes('starterPrompts') || source.includes('try-row');
   if (!hasStarterReferences) {
     process.stdout.write('[build] Homepage starter questions already removed\n');
